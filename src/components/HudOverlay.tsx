@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Backpack,
   Camera,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Cloud,
   CloudFog,
   CloudLightning,
@@ -28,7 +30,16 @@ import {
   Zap,
 } from 'lucide-react';
 import type { PartyStateSnapshot } from '../../shared/multiplayerProtocol';
-import type { PlayerHudSnapshot, WeaponSlotHudView } from '../game/types';
+import {
+  DEFAULT_MOBILE_SETTINGS,
+  type MobileControlSettings,
+  type PlayerHudSnapshot,
+  type WeaponSlotHudView,
+} from '../game/types';
+import {
+  computeControlBox,
+  measureSafeAreaRect,
+} from '../game/input/MobileLayoutStore';
 import {
   DAY_PHASE_LABELS,
   type TimePreset,
@@ -60,6 +71,7 @@ interface HudOverlayProps {
   pointerLocked: boolean;
   muted: boolean;
   showMobileControls: boolean;
+  mobileSettings?: MobileControlSettings;
   customizeMode?: boolean;
   worldNotice: string | null;
   lang: Language;
@@ -109,6 +121,7 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
   pointerLocked,
   muted,
   showMobileControls,
+  mobileSettings,
   customizeMode = false,
   worldNotice,
   lang,
@@ -146,12 +159,100 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
   onToggleBuildMode,
   onOpenStructureManage,
 }) => {
-  const { isPortrait } = useOrientation();
+  const { isPortrait, orientation, width: vpWidth, height: vpHeight } = useOrientation();
   const isPortraitMobile = showMobileControls && isPortrait;
   const [timeMenuOpen, setTimeMenuOpen] = useState(false);
   const [weatherMenuOpen, setWeatherMenuOpen] = useState(false);
+  const [hudPanelCollapsed, setHudPanelCollapsed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const saved = window.localStorage.getItem('woa_hud_left_panel_collapsed_v1');
+      if (saved === 'true') return true;
+      if (saved === 'false') return false;
+    } catch {
+      // Ignore storage access errors
+    }
+    return true;
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        'woa_hud_left_panel_collapsed_v1',
+        hudPanelCollapsed ? 'true' : 'false',
+      );
+    } catch {
+      // Ignore storage access errors
+    }
+  }, [hudPanelCollapsed]);
+
+  const toggleHudPanelCollapsed = () => {
+    setHudPanelCollapsed((prev) => !prev);
+  };
+
+  // Compute the exact vertical clearance above the mobile joystick / D-Pad
+  // so the left HUD panel NEVER overlaps or blocks movement controls.
+  const leftHudMobileBounds = useMemo(() => {
+    if (!showMobileControls) return null;
+    const safeRect = measureSafeAreaRect();
+    const effSettings = mobileSettings ?? DEFAULT_MOBILE_SETTINGS;
+    const activeLayout = isPortrait
+      ? effSettings.layouts.portrait
+      : effSettings.layouts.landscape;
+    const activePadId =
+      (effSettings.movementControlMode ?? 'joystick') === 'dpad'
+        ? 'dpad'
+        : 'joystick';
+    const padItem = activeLayout[activePadId];
+
+    const panelTopPx = isPortrait
+      ? Math.max(10, Math.round(safeRect.insets.top))
+      : Math.max(12, Math.round(safeRect.insets.top + vpHeight * 0.015));
+
+    const panelLeftPx = isPortrait
+      ? Math.max(10, Math.round(safeRect.insets.left))
+      : Math.max(10, Math.round(safeRect.insets.left + vpWidth * 0.015));
+
+    const expandedWidthPx = isPortrait
+      ? Math.round(Math.min(204, vpWidth * 0.5))
+      : Math.round(Math.min(220, vpWidth * 0.42));
+
+    let maxBottomPx = safeRect.bottom - 12;
+
+    if (padItem && padItem.visible) {
+      const padBox = computeControlBox(
+        activePadId,
+        padItem,
+        safeRect,
+        effSettings.controlSize,
+        effSettings.joystickSize,
+        effSettings.buttonSize,
+      );
+      const panelRightEdge = panelLeftPx + expandedWidthPx;
+      const padLeftEdge = padBox.left;
+      const padRightEdge = padBox.left + padBox.width;
+      const overlapsHorizontally =
+        padLeftEdge < panelRightEdge + 12 && padRightEdge > panelLeftPx - 12;
+
+      if (overlapsHorizontally && padBox.top > panelTopPx + 56) {
+        maxBottomPx = Math.min(maxBottomPx, padBox.top - 10);
+      }
+    }
+
+    const maxHeightPx = Math.max(68, Math.floor(maxBottomPx - panelTopPx));
+    return {
+      maxHeightPx,
+      expandedWidthPx,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMobileControls, mobileSettings, isPortrait, orientation, vpWidth, vpHeight]);
+
   const t = UI_TEXT[lang];
   const isRtl = lang === 'ar';
+  const isMobileMinimized = showMobileControls && hudPanelCollapsed;
+  const hudToggleLabel = isRtl ? 'الحالة' : 'HUD';
+  const hudExpandAria = isRtl ? 'توسيع لوحة الحالة' : 'Expand HUD panel';
+  const hudCollapseAria = isRtl ? 'تصغير لوحة الحالة' : 'Minimize HUD panel';
   const healthPct = Math.max(0, Math.min(100, (hud.health / hud.maxHealth) * 100));
   const isInfiniteStamina =
     !Number.isFinite(hud.maxStamina) ||
@@ -298,17 +399,10 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
           {t.biomeDebugPrefix}: {biomeLabel.toUpperCase()} · {hud.biomeMaterialId ?? 'unknown'}
         </div>
       )}
-      {/* Top-Left: Health & Stamina Cluster (+ Compact Quest & Level) */}
+      {/* Top-Left Shared Container: Left HUD Panel + Attached Room Chat & Team Buttons */}
       <div
-        dir={isRtl ? 'rtl' : 'ltr'}
-        data-testid="hud-vitals-card"
-        className={`mobile-top-hud-card absolute flex flex-col ${
-          isPortraitMobile
-            ? 'gap-1 p-2 w-[min(176px,49vw)]'
-            : showMobileControls
-              ? 'gap-1.5 sm:gap-2 p-2.5 sm:p-3.5 w-[144px] sm:w-56'
-              : 'gap-1.5 sm:gap-2 p-2.5 sm:p-3.5 w-40 sm:w-60'
-        } rounded-xl bg-[#0d1712]/82 border border-white/12`}
+        data-testid="hud-left-container"
+        className="absolute flex flex-col items-start gap-2 pointer-events-none"
         style={{
           top: isPortraitMobile
             ? 'max(10px, env(safe-area-inset-top, 0px))'
@@ -318,8 +412,96 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
             : showMobileControls
               ? 'max(10px, calc(env(safe-area-inset-left, 0px) + 1.5vw))'
               : 'max(12px, calc(env(safe-area-inset-left, 0px) + 2vw))',
+          maxHeight: showMobileControls && leftHudMobileBounds
+            ? `${leftHudMobileBounds.maxHeightPx}px`
+            : 'calc(100vh - 32px)',
         }}
       >
+      {/* Top-Left: Health & Stamina Cluster (+ Compact Quest & Level) */}
+      <div
+        dir={isRtl ? 'rtl' : 'ltr'}
+        data-testid="hud-vitals-card"
+        onPointerDown={showMobileControls ? (e) => e.stopPropagation() : undefined}
+        onTouchStart={showMobileControls ? (e) => e.stopPropagation() : undefined}
+        onTouchMove={showMobileControls ? (e) => e.stopPropagation() : undefined}
+        className={`mobile-top-hud-card min-h-0 flex flex-col overflow-hidden transition-[max-height,width] duration-150 ease-out ${
+          showMobileControls
+            ? isMobileMinimized
+              ? 'pointer-events-auto shrink-0 gap-1 px-2.5 py-1.5 w-[min(168px,46vw)]'
+              : isPortraitMobile
+                ? 'pointer-events-auto gap-1 p-2 w-[min(204px,50vw)]'
+                : 'pointer-events-auto gap-1.5 p-2.5 w-[min(220px,42vw)]'
+            : 'gap-1.5 sm:gap-2 p-2.5 sm:p-3.5 w-40 sm:w-60'
+        } rounded-xl bg-[#0d1712]/82 border border-white/12`}
+      >
+        {/* Mobile Compact / Expand Toggle Header */}
+        {showMobileControls && isMobileMinimized && (
+          <button
+            type="button"
+            data-testid="hud-panel-toggle"
+            onClick={toggleHudPanelCollapsed}
+            aria-expanded={false}
+            aria-label={hudExpandAria}
+            className="w-full text-start flex flex-col gap-1 cursor-pointer select-none focus:outline-none"
+          >
+            <div className="flex items-center justify-between gap-2 text-[10px] font-display font-bold tracking-wide text-[#cfe0d2]">
+              <span>{hudToggleLabel}</span>
+              <ChevronDown className="w-3.5 h-3.5 text-[#e5a93c] shrink-0" />
+            </div>
+            <div className="flex items-center justify-between gap-2 text-[11px] font-mono-num font-semibold text-[#f5f8f2]">
+              <span className="inline-flex items-center gap-1">
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path
+                    d="M8 14s-5.5-3.4-5.5-7.4C2.5 4.4 4.1 3 5.9 3c1 0 1.7.5 2.1 1.1C8.4 3.5 9.1 3 10.1 3c1.8 0 3.4 1.4 3.4 3.6C13.5 10.6 8 14 8 14Z"
+                    fill="#e05a47"
+                  />
+                </svg>
+                {hud.health}
+              </span>
+              <span
+                className={`inline-flex items-center gap-1 ${
+                  isInfiniteStamina ? 'text-[#7dd3fc]' : 'text-[#f5f8f2]'
+                }`}
+                dir="ltr"
+              >
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path
+                    d="M9.2 1.5L3.5 9h4.2l-.9 5.5L12.5 7H8.3l.9-5.5Z"
+                    fill={isInfiniteStamina ? '#38bdf8' : '#e6b34d'}
+                  />
+                </svg>
+                {isInfiniteStamina ? '∞' : hud.stamina}
+              </span>
+            </div>
+          </button>
+        )}
+
+        {showMobileControls && !isMobileMinimized && (
+          <button
+            type="button"
+            data-testid="hud-panel-toggle"
+            onClick={toggleHudPanelCollapsed}
+            aria-expanded={true}
+            aria-label={hudCollapseAria}
+            className="shrink-0 w-full flex items-center justify-between gap-2 pb-1 mb-0.5 border-b border-white/10 text-[10px] font-display font-bold tracking-wide text-[#cfe0d2] cursor-pointer select-none focus:outline-none"
+          >
+            <span>{hudToggleLabel}</span>
+            <ChevronUp className="w-3.5 h-3.5 text-[#e5a93c] shrink-0" />
+          </button>
+        )}
+
+        {/* Full HUD Content (Always shown on Desktop; Scrollable inside joystick-safe bounds when expanded on Mobile) */}
+        {(!showMobileControls || !isMobileMinimized) && (
+          <div
+            data-testid="hud-vitals-scroll"
+            className={`hud-panel-scroll flex-1 min-h-0 flex flex-col ${
+              isPortraitMobile
+                ? 'gap-1'
+                : showMobileControls
+                  ? 'gap-1.5 pe-0.5'
+                  : 'gap-1.5 sm:gap-2'
+            }`}
+          >
         {/* Health */}
         <div>
           <div className="flex items-center justify-between text-[11px] sm:text-xs font-medium text-[#e9efe6] mb-0.5 sm:mb-1">
@@ -571,6 +753,60 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
             )}
           </button>
         )}
+          </div>
+        )}
+      </div>
+
+      {/* Compact Mobile Multiplayer Chat & Party Buttons (Directly below Left HUD Panel) */}
+      {isMultiplayer && showMobileControls && (onOpenChat || onOpenParty) && (
+        <div
+          data-testid="hud-left-social-buttons"
+          onPointerDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          className="pointer-events-auto shrink-0 flex items-center gap-1.5"
+        >
+          {onOpenChat && (
+            <button
+              type="button"
+              onClick={onOpenChat}
+              data-testid="mobile-btn-chat"
+              className="px-3 py-2 rounded-xl bg-[#0d1712]/88 border border-[#e5a93c]/45 text-[#f2f6ef] inline-flex items-center gap-1.5 shadow-lg cursor-pointer"
+              aria-label={t.mpRoomChatOpenBtn}
+            >
+              <MessageSquare className="w-4 h-4 text-[#e5a93c]" />
+              <span className="text-[11px] font-display font-bold">{t.mpRoomChatTitle}</span>
+              {unreadChatCount > 0 && (
+                <span
+                  dir="ltr"
+                  className="min-w-[16px] h-4 px-1 rounded-full bg-[#e5a93c] text-[#111914] font-mono-num text-[10px] font-bold flex items-center justify-center"
+                >
+                  {unreadChatCount > 99 ? '99+' : unreadChatCount}
+                </span>
+              )}
+            </button>
+          )}
+          {onOpenParty && (
+            <button
+              type="button"
+              onClick={onOpenParty}
+              data-testid="mobile-btn-party"
+              className="px-3 py-2 rounded-xl bg-[#0d1712]/88 border border-[#7fe094]/45 text-[#f2f6ef] inline-flex items-center gap-1.5 shadow-lg cursor-pointer"
+              aria-label={t.partyTitle}
+            >
+              <Users className="w-4 h-4 text-[#7fe094]" />
+              <span className="text-[11px] font-display font-bold">{t.partyBtnLabel}</span>
+              {(partyState?.pendingInvites.length ?? 0) > 0 && (
+                <span
+                  dir="ltr"
+                  className="min-w-[16px] h-4 px-1 rounded-full bg-[#e5a93c] text-[#111914] font-mono-num text-[10px] font-bold flex items-center justify-center"
+                >
+                  {partyState!.pendingInvites.length}
+                </span>
+              )}
+            </button>
+          )}
+        </div>
+      )}
       </div>
 
       {/* Top-Right Portrait Mini-Map + Biome/Clock/Weather Card */}
@@ -1504,59 +1740,7 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
         </div>
       )}
 
-      {/* Compact Mobile Multiplayer Chat & Party Buttons */}
-      {isMultiplayer && showMobileControls && (onOpenChat || onOpenParty) && (
-        <div
-          className="pointer-events-auto absolute flex items-center gap-1.5"
-          style={{
-            top: isPortraitMobile
-              ? 'max(118px, calc(env(safe-area-inset-top, 0px) + 110px))'
-              : 'max(58px, calc(env(safe-area-inset-top, 0px) + 54px))',
-            left: 'max(10px, env(safe-area-inset-left, 0px))',
-          }}
-        >
-          {onOpenChat && (
-            <button
-              type="button"
-              onClick={onOpenChat}
-              data-testid="mobile-btn-chat"
-              className="px-3 py-2 rounded-xl bg-[#0d1712]/88 border border-[#e5a93c]/45 text-[#f2f6ef] inline-flex items-center gap-1.5 shadow-lg cursor-pointer"
-              aria-label={t.mpRoomChatOpenBtn}
-            >
-              <MessageSquare className="w-4 h-4 text-[#e5a93c]" />
-              <span className="text-[11px] font-display font-bold">{t.mpRoomChatTitle}</span>
-              {unreadChatCount > 0 && (
-                <span
-                  dir="ltr"
-                  className="min-w-[16px] h-4 px-1 rounded-full bg-[#e5a93c] text-[#111914] font-mono-num text-[10px] font-bold flex items-center justify-center"
-                >
-                  {unreadChatCount > 99 ? '99+' : unreadChatCount}
-                </span>
-              )}
-            </button>
-          )}
-          {onOpenParty && (
-            <button
-              type="button"
-              onClick={onOpenParty}
-              data-testid="mobile-btn-party"
-              className="px-3 py-2 rounded-xl bg-[#0d1712]/88 border border-[#7fe094]/45 text-[#f2f6ef] inline-flex items-center gap-1.5 shadow-lg cursor-pointer"
-              aria-label={t.partyTitle}
-            >
-              <Users className="w-4 h-4 text-[#7fe094]" />
-              <span className="text-[11px] font-display font-bold">{t.partyBtnLabel}</span>
-              {(partyState?.pendingInvites.length ?? 0) > 0 && (
-                <span
-                  dir="ltr"
-                  className="min-w-[16px] h-4 px-1 rounded-full bg-[#e5a93c] text-[#111914] font-mono-num text-[10px] font-bold flex items-center justify-center"
-                >
-                  {partyState!.pendingInvites.length}
-                </span>
-              )}
-            </button>
-          )}
-        </div>
-      )}
+
 
       {/* Desktop Pointer-Lock / Camera Hint */}
       {!showMobileControls && !pointerLocked && !hud.buildMode?.active && (

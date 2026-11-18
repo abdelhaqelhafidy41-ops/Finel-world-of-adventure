@@ -28,6 +28,10 @@ export class PlayerCharacter {
   private readonly bodyHideMeshes: THREE.Object3D[] = [];
   private readonly disposables: Array<{ dispose: () => void }> = [];
   private firstPersonActive = false;
+  private animLeftArmRotX = 0;
+  private animRightArmRotX = 0;
+  private fpPitchFollow = 0;
+  private fpFirstPersonApplied = false;
 
   constructor(contactShadowMap: THREE.Texture) {
     // Materials with calibrated PBR roughness/metalness contrast
@@ -344,6 +348,14 @@ export class PlayerCharacter {
     inWater = false,
     maxRunSpeed = 10.8,
   ): void {
+    // Restore un-offset animation arm rotations before the state machine runs
+    // so first-person pose/pitch offsets never accumulate or fight damp() across frames.
+    if (this.fpFirstPersonApplied) {
+      this.leftArmPivot.rotation.x = this.animLeftArmRotX;
+      this.rightArmPivot.rotation.x = this.animRightArmRotX;
+      this.fpFirstPersonApplied = false;
+    }
+
     this.animMachine.update(
       {
         dt,
@@ -357,18 +369,29 @@ export class PlayerCharacter {
       },
       this.rig,
     );
+
+    this.animLeftArmRotX = this.leftArmPivot.rotation.x;
+    this.animRightArmRotX = this.rightArmPivot.rotation.x;
   }
 
   public setFirstPersonMode(enabled: boolean, cameraPitch = 0): void {
+    this.animMachine.setFirstPersonMode(enabled);
     if (this.firstPersonActive !== enabled) {
       this.firstPersonActive = enabled;
       for (let i = 0; i < this.bodyHideMeshes.length; i++) {
         this.bodyHideMeshes[i].visible = !enabled;
       }
       if (!enabled) {
+        if (this.fpFirstPersonApplied) {
+          this.leftArmPivot.rotation.x = this.animLeftArmRotX;
+          this.rightArmPivot.rotation.x = this.animRightArmRotX;
+          this.fpFirstPersonApplied = false;
+        }
         this.leftArmPivot.position.set(-0.32, 1.32, 0);
         this.rightArmPivot.position.set(0.32, 1.32, 0);
         this.bodyPivot.rotation.y = 0;
+      } else {
+        this.fpPitchFollow = THREE.MathUtils.clamp(cameraPitch * 0.72, -0.85, 0.85);
       }
     }
 
@@ -377,10 +400,19 @@ export class PlayerCharacter {
       this.leftArmPivot.position.set(-0.26, 1.39, 0.22);
       this.rightArmPivot.position.set(0.24, 1.43, 0.24);
       if (!this.animMachine.isBowChargeActive()) {
-        // Offset pitch so arms/held weapons angle cleanly with camera look (positive pitch = looking down -> more positive rx)
-        const pitchFollow = THREE.MathUtils.clamp(cameraPitch * 0.72, -0.85, 0.85);
-        this.rightArmPivot.rotation.x = Math.min(-0.78, this.rightArmPivot.rotation.x - 0.88) + pitchFollow;
-        this.leftArmPivot.rotation.x = Math.min(-0.55, this.leftArmPivot.rotation.x - 0.62) + pitchFollow;
+        // Compute from the clean base animation pose (never accumulate on top of previous 1P offset)
+        // and apply a tiny deadzone so microscopic floating-point pitch noise cannot jitter idle hands.
+        const targetPitchFollow = THREE.MathUtils.clamp(cameraPitch * 0.72, -0.85, 0.85);
+        if (Math.abs(targetPitchFollow - this.fpPitchFollow) > 0.0005) {
+          this.fpPitchFollow = targetPitchFollow;
+        }
+        this.rightArmPivot.rotation.x =
+          Math.min(-0.78, this.animRightArmRotX - 0.88) + this.fpPitchFollow;
+        this.leftArmPivot.rotation.x =
+          Math.min(-0.55, this.animLeftArmRotX - 0.62) + this.fpPitchFollow;
+        this.fpFirstPersonApplied = true;
+      } else {
+        this.fpFirstPersonApplied = false;
       }
     }
   }

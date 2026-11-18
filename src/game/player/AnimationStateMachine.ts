@@ -80,6 +80,7 @@ export class AnimationStateMachine {
   private bowAimPitch = 0;
   private bowEquipped = false;
   private secondPersonActive = false;
+  private firstPersonActive = false;
 
   constructor() {
     this.registerBuiltInHandlers();
@@ -98,6 +99,10 @@ export class AnimationStateMachine {
 
   public setSecondPersonMode(enabled: boolean): void {
     this.secondPersonActive = enabled;
+  }
+
+  public setFirstPersonMode(enabled: boolean): void {
+    this.firstPersonActive = enabled;
   }
 
   public isBowChargeActive(): boolean {
@@ -322,14 +327,16 @@ export class AnimationStateMachine {
       rig.headGroup.rotation.y = THREE.MathUtils.damp(rig.headGroup.rotation.y, 0, 14, dt);
       rig.leftArmPivot.rotation.y = THREE.MathUtils.damp(rig.leftArmPivot.rotation.y, 0, 14, dt);
       rig.rightArmPivot.rotation.y = THREE.MathUtils.damp(rig.rightArmPivot.rotation.y, 0, 14, dt);
-      rig.leftArmPivot.position.x = THREE.MathUtils.damp(rig.leftArmPivot.position.x, -0.32, 14, dt);
-      rig.leftArmPivot.position.z = THREE.MathUtils.damp(rig.leftArmPivot.position.z, 0, 14, dt);
-      rig.rightArmPivot.position.x = THREE.MathUtils.damp(rig.rightArmPivot.position.x, 0.32, 14, dt);
-      rig.rightArmPivot.position.z = THREE.MathUtils.damp(rig.rightArmPivot.position.z, 0, 14, dt);
-      if (Math.abs(rig.leftArmPivot.position.x + 0.32) < 0.0005) rig.leftArmPivot.position.x = -0.32;
-      if (Math.abs(rig.leftArmPivot.position.z) < 0.0005) rig.leftArmPivot.position.z = 0;
-      if (Math.abs(rig.rightArmPivot.position.x - 0.32) < 0.0005) rig.rightArmPivot.position.x = 0.32;
-      if (Math.abs(rig.rightArmPivot.position.z) < 0.0005) rig.rightArmPivot.position.z = 0;
+      if (!this.firstPersonActive) {
+        rig.leftArmPivot.position.x = THREE.MathUtils.damp(rig.leftArmPivot.position.x, -0.32, 14, dt);
+        rig.leftArmPivot.position.z = THREE.MathUtils.damp(rig.leftArmPivot.position.z, 0, 14, dt);
+        rig.rightArmPivot.position.x = THREE.MathUtils.damp(rig.rightArmPivot.position.x, 0.32, 14, dt);
+        rig.rightArmPivot.position.z = THREE.MathUtils.damp(rig.rightArmPivot.position.z, 0, 14, dt);
+        if (Math.abs(rig.leftArmPivot.position.x + 0.32) < 0.0005) rig.leftArmPivot.position.x = -0.32;
+        if (Math.abs(rig.leftArmPivot.position.z) < 0.0005) rig.leftArmPivot.position.z = 0;
+        if (Math.abs(rig.rightArmPivot.position.x - 0.32) < 0.0005) rig.rightArmPivot.position.x = 0.32;
+        if (Math.abs(rig.rightArmPivot.position.z) < 0.0005) rig.rightArmPivot.position.z = 0;
+      }
     }
 
     // Ground the contact shadow directly onto the surface beneath the character
@@ -349,7 +356,7 @@ export class AnimationStateMachine {
     this.registerState('idle', {
       update: ({ dt }, rig, anim) => {
         const upperLocked = this.isUpperBodyLockedByBow();
-        const steadyHands = this.secondPersonActive;
+        const steadyHands = this.secondPersonActive || this.firstPersonActive;
         const breath = steadyHands || upperLocked ? 0 : Math.sin(anim.idlePhase) * 0.016;
         const leftArmTargetX = steadyHands ? 0 : Math.sin(anim.idlePhase * 0.7) * 0.045;
         const rightArmTargetX = this.bowEquipped
@@ -392,6 +399,9 @@ export class AnimationStateMachine {
           rig.headGroup.rotation.x = THREE.MathUtils.damp(rig.headGroup.rotation.x, 0, 10, dt);
         }
         rig.bodyPivot.position.y = THREE.MathUtils.damp(rig.bodyPivot.position.y, breath, 12, dt);
+        if (steadyHands && Math.abs(rig.bodyPivot.position.y) < 0.0005) {
+          rig.bodyPivot.position.y = 0;
+        }
         rig.bodyPivot.rotation.x = THREE.MathUtils.damp(rig.bodyPivot.rotation.x, 0, 10, dt);
       },
     });

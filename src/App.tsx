@@ -1429,6 +1429,7 @@ export default function App() {
             showMobileControls={
               showMobileControls || activeModal === 'customizeControls'
             }
+            mobileSettings={mobileSettings}
             customizeMode={activeModal === 'customizeControls'}
             worldNotice={worldNotice}
             lang={language}
