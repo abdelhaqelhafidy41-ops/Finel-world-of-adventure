@@ -1667,11 +1667,11 @@ async function run() {
   // Subpath GitHub Pages share link avoids 404 /join/<id> and resolves via ?join=<id>
   const ghShareLink = buildRoomShareLink(
     'rm_12345678',
-    'https://abdelhaqelhafidy41-ops.github.io/World-of-Adventure-Multiplayer2/',
+    'https://abdelhaqelhafidy41-ops.github.io/Finel-world-of-adventure/',
   );
   assert.equal(
     ghShareLink,
-    'https://abdelhaqelhafidy41-ops.github.io/World-of-Adventure-Multiplayer2/?join=rm_12345678',
+    'https://abdelhaqelhafidy41-ops.github.io/Finel-world-of-adventure/?join=rm_12345678',
   );
   assert.equal(extractJoinTargetFromUrl(ghShareLink), 'rm_12345678');
 
@@ -1690,7 +1690,7 @@ async function run() {
   assert.equal(healthCorsRes.status, 200);
   const healthCorsJson = (await healthCorsRes.json()) as { ok?: boolean; service?: string };
   assert.equal(healthCorsJson.ok, true);
-  assert.equal(healthCorsJson.service, 'world-of-adventure-multiplayer2');
+  assert.equal(healthCorsJson.service, 'world-of-adventure-multiplayer');
   assert.equal(
     healthCorsRes.headers.get('Access-Control-Allow-Origin'),
     'https://abdelhaqelhafidy41-ops.github.io',

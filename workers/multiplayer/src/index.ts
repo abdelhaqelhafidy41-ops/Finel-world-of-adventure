@@ -206,7 +206,7 @@ export default {
       return withCors(
         Response.json({
           ok: true,
-          service: 'world-of-adventure-multiplayer2',
+          service: 'world-of-adventure-multiplayer',
           environment: env.ENVIRONMENT ?? 'development',
           runtime: 'cloudflare-workers-durable-objects',
         }),

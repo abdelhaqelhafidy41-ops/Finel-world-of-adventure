@@ -1,4 +1,4 @@
-name = "world-of-adventure-multiplayer"
+name = "finel-world-of-adventure"
 main = "workers/multiplayer/src/index.ts"
 compatibility_date = "2025-02-01"
 workers_dev = true
@@ -91,13 +91,13 @@ class_name = "PlayerProfileDO"
 # Production Environment (`npx wrangler deploy --env production`)
 # ==============================================================================
 [env.production]
-name = "world-of-adventure-multiplayer-production"
+name = "finel-world-of-adventure"
 workers_dev = true
 
 [env.production.vars]
 ENVIRONMENT = "production"
-# Override ALLOWED_ORIGINS in Cloudflare Dashboard or --var for strict domain locking
-ALLOWED_ORIGINS = "*"
+# Explicit allowed origins for GitHub Pages, local dev, and Capacitor/Electron clients
+ALLOWED_ORIGINS = "https://abdelhaqelhafidy41-ops.github.io,http://localhost:3000,http://127.0.0.1:3000,capacitor://localhost,http://localhost"
 MAX_ROOMS_PER_LIST = "50"
 HOST_DISCONNECT_GRACE_MS = "12000"
 PLAYER_RECONNECT_GRACE_MS = "45000"

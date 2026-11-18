@@ -122,6 +122,8 @@ export interface EnvironmentAudioState {
   altitudeMeters: number;
   indoorFactor?: number; // 0..1 (1 inside house/roof cover — muffles outside ambience)
   combatIntensity?: number; // 0..1 (active aggro / recent combat — ducks peaceful birds/village chatter)
+  bossActive?: boolean; // true during active boss encounter
+  ruinsProximity?: number; // 0..1 (proximity to ancient ruins / temples / shrines)
 }
 
 export interface PlayCueOptions {

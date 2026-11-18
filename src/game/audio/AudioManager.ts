@@ -107,8 +107,8 @@ export class AudioManager {
     if (this.disposed) return;
     this.sceneMode = mode;
 
-    // Strict separation: Menu music plays ONLY on Main Menu
-    this.music.setMenuActive(mode === 'menu');
+    // Strict separation: Menu music plays ONLY on Main Menu; world soundtrack plays in-world
+    this.music.setSceneMode(mode);
 
     if (mode !== 'world') {
       this.sfx.stopWorldAmbienceSmooth(mode === 'menu' ? 0.16 : 0.12);
@@ -162,6 +162,7 @@ export class AudioManager {
   public setLowPowerMode(lowPower: boolean): void {
     if (this.disposed) return;
     this.sfx.setLowPowerMode(lowPower);
+    this.music.setLowPowerMode(lowPower);
   }
 
   public unlock(): void {
@@ -205,6 +206,23 @@ export class AudioManager {
       return;
     }
     this.sfx.updateEnvironmentAudio(env);
+    this.music.updateWorldContext({
+      biome: env.biome,
+      nightFactor: env.nightFactor,
+      villageProximity: env.villageProximity,
+      caveFactor: env.caveFactor,
+      ruinsProximity: env.ruinsProximity ?? 0,
+      altitudeMeters: env.altitudeMeters,
+      combatIntensity: env.combatIntensity ?? 0,
+      bossActive: Boolean(env.bossActive),
+    });
+  }
+
+  public triggerStoryMusic(
+    kind: 'discovery' | 'revelation' | 'chapter_complete' = 'discovery',
+  ): void {
+    if (this.disposed || this.sceneMode !== 'world') return;
+    this.music.triggerStoryCue(kind);
   }
 
   public getEffectiveCategoryLevels(): Record<AudioCategoryBus, number> {
@@ -212,12 +230,13 @@ export class AudioManager {
       return { master: 0, music: 0, sfx: 0, ambient: 0, ui: 0 };
     }
     const master = this.settings.masterVolume;
+    const musicAllowed =
+      this.sceneMode === 'menu'
+        ? this.settings.menuMusicEnabled
+        : this.sceneMode === 'world' || this.sceneMode === 'paused';
     return {
       master,
-      music:
-        this.settings.menuMusicEnabled && this.sceneMode === 'menu'
-          ? master * this.settings.musicVolume
-          : 0,
+      music: musicAllowed ? master * this.settings.musicVolume : 0,
       sfx: this.settings.soundEffectsEnabled
         ? master * this.settings.effectsVolume
         : 0,

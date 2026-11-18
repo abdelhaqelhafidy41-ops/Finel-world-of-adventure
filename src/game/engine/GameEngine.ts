@@ -582,6 +582,7 @@ export class GameEngine {
                   (msg) => this.callbacks.onWorldNotice(msg),
                 )
               ) {
+                getAudioManager().triggerStoryMusic('chapter_complete');
                 this.hasUnsavedProgress = true;
                 this.syncEquipmentBonuses();
                 this.syncEquippedWeaponFromInventory();
@@ -8442,6 +8443,30 @@ export class GameEngine {
         recentCombat,
         this.combat.getCombatIntensity(this.controller.position),
       );
+      const bossActive = Boolean(
+        this.combat.getActiveBossHudTarget(this.controller.position, 42),
+      );
+      let ruinsProximity = 0;
+      for (let i = 0; i < this.landmarks.length; i++) {
+        const lm = this.landmarks[i];
+        const lowerId = lm.id.toLowerCase();
+        const lowerName = lm.name.toLowerCase();
+        if (
+          lm.kind === 'ruins' ||
+          lowerId.includes('ruin') ||
+          lowerId.includes('temple') ||
+          lowerId.includes('shrine') ||
+          lowerId.includes('monument') ||
+          lowerName.includes('ruin') ||
+          lowerName.includes('ancient')
+        ) {
+          const d = Math.hypot(px - lm.x, pz - lm.z);
+          if (d < 42) {
+            const prox = Math.max(0, Math.min(1, 1 - d / 42));
+            if (prox > ruinsProximity) ruinsProximity = prox;
+          }
+        }
+      }
       getAudioManager().updateEnvironment({
         active: true,
         elapsed: this.elapsed,
@@ -8456,6 +8481,8 @@ export class GameEngine {
         altitudeMeters: envCtx.altitudeMeters,
         indoorFactor: envCtx.indoorFactor,
         combatIntensity,
+        bossActive,
+        ruinsProximity,
       });
     }
     this.skyRig.updateTimeOfDay(
@@ -9005,6 +9032,7 @@ export class GameEngine {
         if (lm && !lm.discovered) {
           lm.discovered = true;
           this.mapManager.revealAround(lm.x, lm.z, 90);
+          getAudioManager().triggerStoryMusic('discovery');
           if (
             this.multiplayerSessionActive &&
             this.multiplayerService &&

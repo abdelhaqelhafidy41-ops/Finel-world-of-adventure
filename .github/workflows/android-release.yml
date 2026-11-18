@@ -58,6 +58,11 @@ jobs:
           fi
 
       - name: Build web game
+        env:
+          VITE_APP_ENV: ${{ vars.VITE_APP_ENV || 'production' }}
+          VITE_MULTIPLAYER_URL: ${{ vars.VITE_MULTIPLAYER_URL || 'https://finel-world-of-adventure.abdelhaq-elhafidy-41.workers.dev' }}
+          VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL || vars.PUBLIC_APP_URL || 'https://abdelhaqelhafidy41-ops.github.io/Finel-world-of-adventure/' }}
+          PUBLIC_APP_URL: ${{ vars.PUBLIC_APP_URL || vars.VITE_PUBLIC_APP_URL || 'https://abdelhaqelhafidy41-ops.github.io/Finel-world-of-adventure/' }}
         run: npm run build
 
       - name: Sync Capacitor Android project
