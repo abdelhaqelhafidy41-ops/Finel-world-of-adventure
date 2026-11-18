@@ -1,0 +1,643 @@
+[
+  {
+    "id": "recipe-bed",
+    "resultItemId": "bed",
+    "resultCount": 1,
+    "category": "camp",
+    "ingredients": [
+      { "itemId": "wood", "count": 10 },
+      { "itemId": "fiber", "count": 5 }
+    ]
+  },
+  {
+    "id": "recipe-wooden-sword",
+    "resultItemId": "wooden-sword",
+    "resultCount": 1,
+    "category": "weapon",
+    "ingredients": [
+      { "itemId": "wood", "count": 6 },
+      { "itemId": "fiber", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-hunter-knife",
+    "resultItemId": "hunter-knife",
+    "resultCount": 1,
+    "category": "weapon",
+    "ingredients": [
+      { "itemId": "iron-ore", "count": 2 },
+      { "itemId": "wood", "count": 2 },
+      { "itemId": "leather", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-spear",
+    "resultItemId": "spear",
+    "resultCount": 1,
+    "category": "weapon",
+    "ingredients": [
+      { "itemId": "wood", "count": 5 },
+      { "itemId": "iron-ore", "count": 2 },
+      { "itemId": "fiber", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-iron-sword",
+    "resultItemId": "iron-sword",
+    "resultCount": 1,
+    "category": "weapon",
+    "ingredients": [
+      { "itemId": "iron-ore", "count": 4 },
+      { "itemId": "coal", "count": 2 },
+      { "itemId": "wood", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-steel-sword",
+    "resultItemId": "steel-sword",
+    "resultCount": 1,
+    "category": "weapon",
+    "ingredients": [
+      { "itemId": "iron-ore", "count": 6 },
+      { "itemId": "coal", "count": 4 },
+      { "itemId": "leather", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-battle-axe",
+    "resultItemId": "battle-axe",
+    "resultCount": 1,
+    "category": "weapon",
+    "ingredients": [
+      { "itemId": "iron-ore", "count": 5 },
+      { "itemId": "coal", "count": 2 },
+      { "itemId": "wood", "count": 4 }
+    ]
+  },
+  {
+    "id": "recipe-hunter-bow",
+    "resultItemId": "hunter-bow",
+    "resultCount": 1,
+    "category": "weapon",
+    "ingredients": [
+      { "itemId": "wood", "count": 6 },
+      { "itemId": "fiber", "count": 4 }
+    ]
+  },
+  {
+    "id": "recipe-crossbow",
+    "resultItemId": "crossbow",
+    "resultCount": 1,
+    "category": "weapon",
+    "ingredients": [
+      { "itemId": "wood", "count": 6 },
+      { "itemId": "iron-ore", "count": 4 },
+      { "itemId": "fiber", "count": 3 }
+    ]
+  },
+  {
+    "id": "recipe-arrow",
+    "resultItemId": "arrow",
+    "resultCount": 8,
+    "category": "weapon",
+    "ingredients": [
+      { "itemId": "wood", "count": 2 },
+      { "itemId": "feathers", "count": 2 },
+      { "itemId": "stone", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-leather-armor",
+    "resultItemId": "leather-armor",
+    "resultCount": 1,
+    "category": "armor",
+    "ingredients": [
+      { "itemId": "leather", "count": 5 },
+      { "itemId": "wool", "count": 2 },
+      { "itemId": "fiber", "count": 3 }
+    ]
+  },
+  {
+    "id": "recipe-cooked-meat",
+    "resultItemId": "cooked-meat",
+    "resultCount": 1,
+    "category": "provisions",
+    "ingredients": [
+      { "itemId": "meat", "count": 1 },
+      { "itemId": "wood", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-torch",
+    "resultItemId": "torch",
+    "resultCount": 2,
+    "category": "camp",
+    "ingredients": [
+      { "itemId": "wood", "count": 2 },
+      { "itemId": "coal", "count": 1 },
+      { "itemId": "fiber", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-berry-tonic",
+    "resultItemId": "apothecary-tonic",
+    "resultCount": 1,
+    "category": "provisions",
+    "ingredients": [
+      { "itemId": "berries", "count": 2 },
+      { "itemId": "mushroom", "count": 1 },
+      { "itemId": "flower", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-desert-tonic",
+    "resultItemId": "apothecary-tonic",
+    "resultCount": 1,
+    "category": "provisions",
+    "ingredients": [
+      { "itemId": "desert-plant", "count": 2 },
+      { "itemId": "cactus", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-driftwood-arrows",
+    "resultItemId": "arrow",
+    "resultCount": 6,
+    "category": "weapon",
+    "ingredients": [
+      { "itemId": "driftwood", "count": 2 },
+      { "itemId": "stone", "count": 1 },
+      { "itemId": "fiber", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-hearth-loaf",
+    "resultItemId": "hearth-loaf",
+    "resultCount": 1,
+    "category": "provisions",
+    "ingredients": [
+      { "itemId": "wheat", "count": 2 },
+      { "itemId": "wood", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-stone-axe",
+    "resultItemId": "stone-axe",
+    "resultCount": 1,
+    "category": "tool",
+    "station": "hand",
+    "craftingTimeSec": 0.6,
+    "ingredients": [
+      { "itemId": "wood", "count": 3 },
+      { "itemId": "stone", "count": 2 },
+      { "itemId": "fiber", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-stone-pickaxe",
+    "resultItemId": "stone-pickaxe",
+    "resultCount": 1,
+    "category": "tool",
+    "station": "hand",
+    "craftingTimeSec": 0.6,
+    "ingredients": [
+      { "itemId": "wood", "count": 2 },
+      { "itemId": "stone", "count": 2 },
+      { "itemId": "fiber", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-wooden-shovel",
+    "resultItemId": "wooden-shovel",
+    "resultCount": 1,
+    "category": "tool",
+    "station": "hand",
+    "craftingTimeSec": 0.5,
+    "ingredients": [
+      { "itemId": "wood", "count": 3 },
+      { "itemId": "fiber", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-stone-club",
+    "resultItemId": "stone-club",
+    "resultCount": 1,
+    "category": "weapon",
+    "station": "hand",
+    "craftingTimeSec": 0.7,
+    "ingredients": [
+      { "itemId": "wood", "count": 3 },
+      { "itemId": "stone", "count": 3 },
+      { "itemId": "leather", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-planks",
+    "resultItemId": "planks",
+    "resultCount": 4,
+    "category": "material",
+    "station": "hand",
+    "craftingTimeSec": 0.4,
+    "ingredients": [
+      { "itemId": "wood", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-stone-brick",
+    "resultItemId": "stone-brick",
+    "resultCount": 2,
+    "category": "building",
+    "station": "hand",
+    "craftingTimeSec": 0.5,
+    "ingredients": [
+      { "itemId": "stone", "count": 3 },
+      { "itemId": "gravel", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-cloth",
+    "resultItemId": "cloth",
+    "resultCount": 2,
+    "category": "material",
+    "station": "hand",
+    "craftingTimeSec": 0.5,
+    "ingredients": [
+      { "itemId": "fiber", "count": 3 },
+      { "itemId": "wool", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-crafting-table",
+    "resultItemId": "crafting-table",
+    "resultCount": 1,
+    "category": "camp",
+    "station": "hand",
+    "craftingTimeSec": 0.9,
+    "ingredients": [
+      { "itemId": "wood", "count": 4 },
+      { "itemId": "planks", "count": 4 }
+    ]
+  },
+  {
+    "id": "recipe-smelting-furnace",
+    "resultItemId": "smelting-furnace",
+    "resultCount": 1,
+    "category": "camp",
+    "station": "hand",
+    "craftingTimeSec": 1.1,
+    "ingredients": [
+      { "itemId": "stone", "count": 8 },
+      { "itemId": "stone-brick", "count": 2 },
+      { "itemId": "coal", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-medicinal-salve",
+    "resultItemId": "medicinal-salve",
+    "resultCount": 1,
+    "category": "provisions",
+    "station": "hand",
+    "craftingTimeSec": 0.6,
+    "ingredients": [
+      { "itemId": "medicinal-herb", "count": 2 },
+      { "itemId": "berries", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-timber-beam",
+    "resultItemId": "timber-beam",
+    "resultCount": 2,
+    "category": "building",
+    "station": "crafting_table",
+    "craftingTimeSec": 0.8,
+    "ingredients": [
+      { "itemId": "planks", "count": 3 },
+      { "itemId": "wood", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-copper-ingot",
+    "resultItemId": "copper-ingot",
+    "resultCount": 1,
+    "category": "material",
+    "station": "furnace",
+    "craftingTimeSec": 0.9,
+    "ingredients": [
+      { "itemId": "copper-ore", "count": 2 },
+      { "itemId": "coal", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-iron-ingot",
+    "resultItemId": "iron-ingot",
+    "resultCount": 1,
+    "category": "material",
+    "station": "furnace",
+    "craftingTimeSec": 1.0,
+    "ingredients": [
+      { "itemId": "iron-ore", "count": 2 },
+      { "itemId": "coal", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-silver-ingot",
+    "resultItemId": "silver-ingot",
+    "resultCount": 1,
+    "category": "material",
+    "station": "furnace",
+    "requiredLevel": 2,
+    "craftingTimeSec": 1.1,
+    "ingredients": [
+      { "itemId": "silver-ore", "count": 2 },
+      { "itemId": "coal", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-gold-ingot",
+    "resultItemId": "gold-ingot",
+    "resultCount": 1,
+    "category": "material",
+    "station": "furnace",
+    "requiredLevel": 3,
+    "craftingTimeSec": 1.2,
+    "ingredients": [
+      { "itemId": "gold-ore", "count": 2 },
+      { "itemId": "coal", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-iron-axe",
+    "resultItemId": "iron-axe",
+    "resultCount": 1,
+    "category": "tool",
+    "station": "forge",
+    "requiredLevel": 2,
+    "craftingTimeSec": 1.0,
+    "ingredients": [
+      { "itemId": "iron-ingot", "count": 3 },
+      { "itemId": "wood", "count": 2 },
+      { "itemId": "leather", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-iron-pickaxe",
+    "resultItemId": "iron-pickaxe",
+    "resultCount": 1,
+    "category": "tool",
+    "station": "forge",
+    "prerequisiteRecipeId": "recipe-stone-pickaxe",
+    "craftingTimeSec": 1.0,
+    "ingredients": [
+      { "itemId": "iron-ingot", "count": 3 },
+      { "itemId": "wood", "count": 2 },
+      { "itemId": "coal", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-steel-pickaxe",
+    "resultItemId": "steel-pickaxe",
+    "resultCount": 1,
+    "category": "tool",
+    "station": "forge",
+    "requiredLevel": 3,
+    "prerequisiteRecipeId": "recipe-iron-pickaxe",
+    "craftingTimeSec": 1.3,
+    "ingredients": [
+      { "itemId": "iron-ingot", "count": 4 },
+      { "itemId": "coal", "count": 3 },
+      { "itemId": "copper-ingot", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-iron-shovel",
+    "resultItemId": "iron-shovel",
+    "resultCount": 1,
+    "category": "tool",
+    "station": "forge",
+    "craftingTimeSec": 0.9,
+    "ingredients": [
+      { "itemId": "iron-ingot", "count": 2 },
+      { "itemId": "wood", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-copper-sword",
+    "resultItemId": "copper-sword",
+    "resultCount": 1,
+    "category": "weapon",
+    "station": "forge",
+    "craftingTimeSec": 1.0,
+    "ingredients": [
+      { "itemId": "copper-ingot", "count": 3 },
+      { "itemId": "wood", "count": 1 },
+      { "itemId": "leather", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-bronze-spear",
+    "resultItemId": "bronze-spear",
+    "resultCount": 1,
+    "category": "weapon",
+    "station": "forge",
+    "craftingTimeSec": 1.0,
+    "ingredients": [
+      { "itemId": "copper-ingot", "count": 2 },
+      { "itemId": "wood", "count": 4 },
+      { "itemId": "fiber", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-silver-sword",
+    "resultItemId": "silver-sword",
+    "resultCount": 1,
+    "category": "weapon",
+    "station": "forge",
+    "requiredLevel": 3,
+    "prerequisiteRecipeId": "recipe-copper-sword",
+    "craftingTimeSec": 1.4,
+    "ingredients": [
+      { "itemId": "silver-ingot", "count": 3 },
+      { "itemId": "iron-ingot", "count": 1 },
+      { "itemId": "leather", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-linen-shirt",
+    "resultItemId": "linen-shirt",
+    "resultCount": 1,
+    "category": "clothing",
+    "station": "workbench",
+    "craftingTimeSec": 0.8,
+    "ingredients": [
+      { "itemId": "cloth", "count": 4 },
+      { "itemId": "fiber", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-traveler-trousers",
+    "resultItemId": "traveler-trousers",
+    "resultCount": 1,
+    "category": "clothing",
+    "station": "workbench",
+    "craftingTimeSec": 0.9,
+    "ingredients": [
+      { "itemId": "cloth", "count": 3 },
+      { "itemId": "leather", "count": 3 }
+    ]
+  },
+  {
+    "id": "recipe-leather-gloves",
+    "resultItemId": "leather-gloves",
+    "resultCount": 1,
+    "category": "clothing",
+    "station": "workbench",
+    "craftingTimeSec": 0.7,
+    "ingredients": [
+      { "itemId": "leather", "count": 3 },
+      { "itemId": "fiber", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-hunter-cap",
+    "resultItemId": "hunter-cap",
+    "resultCount": 1,
+    "category": "clothing",
+    "station": "workbench",
+    "craftingTimeSec": 0.8,
+    "ingredients": [
+      { "itemId": "leather", "count": 3 },
+      { "itemId": "wool", "count": 1 },
+      { "itemId": "cloth", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-iron-helm",
+    "resultItemId": "iron-helm",
+    "resultCount": 1,
+    "category": "armor",
+    "station": "forge",
+    "requiredLevel": 2,
+    "craftingTimeSec": 1.1,
+    "ingredients": [
+      { "itemId": "iron-ingot", "count": 4 },
+      { "itemId": "leather", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-fur-winter-coat",
+    "resultItemId": "fur-winter-coat",
+    "resultCount": 1,
+    "category": "clothing",
+    "station": "workbench",
+    "requiredLevel": 2,
+    "craftingTimeSec": 1.1,
+    "ingredients": [
+      { "itemId": "hide", "count": 4 },
+      { "itemId": "wool", "count": 4 },
+      { "itemId": "cloth", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-explorer-backpack",
+    "resultItemId": "explorer-backpack",
+    "resultCount": 1,
+    "category": "camp",
+    "station": "crafting_table",
+    "craftingTimeSec": 1.1,
+    "ingredients": [
+      { "itemId": "leather", "count": 5 },
+      { "itemId": "cloth", "count": 3 },
+      { "itemId": "fiber", "count": 4 }
+    ]
+  },
+  {
+    "id": "recipe-expedition-pack",
+    "resultItemId": "expedition-pack",
+    "resultCount": 1,
+    "category": "camp",
+    "station": "workbench",
+    "requiredLevel": 3,
+    "prerequisiteRecipeId": "recipe-explorer-backpack",
+    "craftingTimeSec": 1.4,
+    "ingredients": [
+      { "itemId": "leather", "count": 6 },
+      { "itemId": "cloth", "count": 4 },
+      { "itemId": "iron-ingot", "count": 2 }
+    ]
+  },
+  {
+    "id": "recipe-wooden-hoe",
+    "resultItemId": "wooden-hoe",
+    "resultCount": 1,
+    "category": "tool",
+    "station": "hand",
+    "craftingTimeSec": 0.5,
+    "ingredients": [
+      { "itemId": "wood", "count": 3 },
+      { "itemId": "stone", "count": 1 },
+      { "itemId": "fiber", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-watering-can",
+    "resultItemId": "watering-can",
+    "resultCount": 1,
+    "category": "tool",
+    "station": "crafting_table",
+    "craftingTimeSec": 0.7,
+    "ingredients": [
+      { "itemId": "copper-ingot", "count": 2 },
+      { "itemId": "wood", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-animal-feed",
+    "resultItemId": "animal-feed",
+    "resultCount": 3,
+    "category": "provisions",
+    "station": "hand",
+    "craftingTimeSec": 0.4,
+    "ingredients": [
+      { "itemId": "wheat", "count": 2 },
+      { "itemId": "corn", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-cornbread",
+    "resultItemId": "cornbread",
+    "resultCount": 1,
+    "category": "provisions",
+    "station": "hand",
+    "craftingTimeSec": 0.6,
+    "ingredients": [
+      { "itemId": "corn", "count": 2 },
+      { "itemId": "wheat", "count": 1 },
+      { "itemId": "egg", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-farmstead-stew",
+    "resultItemId": "farmstead-stew",
+    "resultCount": 1,
+    "category": "provisions",
+    "station": "hand",
+    "craftingTimeSec": 0.8,
+    "ingredients": [
+      { "itemId": "potato", "count": 1 },
+      { "itemId": "carrot", "count": 1 },
+      { "itemId": "tomato", "count": 1 },
+      { "itemId": "medicinal-herb", "count": 1 }
+    ]
+  },
+  {
+    "id": "recipe-artisan-cheese",
+    "resultItemId": "cheese",
+    "resultCount": 1,
+    "category": "provisions",
+    "station": "workbench",
+    "craftingTimeSec": 0.8,
+    "ingredients": [
+      { "itemId": "milk", "count": 2 }
+    ]
+  }
+]
