@@ -358,9 +358,22 @@ export class AIService {
       q.includes('طقس') ||
       q.includes('مطر')
     ) {
+      const weatherKey = (world.weather || 'clear').toLowerCase();
+      const weatherAr =
+        weatherKey.includes('storm') || weatherKey.includes('عاصف')
+          ? 'عاصفًا'
+          : weatherKey.includes('rain') || weatherKey.includes('مطر') || weatherKey.includes('ماطر')
+            ? 'ماطرًا'
+            : weatherKey.includes('snow') || weatherKey.includes('ثلج')
+              ? 'مثلجًا'
+              : weatherKey.includes('fog') || weatherKey.includes('ضباب')
+                ? 'ضبابيًا'
+                : weatherKey.includes('cloud') || weatherKey.includes('غائم')
+                  ? 'غائمًا'
+                  : 'صافيًا';
       return isAr
-        ? `السماء الآن تبدو ${world.weather} حول ${npc.location}. الجو يمنح أوكهولو طابعًا مميزًا طوال اليوم.`
-        : `The sky feels quite ${world.weather.toLowerCase()} around ${npc.location} right now—it certainly shapes the mood across Oakhollow.`;
+        ? `يبدو الطقس ${weatherAr} الآن حول ${npc.location}. الجو يمنح أوكهولو طابعًا مميزًا طوال اليوم.`
+        : `The sky feels quite ${weatherKey} around ${npc.location} right now—it certainly shapes the mood across Oakhollow.`;
     }
 
     if (
@@ -378,11 +391,30 @@ export class AIService {
     if (isAr) {
       switch (npc.role) {
         case 'merchant':
+        case 'traveling_merchant':
           return `مرحبًا بك في ${npc.location}! بصفتي ${npc.title}، أرتّب البضائع وأرحب بالمسافرين مثلك في هذا الوقت.`;
         case 'farmer':
           return `العمل في ${npc.location} لا يتوقف، لكنني أستمتع دائمًا بحديث لطيف مع المستكشفين العابرين.`;
         case 'guard':
           return `الطرق هادئة حول ${npc.location} الآن. ابقَ متيقظًا على الدروب ولا تتردد في زيارة الساحة إن احتجت استراحة.`;
+        case 'blacksmith':
+          return `الكور مشتعل هنا في ${npc.location}! أحضر لي خام الحديد أو نصولك البالية متى احتجت إلى الحدادة.`;
+        case 'hunter':
+          return `البرية هادئة قرب ${npc.location} اليوم. تذكّر دائمًا تفقد أثر الغزلان وتجهيز سهامك قبل الخروج.`;
+        case 'woodcutter':
+          return `رائحة الأخشاب الطازجة تملأ ${npc.location}! إن احتجت إلى الخشب لصنع سرير التخييم أو البناء فالأشجار حولنا وفيرة.`;
+        case 'elder':
+          return `مرحبًا بك يا رحّال في ${npc.location}. دروب الوادي ومستوطناته السبع تفتح أبوابها لكل مستكشف شجاع.`;
+        case 'healer':
+          return `أهلاً بك في ${npc.location}. أجهّز الأعشاب والإكسيرات لراحة المسافرين — لا تُجهد نفسك كثيرًا على الدروب.`;
+        case 'innkeeper':
+          return `تفضل بالاستراحة في ${npc.location}! الموقد دافئ والأخبار لا تنقطع بين المسافرين هنا.`;
+        case 'carpenter':
+          return `أعمل على تشكيل الأخشاب وصناعة الأثاث المتين هنا في ${npc.location}. كل قطعة خشب لها قيمتها!`;
+        case 'miner':
+          return `العروق المعدنية حول ${npc.location} غنية بالحديد والفحم. خذ مصباحك واحذر عند دخول الأنفاق.`;
+        case 'fisherman':
+          return `التيار هادئ اليوم عند ${npc.location}. الصبر هو سر الصيد الوفير على ضفاف هذا الوادي.`;
         case 'villager':
         default:
           return `سعيد بلقائك قرب ${npc.location}! الحياة في وادي أوكهولو هادئة وجميلة في مثل هذا الوقت.`;
@@ -391,11 +423,30 @@ export class AIService {
 
     switch (npc.role) {
       case 'merchant':
+      case 'traveling_merchant':
         return `Welcome over to ${npc.location}! As ${npc.title}, I always enjoy trading valley news with curious travelers.`;
       case 'farmer':
         return `There's always plenty tending to do around ${npc.location}, though it's good to pause and share a word with a passing explorer.`;
       case 'guard':
         return `Everything looks steady near ${npc.location}. Keep your wits sharp on the outer trails, traveler.`;
+      case 'blacksmith':
+        return `The forge is glowing hot here at ${npc.location}! Bring iron ore or worn blades anytime you need steelwork.`;
+      case 'hunter':
+        return `The brush is calm near ${npc.location} today. Keep your bow strung and tread lightly on the forest trails.`;
+      case 'woodcutter':
+        return `Nothing beats the scent of fresh timber here at ${npc.location}! Plenty of sturdy wood out in the groves if you're crafting.`;
+      case 'elder':
+        return `Blessings on your travels at ${npc.location}. Every road across the valley holds stories waiting to be discovered.`;
+      case 'healer':
+        return `Welcome to ${npc.location}. I keep meadow-herb tonics ready for weary travelers—take good care on the trails.`;
+      case 'innkeeper':
+        return `Step by the hearth at ${npc.location}! Warm stew and friendly traveler tales are always waiting here.`;
+      case 'carpenter':
+        return `Shaping sturdy timber beams and camp gear here at ${npc.location}. Good joinery lasts a lifetime!`;
+      case 'miner':
+        return `Rich iron and coal veins run deep near ${npc.location}. Keep your lantern bright in the highland shafts.`;
+      case 'fisherman':
+        return `The currents are calm along ${npc.location} today. Patience always pays off by the water's edge.`;
       case 'villager':
       default:
         return `Good to see you near ${npc.location}! Oakhollow always feels livelier when adventurers stop to chat.`;

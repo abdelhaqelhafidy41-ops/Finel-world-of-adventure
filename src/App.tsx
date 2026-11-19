@@ -96,6 +96,10 @@ import { ProfileManager } from './game/profile/ProfileManager';
 import { AvatarBadge } from './components/profile/AvatarBadge';
 import { PlayerProfileModal } from './components/profile/PlayerProfileModal';
 import { ProfileSetupModal } from './components/profile/ProfileSetupModal';
+import { AccountAuthModal } from './components/profile/AccountAuthModal';
+import { AccountCloudModal } from './components/profile/AccountCloudModal';
+import { AuthService } from './game/profile/AuthService';
+import { CloudSaveService } from './game/save/CloudSaveService';
 
 declare global {
   interface Window {
@@ -212,6 +216,22 @@ export default function App() {
   );
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [profileSetupOpen, setProfileSetupOpen] = useState(false);
+  const [accountCloudModalOpen, setAccountCloudModalOpen] = useState(false);
+  const [accountAuthModalOpen, setAccountAuthModalOpen] = useState<boolean>(() => {
+    if (extractJoinTargetFromUrl()) return false;
+    if (AuthService.isSignedInCloudAccount()) return false;
+    if (AuthService.hasSeenFirstLaunchPrompt()) return false;
+    if (CloudSaveService.hasLocalData()) return false;
+    return true;
+  });
+  const [accountAuthIsFirstLaunch, setAccountAuthIsFirstLaunch] = useState<boolean>(() => {
+    if (extractJoinTargetFromUrl()) return false;
+    return (
+      !AuthService.isSignedInCloudAccount() &&
+      !AuthService.hasSeenFirstLaunchPrompt() &&
+      !CloudSaveService.hasLocalData()
+    );
+  });
   const languageRef = useRef<Language>(language);
   languageRef.current = language;
   const noticeTimerRef = useRef<number>(0);
@@ -1043,6 +1063,7 @@ export default function App() {
         });
       }
       void ProfileManager.flushStatsDelta();
+      void CloudSaveService.flushPendingQueue();
       lastStartedMatchKeyRef.current = null;
       setActiveModal('none');
       setTitleSubScreen('main');
@@ -1051,6 +1072,27 @@ export default function App() {
     },
     [refreshSaveSlots],
   );
+
+  // Register CloudSaveService hooks & bootstrap cloud session on startup
+  useEffect(() => {
+    SaveManager.registerCloudHooks({
+      onSave: (slotId) => {
+        CloudSaveService.scheduleWorldSave(slotId);
+        CloudSaveService.schedulePlayerSave();
+      },
+      onDelete: (slotId) => {
+        void CloudSaveService.deleteWorldData(slotId);
+      },
+    });
+    if (AuthService.isSignedInCloudAccount()) {
+      void AuthService.fetchAccountMe().then((me) => {
+        if (me?.account) {
+          ProfileManager.syncFromCloudAccount(me.account);
+        }
+      });
+      void CloudSaveService.flushPendingQueue();
+    }
+  }, []);
 
   const handleResetPosition = useCallback(() => {
     setActiveModal('none');
@@ -1414,11 +1456,7 @@ export default function App() {
           onStartMultiplayerWorld={handleStartMultiplayerWorld}
           onOpenProfile={() => {
             playUiClick();
-            if (ProfileManager.hasProfile()) {
-              setProfileModalOpen(true);
-            } else {
-              setProfileSetupOpen(true);
-            }
+            setAccountCloudModalOpen(true);
           }}
         />
       )}
@@ -2178,6 +2216,41 @@ export default function App() {
             setProfileModalOpen(true);
           }}
           onCancel={() => setProfileSetupOpen(false)}
+        />
+      )}
+
+      {accountCloudModalOpen && (
+        <AccountCloudModal
+          lang={language}
+          onClose={() => setAccountCloudModalOpen(false)}
+          onOpenAuthModal={() => {
+            setAccountAuthIsFirstLaunch(false);
+            setAccountAuthModalOpen(true);
+          }}
+          onCloudRestored={() => {
+            refreshSaveSlots();
+          }}
+          onNotice={showNotice}
+        />
+      )}
+
+      {accountAuthModalOpen && (
+        <AccountAuthModal
+          lang={language}
+          initialView="welcome"
+          isFirstLaunch={accountAuthIsFirstLaunch}
+          onClose={() => {
+            setAccountAuthModalOpen(false);
+            setAccountAuthIsFirstLaunch(false);
+          }}
+          onPlayOffline={() => {
+            setAccountAuthModalOpen(false);
+            setAccountAuthIsFirstLaunch(false);
+          }}
+          onAuthComplete={(msg) => {
+            refreshSaveSlots();
+            if (msg) showNotice(msg);
+          }}
         />
       )}
     </main>

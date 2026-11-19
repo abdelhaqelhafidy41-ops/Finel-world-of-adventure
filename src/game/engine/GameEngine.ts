@@ -2449,6 +2449,17 @@ export class GameEngine {
     this.storyManager.setLanguage(lang);
     this.sideQuestManager.setLanguage(lang);
     this.world?.npcs.setLanguage(lang);
+    if (this.activeDialogueNpcId && this.dialogueEngine.isOpen() && this.world) {
+      const activeNpc = this.world.npcs.npcs.find((n) => n.id === this.activeDialogueNpcId);
+      if (activeNpc) {
+        const refreshed = this.dialogueEngine.refreshActiveDialogue(
+          activeNpc.getDialogueProfile(lang),
+        );
+        if (refreshed) {
+          this.callbacks.onDialogueChange?.(refreshed);
+        }
+      }
+    }
     if (this.worldRuntimeLoaded && this.controller) {
       this.emitHud();
     }

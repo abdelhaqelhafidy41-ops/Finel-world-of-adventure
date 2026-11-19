@@ -72,6 +72,18 @@ export interface SaveResult {
  * metadata stamping, localStorage persistence, and world deletion.
  */
 export class SaveManager {
+  private static cloudHooks: {
+    onSave?: (slotId: SaveSlotId) => void;
+    onDelete?: (slotId: SaveSlotId) => void;
+  } = {};
+
+  public static registerCloudHooks(hooks: {
+    onSave?: (slotId: SaveSlotId) => void;
+    onDelete?: (slotId: SaveSlotId) => void;
+  }): void {
+    SaveManager.cloudHooks = hooks;
+  }
+
   public getRegisteredWorldIds(): string[] {
     const seen = new Set<string>();
     const ordered: string[] = [];
@@ -172,6 +184,7 @@ export class SaveManager {
       localStorage.setItem(getSaveStorageKey(slotId), JSON.stringify(data));
       this.registerWorldId(slotId);
       this.setLastActiveSlot(slotId);
+      SaveManager.cloudHooks.onSave?.(slotId);
       return { ok: true, meta: data.meta };
     } catch (err) {
       // If storage quota exceeded due to thumbnail, retry without thumbnail
@@ -181,6 +194,7 @@ export class SaveManager {
         localStorage.setItem(getSaveStorageKey(slotId), JSON.stringify(data));
         this.registerWorldId(slotId);
         this.setLastActiveSlot(slotId);
+        SaveManager.cloudHooks.onSave?.(slotId);
         return { ok: true, meta: data.meta };
       } catch {
         return {
@@ -199,6 +213,7 @@ export class SaveManager {
       if (this.getLastActiveSlot() === slotId) {
         localStorage.removeItem(LAST_SLOT_KEY);
       }
+      SaveManager.cloudHooks.onDelete?.(slotId);
       return true;
     } catch {
       return false;

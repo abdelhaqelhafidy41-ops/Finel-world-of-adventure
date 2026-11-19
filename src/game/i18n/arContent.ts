@@ -211,12 +211,12 @@ export const AR_QUESTS: Record<string, ArQuestText> = {
   'quest-build-shelter': {
     title: 'ابنِ مأواك',
     description:
-      'اجمع 10 أخشاب من أشجار الغابة و5 ألياف نباتية، وصنّع سرير مخيم من قائمة التصنيع، ثم عُد إلى الحطّاب كورفين.',
+      'اجمع 10 من الخشب من أشجار الغابة و5 من ألياف النباتات، وصنّع سرير التخييم من قائمة التصنيع، ثم عُد إلى الحطّاب كورفين.',
     rewardSummary: '95 خبرة · 40 عملة · رغيف فرن حجر الشمس',
     objectives: {
-      'collect-shelter-wood': 'اجمع 10 خشب',
-      'collect-shelter-fiber': 'اجمع 5 ألياف نباتية',
-      'craft-camp-bed': 'صنّع سرير مخيم',
+      'collect-shelter-wood': 'اجمع 10 من الخشب',
+      'collect-shelter-fiber': 'اجمع 5 من ألياف النباتات',
+      'craft-camp-bed': 'صنّع سرير التخييم',
       'return-corvin': 'تحدّث مع الحطّاب كورفين',
     },
   },
@@ -1298,6 +1298,10 @@ export const AR_DIALOGUE_TREES: Record<string, DialogueTree> = {
         condition: { questId: 'quest-desert-expedition', questStatusIn: ['ready'] },
         nodeId: 'desert_ready',
       },
+      {
+        condition: { questId: 'quest-the-merchant', questStatusIn: ['ready'] },
+        nodeId: 'caravan_ready',
+      },
       { condition: { periodIn: ['evening', 'night'] }, nodeId: 'greet_evening' },
     ],
     nodes: {
@@ -1321,6 +1325,20 @@ export const AR_DIALOGUE_TREES: Record<string, DialogueTree> = {
             nextNodeId: 'desert_progress',
             questTag: 'progress',
             condition: { questId: 'quest-desert-expedition', questStatusIn: ['active'] },
+          },
+          {
+            id: 'ask-caravan-quest',
+            label: 'هل تحتاج عرباتك التجارية إلى إمدادات؟',
+            nextNodeId: 'caravan_offer',
+            questTag: 'accept',
+            condition: { questId: 'quest-the-merchant', questStatusIn: ['available'] },
+          },
+          {
+            id: 'ask-caravan-progress',
+            label: 'بخصوص تسليم أخشاب القافلة...',
+            nextNodeId: 'caravan_progress',
+            questTag: 'progress',
+            condition: { questId: 'quest-the-merchant', questStatusIn: ['active'] },
           },
           { id: 'ask-gear', label: 'أي نصيحة للرحلات الطويلة؟', nextNodeId: 'travel_advice' },
           { id: 'ask-mountains', label: 'كيف الأوضاع في الجبال الشمالية؟', nextNodeId: 'mountain_advice' },
@@ -1453,6 +1471,72 @@ export const AR_DIALOGUE_TREES: Record<string, DialogueTree> = {
         ],
         nextNodeId: 'hub',
       },
+      caravan_offer: {
+        id: 'caravan_offer',
+        questId: 'quest-the-merchant',
+        lines: [
+          'تضرر محور إحدى عجلات قافلتنا الشرقية على الطريق القادم من غراندكروس.',
+          'اجمع 8 من الخشب المتين من أشجار الغابة أو الأغصان المتساقطة وأحضره إليّ — سأمنحك 110 خبرة و75 عملة وقطعتين من اللحم المشوي!',
+        ],
+        choices: [
+          {
+            id: 'accept-caravan',
+            label: 'سأجمع 8 من الخشب لعربات القافلة.',
+            nextNodeId: 'caravan_accepted',
+            questTag: 'accept',
+            effects: [
+              { type: 'startQuest', questId: 'quest-the-merchant' },
+              {
+                type: 'notice',
+                message: 'تم قبول المهمة: أخشاب القافلة (سلّم 8 من الخشب إلى غاريك).',
+              },
+            ],
+          },
+          { id: 'decline-caravan', label: 'ربما لاحقًا يا غاريك.', nextNodeId: 'hub' },
+        ],
+      },
+      caravan_accepted: {
+        id: 'caravan_accepted',
+        questId: 'quest-the-merchant',
+        lines: [
+          'ممتن لك كثيرًا! اقطع الأشجار الصالحة أو اجمع الأغصان المتساقطة حول الغابة وعُد بـ 8 من الخشب.',
+        ],
+        nextNodeId: null,
+      },
+      caravan_progress: {
+        id: 'caravan_progress',
+        questId: 'quest-the-merchant',
+        lines: [
+          'ما زلت بحاجة إلى 8 من الخشب لتدعيم محاور القافلة — اقترب من الأشجار أو الجذوع المتساقطة واضغط زر التفاعل.',
+        ],
+        nextNodeId: 'hub',
+      },
+      caravan_ready: {
+        id: 'caravan_ready',
+        questId: 'quest-the-merchant',
+        lines: [
+          'خشب مستقيم وممتاز في حقيبتك! هل حِزم الخشب الثمانية جاهزة للقافلة؟',
+        ],
+        choices: [
+          {
+            id: 'complete-caravan',
+            label: 'سلّم 8 من الخشب للقافلة.',
+            nextNodeId: 'caravan_completed',
+            questTag: 'complete',
+            effects: [{ type: 'completeQuest', questId: 'quest-the-merchant' }],
+          },
+          { id: 'chat-later', label: 'انتظر، لنتحدث أولًا.', nextNodeId: 'hub' },
+        ],
+      },
+      caravan_completed: {
+        id: 'caravan_completed',
+        questId: 'quest-the-merchant',
+        lines: [
+          'هذا سيجعل قافلة غراندكروس تواصل مسيرها بسلاسة!',
+          'تفضّل 75 عملة و110 خبرة ووجبتين شهيتين للطريق.',
+        ],
+        nextNodeId: null,
+      },
       farewell: {
         id: 'farewell',
         lines: ['تجوّل بذكاء أيها المغامر!'],
@@ -1532,6 +1616,10 @@ export const AR_DIALOGUE_TREES: Record<string, DialogueTree> = {
         condition: { questId: 'quest-ridge-scouting', questStatusIn: ['ready'] },
         nodeId: 'scout_ready',
       },
+      {
+        condition: { questId: 'quest-into-the-wild', questStatusIn: ['ready'] },
+        nodeId: 'mine_ready',
+      },
       { condition: { periodIn: ['evening', 'night'] }, nodeId: 'greet_night' },
     ],
     nodes: {
@@ -1555,6 +1643,20 @@ export const AR_DIALOGUE_TREES: Record<string, DialogueTree> = {
             nextNodeId: 'scout_progress',
             questTag: 'progress',
             condition: { questId: 'quest-ridge-scouting', questStatusIn: ['active'] },
+          },
+          {
+            id: 'ask-mine-quest',
+            label: 'هل رصد المسافرون آثارًا أو مناجم قديمة في الأبعد؟',
+            nextNodeId: 'mine_offer',
+            questTag: 'accept',
+            condition: { questId: 'quest-into-the-wild', questStatusIn: ['available'] },
+          },
+          {
+            id: 'ask-mine-progress',
+            label: 'بخصوص رحلة منجم حجر الشمس...',
+            nextNodeId: 'mine_progress',
+            questTag: 'progress',
+            condition: { questId: 'quest-into-the-wild', questStatusIn: ['active'] },
           },
           { id: 'ask-roads', label: 'هل الطرق المحيطة آمنة؟', nextNodeId: 'road_safety' },
           { id: 'ask-watch', label: 'ما المسار الذي تحرسه؟', nextNodeId: 'patrol_route' },
@@ -1687,6 +1789,72 @@ export const AR_DIALOGUE_TREES: Record<string, DialogueTree> = {
         ],
         nextNodeId: 'hub',
       },
+      mine_offer: {
+        id: 'mine_offer',
+        questId: 'quest-into-the-wild',
+        lines: [
+          'أبلغ عمال المناجم عن عروق حديد غنية وأنفاق قديمة في منجم حجر الشمس بعيدًا نحو الشمال الشرقي قرب (X 840, Z -330).',
+          'استطلع مدخل منجم حجر الشمس وعُد لتبلغني مقابل 160 خبرة و95 عملة!',
+        ],
+        choices: [
+          {
+            id: 'accept-mine',
+            label: 'سأفحص منجم حجر الشمس لصالح الحرس.',
+            nextNodeId: 'mine_accepted',
+            questTag: 'accept',
+            effects: [
+              { type: 'startQuest', questId: 'quest-into-the-wild' },
+              {
+                type: 'notice',
+                message: 'تم قبول المهمة: إلى المناجم البرية (اكتشف منجم حجر الشمس).',
+              },
+            ],
+          },
+          { id: 'decline-mine', label: 'المكان بعيد عليّ الآن.', nextNodeId: 'hub' },
+        ],
+      },
+      mine_accepted: {
+        id: 'mine_accepted',
+        questId: 'quest-into-the-wild',
+        lines: [
+          'راجع خريطتك بحثًا عن التلال الصخرية في الشمال الشرقي، وابحث عن العوارض الخشبية والفوانيس المضيئة أمام منجم حجر الشمس!',
+        ],
+        nextNodeId: null,
+      },
+      mine_progress: {
+        id: 'mine_progress',
+        questId: 'quest-into-the-wild',
+        lines: [
+          'يقع منجم حجر الشمس شمال شرق أوكهولو قرب (X 840, Z -330). احمل سلاحًا متينًا وعُد لإبلاغي بعد وصولك إليه.',
+        ],
+        nextNodeId: 'hub',
+      },
+      mine_ready: {
+        id: 'mine_ready',
+        questId: 'quest-into-the-wild',
+        lines: [
+          'لقد وصلت إلى منجم حجر الشمس وعدت سالمًا! هل الأنفاق ما زالت سليمة؟',
+        ],
+        choices: [
+          {
+            id: 'complete-mine',
+            label: 'أبلغ بتقرير مسح منجم حجر الشمس.',
+            nextNodeId: 'mine_completed',
+            questTag: 'complete',
+            effects: [{ type: 'completeQuest', questId: 'quest-into-the-wild' }],
+          },
+          { id: 'talk-else', label: 'انتظر، لنتحدث لحظة.', nextNodeId: 'hub' },
+        ],
+      },
+      mine_completed: {
+        id: 'mine_completed',
+        questId: 'quest-into-the-wild',
+        lines: [
+          'عمل استطلاعي رائع! سيسعد حدادونا كثيرًا بسماع أن عروق الحديد مفتوحة من جديد.',
+          'تفضّل 160 خبرة و95 عملة من صندوق حرس الحدود.',
+        ],
+        nextNodeId: null,
+      },
       farewell: {
         id: 'farewell',
         lines: ['رحلة آمنة على طرق الوادي!'],
@@ -1754,6 +1922,687 @@ export const AR_DIALOGUE_TREES: Record<string, DialogueTree> = {
       farewell: {
         id: 'farewell',
         lines: ['سِر بأمان أيها المستكشف.'],
+        nextNodeId: null,
+      },
+    },
+  },
+
+  'npc-doran': {
+    npcId: 'npc-doran',
+    defaultStartNodeId: 'greet_day',
+    entryRules: [
+      {
+        condition: { questId: 'quest-the-blacksmith', questStatusIn: ['ready'] },
+        nodeId: 'smith_ready',
+      },
+      { condition: { periodIn: ['evening', 'night'] }, nodeId: 'greet_evening' },
+    ],
+    nodes: {
+      greet_day: {
+        id: 'greet_day',
+        lines: [
+          'رنين السندان! هل تسمع هذا الصوت؟ الجمر الحامي وخام الحديد والفولاذ المتين هي ما يحمي المغامرين في البرية.',
+          'أحضر لي نصولك البالية متى احتجت إلى شحذها، أو جرّب أن تصنع سيفك الحديدي بنفسك!',
+        ],
+        choices: [
+          {
+            id: 'ask-smith-quest',
+            label: 'هل يمكنك تعليمي كيف أصنع سيفًا حديديًا؟',
+            nextNodeId: 'smith_offer',
+            questTag: 'accept',
+            condition: { questId: 'quest-the-blacksmith', questStatusIn: ['available'] },
+          },
+          {
+            id: 'ask-smith-progress',
+            label: 'بخصوص مهمة صناعة السيف الحديدي...',
+            nextNodeId: 'smith_progress',
+            questTag: 'progress',
+            condition: { questId: 'quest-the-blacksmith', questStatusIn: ['active'] },
+          },
+          {
+            id: 'repair-weapons',
+            label: 'أصلِح جميع أسلحتي المجهّزة وفي الحقيبة (15 عملة).',
+            nextNodeId: 'repair_done',
+            condition: { minCoins: 15 },
+            effects: [{ type: 'repairWeapons', costCoins: 15 }],
+          },
+          {
+            id: 'ask-ores',
+            label: 'أين أجد خام الحديد والفحم؟',
+            nextNodeId: 'ore_tips',
+          },
+          {
+            id: 'bye',
+            label: 'أبقِ الكور مشتعلًا يا دوران.',
+            nextNodeId: 'farewell',
+          },
+        ],
+      },
+      greet_evening: {
+        id: 'greet_evening',
+        lines: [
+          'أخمِد جمر المصهر لليلة أيها المسافر. عُد في النهار لدروس الحدادة أو إصلاح الأسلحة.',
+        ],
+        choices: [
+          {
+            id: 'ask-smith-quest',
+            label: 'هل يمكنك تعليمي كيف أصنع سيفًا حديديًا؟',
+            nextNodeId: 'smith_offer',
+            questTag: 'accept',
+            condition: { questId: 'quest-the-blacksmith', questStatusIn: ['available'] },
+          },
+          {
+            id: 'repair-weapons',
+            label: 'أصلِح جميع أسلحتي (15 عملة).',
+            nextNodeId: 'repair_done',
+            condition: { minCoins: 15 },
+            effects: [{ type: 'repairWeapons', costCoins: 15 }],
+          },
+          {
+            id: 'bye',
+            label: 'تصبح على خير يا دوران.',
+            nextNodeId: 'farewell',
+          },
+        ],
+      },
+      smith_offer: {
+        id: 'smith_offer',
+        questId: 'quest-the-blacksmith',
+        lines: [
+          'على كل مغامر حقيقي أن يصنع سلاحه الفولاذي بيديه مرة واحدة على الأقل!',
+          'استخرج 4 من خام الحديد من التلال الصخرية أو المناجم، وافتح تبويب التصنيع لصنع سيف حديدي، ثم أرِني نصلك!',
+        ],
+        choices: [
+          {
+            id: 'accept-smith',
+            label: 'سأستخرج خام الحديد وأصنع سيفًا حديديًا!',
+            nextNodeId: 'smith_accepted',
+            questTag: 'accept',
+            effects: [
+              { type: 'startQuest', questId: 'quest-the-blacksmith' },
+              {
+                type: 'notice',
+                message: 'تم قبول المهمة: المطرقة والسندان (اجمع 4 خام حديد واصنع سيفًا حديديًا).',
+              },
+            ],
+          },
+          {
+            id: 'decline-smith',
+            label: 'ليس الآن يا دوران.',
+            nextNodeId: 'greet_day',
+          },
+        ],
+      },
+      smith_accepted: {
+        id: 'smith_accepted',
+        questId: 'quest-the-blacksmith',
+        lines: [
+          'ابحث عن عروق المعدن الداكن قرب التلال الجبلية أو منجم حجر الشمس أو كهوف الكريستال. وتذكر أنك ستحتاج أيضًا إلى 2 من الفحم و2 من الخشب لوصفة السيف الحديدي!',
+        ],
+        nextNodeId: null,
+      },
+      smith_progress: {
+        id: 'smith_progress',
+        questId: 'quest-the-blacksmith',
+        lines: [
+          'اجمع 4 من خام الحديد (مع 2 فحم و2 خشب)، ثم افتح الحقيبة وانتقل إلى تبويب التصنيع لصنع سيف حديدي.',
+        ],
+        nextNodeId: 'greet_day',
+      },
+      smith_ready: {
+        id: 'smith_ready',
+        questId: 'quest-the-blacksmith',
+        lines: [
+          'هاه! انظر إلى هذا السيف الحديدي الجديد يلمع في ضوء النار! توازن متقن!',
+        ],
+        choices: [
+          {
+            id: 'complete-smith',
+            label: 'أرِ دوران سيفك الحديدي الجديد.',
+            nextNodeId: 'smith_completed',
+            questTag: 'complete',
+            effects: [{ type: 'completeQuest', questId: 'quest-the-blacksmith' }],
+          },
+          {
+            id: 'later-smith',
+            label: 'لنتحدث عن الإصلاحات أولًا.',
+            nextNodeId: 'greet_day',
+          },
+        ],
+      },
+      smith_completed: {
+        id: 'smith_completed',
+        questId: 'quest-the-blacksmith',
+        lines: [
+          'صنعة مُتقنة! خُذ 125 خبرة و65 عملة و4 من الفحم لتنتقل بعدها إلى صناعة سيف فولاذي.',
+        ],
+        nextNodeId: null,
+      },
+      repair_done: {
+        id: 'repair_done',
+        lines: [
+          'تمريرة سريعة على حجر الشحذ ومسحة زيت على الحدّ — عادت أسلحتك كالجديدة تمامًا!',
+        ],
+        nextNodeId: 'greet_day',
+      },
+      ore_tips: {
+        id: 'ore_tips',
+        lines: [
+          'تنتشر عروق خام الحديد والفحم على المنحدرات الجبلية الصخرية وداخل الكهوف مثل منجم حجر الشمس وكهف الكريستال الصدى.',
+        ],
+        nextNodeId: 'greet_day',
+      },
+      farewell: {
+        id: 'farewell',
+        lines: ['لتكن ضربتك صائبة أيها المسافر!'],
+        nextNodeId: null,
+      },
+    },
+  },
+
+  'npc-finnian': {
+    npcId: 'npc-finnian',
+    defaultStartNodeId: 'greet_day',
+    entryRules: [
+      {
+        condition: { questId: 'quest-the-hunter', questStatusIn: ['ready'] },
+        nodeId: 'hunter_ready',
+      },
+      { condition: { periodIn: ['evening', 'night'] }, nodeId: 'greet_evening' },
+    ],
+    nodes: {
+      greet_day: {
+        id: 'greet_day',
+        lines: [
+          'خطوات هادئة بين الأعشاب يا صديقي. تبقى الغزلان والماشية الراعية هادئة ما لم يُفزعها نصل أو سهم.',
+          'اصطد بحكمة — اجمع اللحم للموقد، والجلود للدباغة، والريش لصناعة السهام.',
+        ],
+        choices: [
+          {
+            id: 'ask-hunter-quest',
+            label: 'هل توجد مهام صيد حول أوكهولو؟',
+            nextNodeId: 'hunter_offer',
+            questTag: 'accept',
+            condition: { questId: 'quest-the-hunter', questStatusIn: ['available'] },
+          },
+          {
+            id: 'ask-hunter-progress',
+            label: 'بخصوص مهمة الصياد الماهر...',
+            nextNodeId: 'hunter_progress',
+            questTag: 'progress',
+            condition: { questId: 'quest-the-hunter', questStatusIn: ['active'] },
+          },
+          {
+            id: 'ask-drops',
+            label: 'ما المواد التي تسقطها الحيوانات المختلفة؟',
+            nextNodeId: 'drops_guide',
+          },
+          {
+            id: 'bye',
+            label: 'صيدًا موفقًا يا فينيان.',
+            nextNodeId: 'farewell',
+          },
+        ],
+      },
+      greet_evening: {
+        id: 'greet_evening',
+        lines: [
+          'الشفق يجعل اقتفاء الأثر صعبًا — حان الوقت لتجهيز ما اصطدناه والراحة في الداخل.',
+        ],
+        choices: [
+          {
+            id: 'ask-hunter-quest',
+            label: 'هل توجد مهام صيد حول أوكهولو؟',
+            nextNodeId: 'hunter_offer',
+            questTag: 'accept',
+            condition: { questId: 'quest-the-hunter', questStatusIn: ['available'] },
+          },
+          {
+            id: 'bye',
+            label: 'تصبح على خير يا فينيان.',
+            nextNodeId: 'farewell',
+          },
+        ],
+      },
+      hunter_offer: {
+        id: 'hunter_offer',
+        questId: 'quest-the-hunter',
+        lines: [
+          'مخزن القرية بحاجة إلى لحوم طازجة قبل أن تشتد رياح الشتاء.',
+          'اصطد 4 حيوانات في البرية، واجمع 3 قطع من اللحم النيئ من غنائمها، وأحضرها إليّ مقابل 130 خبرة و70 عملة و10 سهام!',
+        ],
+        choices: [
+          {
+            id: 'accept-hunter',
+            label: 'سأصطاد 4 حيوانات وأحضر 3 قطع لحم نيئ.',
+            nextNodeId: 'hunter_accepted',
+            questTag: 'accept',
+            effects: [
+              { type: 'startQuest', questId: 'quest-the-hunter' },
+              {
+                type: 'notice',
+                message: 'تم قبول المهمة: درب الصياد (اصطد 4 حيوانات وسلّم 3 لحم نيئ).',
+              },
+            ],
+          },
+          {
+            id: 'decline-hunter',
+            label: 'ليس الآن.',
+            nextNodeId: 'greet_day',
+          },
+        ],
+      },
+      hunter_accepted: {
+        id: 'hunter_accepted',
+        questId: 'quest-the-hunter',
+        lines: [
+          'استخدم قوسًا أو رمحًا أو سيفًا لصيد الغزلان أو الأبقار أو الأغنام أو الدجاج أو الذئاب — وتذكّر التقاط الغنائم المتوهجة بعدها!',
+        ],
+        nextNodeId: null,
+      },
+      hunter_progress: {
+        id: 'hunter_progress',
+        questId: 'quest-the-hunter',
+        lines: [
+          'اصطد 4 حيوانات برية واجمع 3 قطع لحم نيئ من غنائمها، ثم أحضرها إليّ.',
+        ],
+        nextNodeId: 'greet_day',
+      },
+      hunter_ready: {
+        id: 'hunter_ready',
+        questId: 'quest-the-hunter',
+        lines: [
+          'تصويب دقيق وأيدٍ ثابتة! هل قطع اللحم النيئ الثلاث جاهزة؟',
+        ],
+        choices: [
+          {
+            id: 'complete-hunter',
+            label: 'سلّم 3 قطع لحم نيئ إلى فينيان.',
+            nextNodeId: 'hunter_completed',
+            questTag: 'complete',
+            effects: [{ type: 'completeQuest', questId: 'quest-the-hunter' }],
+          },
+          {
+            id: 'later-hunter',
+            label: 'انتظر لحظة.',
+            nextNodeId: 'greet_day',
+          },
+        ],
+      },
+      hunter_completed: {
+        id: 'hunter_completed',
+        questId: 'quest-the-hunter',
+        lines: [
+          'أجود القطع في الوادي! تفضّل 130 خبرة و70 عملة و10 سهام صيد لجعبتك.',
+        ],
+        nextNodeId: null,
+      },
+      drops_guide: {
+        id: 'drops_guide',
+        lines: [
+          'تمنح الغزلان اللحم والجلد؛ والأبقار اللحم والجلد المدبوغ؛ والأغنام اللحم والصوف؛ والدجاج اللحم والريش؛ أما الذئاب والدببة فتمنح الفراء.',
+        ],
+        nextNodeId: 'greet_day',
+      },
+      farewell: {
+        id: 'farewell',
+        lines: ['امشِ بخفة فوق الطحالب أيها الصياد.'],
+        nextNodeId: null,
+      },
+    },
+  },
+
+  'npc-corvin': {
+    npcId: 'npc-corvin',
+    defaultStartNodeId: 'greet_day',
+    entryRules: [
+      {
+        condition: { questId: 'quest-build-shelter', questStatusIn: ['ready'] },
+        nodeId: 'shelter_ready',
+      },
+      { condition: { periodIn: ['evening', 'night'] }, nodeId: 'greet_evening' },
+    ],
+    nodes: {
+      greet_day: {
+        id: 'greet_day',
+        lines: [
+          'صباح الخير! لا شيء يضاهي رائحة خشب الصنوبر والبلوط الطازج.',
+          'باستخدام 10 من الخشب و5 من ألياف النباتات، يمكن لأي مغامر صنع سرير التخييم المتين للنوم في أي مكان في البرية.',
+        ],
+        choices: [
+          {
+            id: 'ask-shelter-quest',
+            label: 'أرني كيف أصنع سرير التخييم الخاص بي.',
+            nextNodeId: 'shelter_offer',
+            questTag: 'accept',
+            condition: { questId: 'quest-build-shelter', questStatusIn: ['available'] },
+          },
+          {
+            id: 'ask-shelter-progress',
+            label: 'بخصوص صنع سرير التخييم...',
+            nextNodeId: 'shelter_progress',
+            questTag: 'progress',
+            condition: { questId: 'quest-build-shelter', questStatusIn: ['active'] },
+          },
+          {
+            id: 'ask-harvest',
+            label: 'ما الأشجار التي يمكنني قطعها للحصول على الخشب؟',
+            nextNodeId: 'harvest_tips',
+          },
+          {
+            id: 'bye',
+            label: 'واصل قطع الخشب يا كورفين.',
+            nextNodeId: 'farewell',
+          },
+        ],
+      },
+      greet_evening: {
+        id: 'greet_evening',
+        lines: [
+          'أرتّب آخر جذوع الخشب قبل حلول الظلام. لا تنسَ صنع سرير أو إيجاد مأوى قبل منتصف الليل!',
+        ],
+        choices: [
+          {
+            id: 'ask-shelter-quest',
+            label: 'أرني كيف أصنع سرير التخييم الخاص بي.',
+            nextNodeId: 'shelter_offer',
+            questTag: 'accept',
+            condition: { questId: 'quest-build-shelter', questStatusIn: ['available'] },
+          },
+          {
+            id: 'bye',
+            label: 'تصبح على خير يا كورفين.',
+            nextNodeId: 'farewell',
+          },
+        ],
+      },
+      shelter_offer: {
+        id: 'shelter_offer',
+        questId: 'quest-build-shelter',
+        lines: [
+          'كل مستكشف يحتاج إلى سرير خاص به! اجمع 10 من الخشب من الأشجار المعلّمة أو الأغصان المتساقطة، و5 من ألياف النباتات من شجيرات القصب.',
+          'بعد ذلك افتح الحقيبة وانتقل إلى تبويب التصنيع لصنع سرير التخييم، ثم عُد لتُريني إياه!',
+        ],
+        choices: [
+          {
+            id: 'accept-shelter',
+            label: 'سأجمع الخشب وألياف النباتات وأصنع سرير التخييم.',
+            nextNodeId: 'shelter_accepted',
+            questTag: 'accept',
+            effects: [
+              { type: 'startQuest', questId: 'quest-build-shelter' },
+              {
+                type: 'notice',
+                message: 'تم قبول المهمة: ابنِ مأواك (اجمع الخشب وألياف النباتات واصنع سرير التخييم).',
+              },
+            ],
+          },
+          {
+            id: 'decline-shelter',
+            label: 'لاحقًا يا كورفين.',
+            nextNodeId: 'greet_day',
+          },
+        ],
+      },
+      shelter_accepted: {
+        id: 'shelter_accepted',
+        questId: 'quest-build-shelter',
+        lines: [
+          'ستحتفظ بسرير التخييم بعد صنعه — فقط استخدمه من حقيبتك متى ما حلّ المساء!',
+        ],
+        nextNodeId: null,
+      },
+      shelter_progress: {
+        id: 'shelter_progress',
+        questId: 'quest-build-shelter',
+        lines: [
+          'اجمع 10 من الخشب و5 من ألياف النباتات، ثم اصنع سرير التخييم من تبويب التصنيع.',
+        ],
+        nextNodeId: 'greet_day',
+      },
+      shelter_ready: {
+        id: 'shelter_ready',
+        questId: 'quest-build-shelter',
+        lines: [
+          'انظر إلى هذا التماسك المتقن — عشرة ألواح من الخشب وألياف منسوجة كأنك نجار محترف!',
+        ],
+        choices: [
+          {
+            id: 'complete-shelter',
+            label: 'أنهِ درس صناعة سرير التخييم.',
+            nextNodeId: 'shelter_completed',
+            questTag: 'complete',
+            effects: [{ type: 'completeQuest', questId: 'quest-build-shelter' }],
+          },
+        ],
+      },
+      shelter_completed: {
+        id: 'shelter_completed',
+        questId: 'quest-build-shelter',
+        lines: [
+          'أحسنت صنعًا! تفضّل 95 خبرة و40 عملة ورغيف فرن حجر الشمس الدافئ.',
+        ],
+        nextNodeId: null,
+      },
+      harvest_tips: {
+        id: 'harvest_tips',
+        lines: [
+          'ابحث عن أشجار الخشب المعلّمة وجذوع البلوط المتساقطة وشجيرات الألياف الخضراء حول فسحات الغابة والدروب. اقترب واضغط زر التفاعل للجمع!',
+        ],
+        nextNodeId: 'greet_day',
+      },
+      farewell: {
+        id: 'farewell',
+        lines: ['لتكن ضربات فأسك متقنة أيها المسافر!'],
+        nextNodeId: null,
+      },
+    },
+  },
+
+  'npc-thorne': {
+    npcId: 'npc-thorne',
+    defaultStartNodeId: 'greet_day',
+    entryRules: [
+      {
+        condition: { questId: 'quest-first-night', questStatusIn: ['ready'] },
+        nodeId: 'night_ready',
+      },
+      {
+        condition: { questId: 'quest-the-village', questStatusIn: ['ready'] },
+        nodeId: 'settlements_ready',
+      },
+      { condition: { periodIn: ['evening', 'night'] }, nodeId: 'greet_evening' },
+    ],
+    nodes: {
+      greet_day: {
+        id: 'greet_day',
+        lines: [
+          'باركت السماء خطاك أيها المستكشف الشاب! سبع مستوطنات تضيء الآن أرجاء هذا الوادي العظيم.',
+          'من باينهافن في الغابات الغربية إلى غراندكروس في الشرق، كل طريق يدعوك للاكتشاف.',
+        ],
+        choices: [
+          {
+            id: 'ask-night-quest',
+            label: 'هل لديك نصيحة لقضاء ليلتي الأولى بأمان؟',
+            nextNodeId: 'night_offer',
+            questTag: 'accept',
+            condition: { questId: 'quest-first-night', questStatusIn: ['available'] },
+          },
+          {
+            id: 'ask-settlements-quest',
+            label: 'أخبرني عن استكشاف القرى الأخرى.',
+            nextNodeId: 'settlements_offer',
+            questTag: 'accept',
+            condition: { questId: 'quest-the-village', questStatusIn: ['available'] },
+          },
+          {
+            id: 'ask-realm',
+            label: 'اذكر لي أسماء جميع المستوطنات في هذه الأراضي.',
+            nextNodeId: 'realm_lore',
+          },
+          {
+            id: 'bye',
+            label: 'دمت بخير أيها الشيخ ثورن.',
+            nextNodeId: 'farewell',
+          },
+        ],
+      },
+      greet_evening: {
+        id: 'greet_evening',
+        lines: [
+          'تزداد السماء عمقًا وهدوءًا. سيعود القرويون قريبًا إلى منازلهم للنوم حتى الصباح.',
+        ],
+        choices: [
+          {
+            id: 'ask-night-quest',
+            label: 'كيف أقضي ليلتي الأولى بأمان؟',
+            nextNodeId: 'night_offer',
+            questTag: 'accept',
+            condition: { questId: 'quest-first-night', questStatusIn: ['available'] },
+          },
+          {
+            id: 'ask-settlements-quest',
+            label: 'أخبرني عن القرى الأخرى.',
+            nextNodeId: 'settlements_offer',
+            questTag: 'accept',
+            condition: { questId: 'quest-the-village', questStatusIn: ['available'] },
+          },
+          {
+            id: 'bye',
+            label: 'ليلة هانئة أيها الشيخ ثورن.',
+            nextNodeId: 'farewell',
+          },
+        ],
+      },
+      night_offer: {
+        id: 'night_offer',
+        questId: 'quest-first-night',
+        lines: [
+          'عندما يحل المساء، اقترب من أي سرير في منازل القرية أو معسكرات الاستكشاف أو سرير التخييم الذي صنعته واضغط «نوم».',
+          'نم حتى الصباح لتستعيد قوتك، ثم تحدّث معي عند الفجر!',
+        ],
+        choices: [
+          {
+            id: 'accept-night',
+            label: 'سأرتاح في سرير الليلة وأحيّيك عند الفجر.',
+            nextNodeId: 'night_accepted',
+            questTag: 'accept',
+            effects: [
+              { type: 'startQuest', questId: 'quest-first-night' },
+              {
+                type: 'notice',
+                message: 'تم قبول المهمة: عبر الليل الهادئ (نم في سرير حتى الصباح).',
+              },
+            ],
+          },
+          {
+            id: 'decline-night',
+            label: 'ربما لاحقًا أيها الشيخ.',
+            nextNodeId: 'greet_day',
+          },
+        ],
+      },
+      night_accepted: {
+        id: 'night_accepted',
+        questId: 'quest-first-night',
+        lines: [
+          'أحلام سعيدة تحت النجوم أو تحت سقف كوخ دافئ!',
+        ],
+        nextNodeId: null,
+      },
+      night_ready: {
+        id: 'night_ready',
+        questId: 'quest-first-night',
+        lines: [
+          'صباح الخير! تبدو مرتاحًا ومستعدًا للعالم الواسع أمامك!',
+        ],
+        choices: [
+          {
+            id: 'complete-night',
+            label: 'حيِّ الشيخ ثورن بعد ليلة هانئة.',
+            nextNodeId: 'night_completed',
+            questTag: 'complete',
+            effects: [{ type: 'completeQuest', questId: 'quest-first-night' }],
+          },
+        ],
+      },
+      night_completed: {
+        id: 'night_completed',
+        questId: 'quest-first-night',
+        lines: [
+          'المسافر المرتاح يرى ضعف المسافة! خُذ 100 خبرة و50 عملة.',
+        ],
+        nextNodeId: null,
+      },
+      settlements_offer: {
+        id: 'settlements_offer',
+        questId: 'quest-the-village',
+        lines: [
+          'يمتد وادينا أميالًا في كل اتجاه الآن! اكتشف ما لا يقل عن 8 قرى إقليمية أو مناجم أو معسكرات مهجورة وأخبرني بما رأيت.',
+        ],
+        choices: [
+          {
+            id: 'accept-settlements',
+            label: 'سأستكشف القرى البعيدة والآثار.',
+            nextNodeId: 'settlements_accepted',
+            questTag: 'accept',
+            effects: [
+              { type: 'startQuest', questId: 'quest-the-village' },
+              {
+                type: 'notice',
+                message: 'تم قبول المهمة: المستوطنات السبع (اكتشف 8 مواقع أو قرى).',
+              },
+            ],
+          },
+          {
+            id: 'decline-settlements',
+            label: 'ليس بعد.',
+            nextNodeId: 'greet_day',
+          },
+        ],
+      },
+      settlements_accepted: {
+        id: 'settlements_accepted',
+        questId: 'quest-the-village',
+        lines: [
+          'افتح خريطة العالم في أي وقت لتتبع كل مستوطنة جديدة تصل إليها!',
+        ],
+        nextNodeId: null,
+      },
+      settlements_ready: {
+        id: 'settlements_ready',
+        questId: 'quest-the-village',
+        lines: [
+          'لقد عبرت خطاك قرى بعيدة ومعسكرات وآثارًا! دعنا ندوّن سجل رحلتك!',
+        ],
+        choices: [
+          {
+            id: 'complete-settlements',
+            label: 'شارك اكتشافاتك عبر المستوطنات السبع.',
+            nextNodeId: 'settlements_completed',
+            questTag: 'complete',
+            effects: [{ type: 'completeQuest', questId: 'quest-the-village' }],
+          },
+        ],
+      },
+      settlements_completed: {
+        id: 'settlements_completed',
+        questId: 'quest-the-village',
+        lines: [
+          'أنت حقًا أسطورة الوادي! تفضّل 150 خبرة و90 عملة.',
+        ],
+        nextNodeId: null,
+      },
+      realm_lore: {
+        id: 'realm_lore',
+        lines: [
+          'تقع أوكهولو في القلب؛ وتؤوي باينهافن الحطّابين غربًا؛ وتزدهر غرينفيلدز بالزراعة جنوبًا؛ وتستخرج كراغووتش الحديد شمالًا؛ وتصطاد ريفرفورد من النهر؛ وترعى ويندمير في السهول الشرقية؛ وتتاجر غراندكروس قرب الكثبان.',
+        ],
+        nextNodeId: 'greet_day',
+      },
+      farewell: {
+        id: 'farewell',
+        lines: ['سِر بحكمة أيها المسافر.'],
         nextNodeId: null,
       },
     },

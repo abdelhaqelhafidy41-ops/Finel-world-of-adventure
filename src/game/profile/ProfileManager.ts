@@ -1,3 +1,4 @@
+import type { CloudAccountInfo } from '../../../shared/accountTypes';
 import type { PlayerReportReason } from '../../../shared/multiplayerProtocol';
 import {
   computeLevelAndXp,
@@ -825,6 +826,54 @@ class ProfileManagerImpl {
     if (!res.ok || !data?.ok) {
       throw new Error(data?.message || data?.error || 'Could not submit report.');
     }
+  }
+
+  public syncFromCloudAccount(account: CloudAccountInfo): OwnPlayerProfile {
+    this.ensureInitialized();
+    const mapped: OwnPlayerProfile = {
+      publicProfileId: account.publicProfileId,
+      displayName: account.displayName,
+      playerTag: account.playerTag,
+      avatar: migrateAvatarConfig(account.avatar).avatar,
+      bio: account.bio,
+      country: account.country,
+      favoriteGameMode: account.favoriteGameMode,
+      presenceStatus: 'online',
+      manualStatus: 'online',
+      isOnlineVisible: true,
+      privacy: {
+        ...DEFAULT_PLAYER_PRIVACY,
+        ...account.privacy,
+      },
+      stats: {
+        ...createEmptyProfileStats(),
+        ...account.stats,
+      },
+      createdAt: account.createdAt,
+      lastActiveAt: account.updatedAt,
+      tagUpdatedAt: account.createdAt,
+      friendsCount: this.friends.length,
+      pendingIncomingRequestsCount: this.incomingRequests.length,
+      pendingOutgoingRequestsCount: this.outgoingRequests.length,
+      blockedCount: this.blockedPlayers.length,
+    };
+    this.profile = mapped;
+    writeLocalProfile(mapped);
+    saveMultiplayerName(mapped.displayName);
+    this.syncShowPlayerNameSetting(mapped.privacy.showPlayerName);
+    this.notify();
+    return mapped;
+  }
+
+  public clearLocalProfileCache(): void {
+    this.ensureInitialized();
+    this.profile = null;
+    this.friends = [];
+    this.incomingRequests = [];
+    this.outgoingRequests = [];
+    this.blockedPlayers = [];
+    writeLocalProfile(null);
+    this.notify();
   }
 }
 

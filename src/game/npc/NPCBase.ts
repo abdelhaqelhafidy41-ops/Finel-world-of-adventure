@@ -1366,6 +1366,9 @@ export abstract class NPCBase {
     const persona = getNpcPersona(this.id, this.role, lang);
     const isAr = lang === 'ar';
 
+    const resolvedName = arMeta?.name ?? (isAr ? (this.config.nameAr ?? this.name) : this.name);
+    const resolvedTitle =
+      arMeta?.title ?? (isAr ? (this.config.titleAr ?? ROLE_LABELS.ar[this.role]) : this.title);
     const resolvedLocation = isAr
       ? (this.config.locationAr ?? persona.location)
       : (this.config.location ?? persona.location);
@@ -1375,26 +1378,55 @@ export abstract class NPCBase {
     const resolvedPrompts = isAr
       ? (this.config.suggestedPromptsAr ?? persona.suggestedPrompts)
       : (this.config.suggestedPrompts ?? persona.suggestedPrompts);
-    const resolvedGreetings = isAr
-      ? (this.config.greetingsAr ?? this.config.greetings)
-      : this.config.greetings;
+
+    const defaultArRoutineByPeriod: Record<NpcRoutinePeriod, string> = {
+      morning: `يعمل في ${resolvedLocation}`,
+      midday: `ينشط في ${resolvedLocation}`,
+      evening: `يستريح قرب ${resolvedLocation}`,
+      night: 'يستريح في منزله',
+    };
+    const resolvedRoutineLabel = isAr
+      ? (arMeta?.routineLabels[period] ??
+          this.config.routineLabelsAr?.[period] ??
+          defaultArRoutineByPeriod[period])
+      : slot.activityLabel;
+
+    const resolvedGreeting = isAr
+      ? (this.config.greetingsAr?.[period] ??
+          this.config.greetingsAr?.morning ??
+          `مرحبًا أيها المسافر! أنا ${resolvedName}، ${resolvedTitle} في ${resolvedLocation}.`)
+      : (this.config.greetings[period] ?? this.config.greetings.morning);
+
     const resolvedChoices = isAr
-      ? (this.config.choicesAr ?? this.config.choices)
+      ? (this.config.choicesAr && this.config.choicesAr.length > 0
+          ? this.config.choicesAr
+          : [
+              {
+                id: 'about',
+                label: 'أخبرني عن عملك هنا.',
+                reply: `بصفتي ${resolvedTitle}، أعتني بعملي يوميًا في ${resolvedLocation}.`,
+                nextState: 'continue' as const,
+              },
+              {
+                id: 'bye',
+                label: 'شكرًا لك، وداعًا.',
+                reply: 'رافقتك السلامة في رحلتك أيها المغامر.',
+                nextState: 'close' as const,
+              },
+            ])
       : this.config.choices;
 
     return {
       npcId: this.id,
-      name: arMeta?.name ?? (isAr ? (this.config.nameAr ?? this.name) : this.name),
+      name: resolvedName,
       role: this.role,
-      title: arMeta?.title ?? (isAr ? (this.config.titleAr ?? this.title) : this.title),
+      title: resolvedTitle,
       location: resolvedLocation,
       personality: resolvedPersonality,
       suggestedPrompts: resolvedPrompts,
-      routineLabel:
-        arMeta?.routineLabels[period] ??
-        (isAr ? (this.config.routineLabelsAr?.[period] ?? slot.activityLabel) : slot.activityLabel),
+      routineLabel: resolvedRoutineLabel,
       routinePeriod: period,
-      fallbackGreeting: resolvedGreetings[period] ?? resolvedGreetings.morning,
+      fallbackGreeting: resolvedGreeting,
       fallbackChoices: resolvedChoices,
     };
   }

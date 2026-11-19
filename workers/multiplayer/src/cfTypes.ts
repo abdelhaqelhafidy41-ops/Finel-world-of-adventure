@@ -47,16 +47,45 @@ export interface CfWebSocketPair {
   1: CfWebSocket;
 }
 
+export interface CfD1Result<T = Record<string, unknown>> {
+  results: T[];
+  success: boolean;
+  meta?: {
+    changes?: number;
+    duration?: number;
+    last_row_id?: number;
+  };
+}
+
+export interface CfD1PreparedStatement {
+  bind(...values: unknown[]): CfD1PreparedStatement;
+  first<T = Record<string, unknown>>(colName?: string): Promise<T | null>;
+  run<T = Record<string, unknown>>(): Promise<CfD1Result<T>>;
+  all<T = Record<string, unknown>>(): Promise<CfD1Result<T>>;
+}
+
+export interface CfD1Database {
+  prepare(query: string): CfD1PreparedStatement;
+  batch<T = Record<string, unknown>>(
+    statements: CfD1PreparedStatement[],
+  ): Promise<CfD1Result<T>[]>;
+  exec?(query: string): Promise<unknown>;
+}
+
 export interface CfEnv {
   MULTIPLAYER_ROOMS: CfDurableObjectNamespace;
   ROOM_DIRECTORY: CfDurableObjectNamespace;
   PLAYER_PROFILES: CfDurableObjectNamespace;
+  DB?: CfD1Database;
   ENVIRONMENT?: string;
   ALLOWED_ORIGINS?: string;
   MAX_ROOMS_PER_LIST?: string;
   SESSION_HMAC_SECRET?: string;
   HOST_DISCONNECT_GRACE_MS?: string;
   PLAYER_RECONNECT_GRACE_MS?: string;
+  RESET_EMAIL_API_URL?: string;
+  RESET_EMAIL_API_KEY?: string;
+  RESET_EMAIL_FROM?: string;
 }
 
 export function createCfWebSocketPair(): [CfWebSocket, CfWebSocket] {

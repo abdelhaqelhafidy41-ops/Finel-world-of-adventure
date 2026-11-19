@@ -85,6 +85,35 @@ export class DialogueEngine {
     return this.language;
   }
 
+  public refreshActiveDialogue(profile: DialogueNpcProfile): DialogueSnapshot | null {
+    if (!this.isOpen() || !this.currentNode) return null;
+    const prevNodeId = this.currentNode.id;
+    const prevLineIndex = this.lineIndex;
+    this.activeProfile = profile;
+
+    const buildStandardTree = (): DialogueTree =>
+      getDialogueTree(profile.npcId, this.language) ??
+      this.createFallbackTree(profile);
+
+    const resolveWithSideQuest = (): DialogueTree =>
+      this.sideQuestDialogueResolver?.(profile.npcId, this.language, buildStandardTree) ??
+      buildStandardTree();
+
+    const tree =
+      this.storyDialogueResolver?.(profile.npcId, this.language, resolveWithSideQuest) ??
+      resolveWithSideQuest();
+
+    this.activeTree = tree;
+    const matchedNode =
+      tree.nodes[prevNodeId] ??
+      tree.nodes[this.resolveEntryNodeId(tree, profile)] ??
+      tree.nodes[tree.defaultStartNodeId] ??
+      Object.values(tree.nodes)[0];
+    this.currentNode = matchedNode;
+    this.lineIndex = Math.min(prevLineIndex, Math.max(0, matchedNode.lines.length - 1));
+    return this.getSnapshot();
+  }
+
   public isOpen(): boolean {
     return this.activeProfile !== null && this.currentNode !== null;
   }

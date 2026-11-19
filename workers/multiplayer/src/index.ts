@@ -4,6 +4,11 @@ import {
 } from '../../../shared/multiplayerProtocol';
 import { isValidPublicPlayerId } from '../../../shared/profileTypes';
 import type { CfEnv, CfExecutionContext } from './cfTypes';
+import {
+  handleAccountRoute,
+  isAccountOrCloudSavePath,
+  resolveAccountSessionIdentity,
+} from './accountHandler';
 import { MultiplayerRoomDO } from './MultiplayerRoomDO';
 import { PlayerProfileDO } from './PlayerProfileDO';
 import { IpRateLimiter } from './rateLimiter';
@@ -79,7 +84,7 @@ function getCorsHeaders(request: Request, env: CfEnv): Record<string, string> {
 
   return {
     'Access-Control-Allow-Origin': allowOrigin,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Max-Age': '86400',
     'X-Content-Type-Options': 'nosniff',
@@ -140,6 +145,10 @@ async function resolveVerifiedProfileIdentity(
   body: Record<string, unknown> | null,
   env: CfEnv,
 ): Promise<Record<string, unknown> | null> {
+  // Prefer authenticated D1 cloud account session if present
+  const d1Identity = await resolveAccountSessionIdentity(request, env);
+  if (d1Identity) return d1Identity;
+
   if (!env.PLAYER_PROFILES) return null;
   const authHeader = request.headers.get('Authorization') ?? '';
   const bearerMatch = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
@@ -216,6 +225,18 @@ export default {
 
     try {
     const clientIp = getClientIp(request);
+
+    // Online Account, Auth & Cloud Save API (Cloudflare D1)
+    if (isAccountOrCloudSavePath(url.pathname)) {
+      if (!isOriginAllowed(request, env)) {
+        return withCors(
+          Response.json({ ok: false, error: 'ORIGIN_NOT_ALLOWED' }, { status: 403 }),
+          cors,
+        );
+      }
+      const accountRes = await handleAccountRoute(request, env, clientIp);
+      return withCors(accountRes, cors);
+    }
 
     // WebSocket endpoint forwarding directly into the room Durable Object
     if (url.pathname === '/api/multiplayer/ws') {

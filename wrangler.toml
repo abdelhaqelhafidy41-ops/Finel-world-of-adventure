@@ -27,6 +27,12 @@ class_name = "RoomDirectoryDO"
 name = "PLAYER_PROFILES"
 class_name = "PlayerProfileDO"
 
+[[d1_databases]]
+binding = "DB"
+database_name = "world-of-adventure-accounts"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+migrations_dir = "workers/multiplayer/migrations"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MultiplayerRoomDO", "RoomDirectoryDO"]
@@ -113,3 +119,9 @@ class_name = "RoomDirectoryDO"
 [[env.production.durable_objects.bindings]]
 name = "PLAYER_PROFILES"
 class_name = "PlayerProfileDO"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "world-of-adventure-accounts"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+migrations_dir = "workers/multiplayer/migrations"
