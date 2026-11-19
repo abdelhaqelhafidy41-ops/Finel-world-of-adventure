@@ -257,7 +257,8 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
       }
 
       if (transport) {
-        transport.useLanMode(hostRes.baseUrl);
+        const localLoopbackUrl = `http://127.0.0.1:${hostRes.port}`;
+        transport.useLanMode(localLoopbackUrl);
       }
 
       const createdRoom = await service.createRoom({

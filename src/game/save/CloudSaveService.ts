@@ -7,8 +7,7 @@ import {
 } from '../../../shared/accountTypes';
 import { createEmptyProfileStats } from '../../../shared/profileTypes';
 import { loadSavedLanguage, saveLanguage } from '../i18n/translations';
-import { resolveMultiplayerServerUrl } from '../multiplayer/multiplayerConfig';
-import { AuthService } from '../profile/AuthService';
+import { AuthService, resolveAccountApiBaseUrl } from '../profile/AuthService';
 import { ProfileManager } from '../profile/ProfileManager';
 import { GameSettingsStore } from '../settings/GameSettingsStore';
 import { LoadManager } from './LoadManager';
@@ -160,7 +159,7 @@ class CloudSaveServiceImpl {
   }
 
   private isReadyForNetwork(): { ok: true; baseUrl: string } | { ok: false } {
-    const baseUrl = resolveMultiplayerServerUrl();
+    const baseUrl = resolveAccountApiBaseUrl();
     if (!baseUrl || !AuthService.isSignedInCloudAccount()) {
       return { ok: false };
     }

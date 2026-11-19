@@ -99,13 +99,20 @@ export function toWebSocketUrl(
     return null;
   }
 
-  const isLocalHost =
-    targetUrl.hostname === 'localhost' ||
-    targetUrl.hostname === '127.0.0.1' ||
-    targetUrl.hostname === '[::1]';
+  const host = targetUrl.hostname.toLowerCase();
+  const isLocalOrLanHost =
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '[::1]' ||
+    host.endsWith('.local') ||
+    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    /^100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    /^169\.254\.\d{1,3}\.\d{1,3}$/.test(host);
   if (
     targetUrl.protocol === 'ws:' &&
-    !isLocalHost &&
+    !isLocalOrLanHost &&
     typeof window !== 'undefined' &&
     window.location?.protocol === 'https:'
   ) {

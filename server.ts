@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express, { type Request, type Response } from 'express';
+import fs from 'node:fs';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import {
   GoogleGenAI,
@@ -9,6 +11,11 @@ import {
   ThinkingLevel,
   type Content,
 } from '@google/genai';
+import {
+  handleAccountRoute,
+  isAccountOrCloudSavePath,
+} from './workers/multiplayer/src/accountHandler';
+import type { CfD1Database, CfD1PreparedStatement, CfD1Result, CfEnv } from './workers/multiplayer/src/cfTypes';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -265,6 +272,100 @@ async function startServer(): Promise<void> {
         available: status !== 503,
         reason: status === 429 ? 'rate_limited' : 'api_error',
         message: 'Dynamic dialogue is temporarily unavailable.',
+      });
+    }
+  });
+
+  // Local dev / AI Studio Preview account & cloud-save API (shares exact Cloudflare Worker handler + SQLite schema)
+  let localAccountDb: CfD1Database | null = null;
+  try {
+    const dataDir = path.resolve(__dirname, '.data');
+    fs.mkdirSync(dataDir, { recursive: true });
+    const sqlite = new DatabaseSync(path.join(dataDir, 'accounts.sqlite'));
+    const migrationPath = path.resolve(
+      __dirname,
+      'workers/multiplayer/migrations/0001_accounts_cloud_save.sql',
+    );
+    if (fs.existsSync(migrationPath)) {
+      sqlite.exec(fs.readFileSync(migrationPath, 'utf8'));
+    }
+    const makeLocalStmt = (sql: string, params: unknown[] = []): CfD1PreparedStatement => ({
+      bind(...values: unknown[]) {
+        return makeLocalStmt(sql, values);
+      },
+      async first<T = Record<string, unknown>>(colName?: string): Promise<T | null> {
+        const row = sqlite.prepare(sql).get(...(params as never[])) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        if (colName) return (row[colName] ?? null) as T | null;
+        return row as T;
+      },
+      async all<T = Record<string, unknown>>(): Promise<CfD1Result<T>> {
+        const rows = sqlite.prepare(sql).all(...(params as never[])) as T[];
+        return { results: rows, success: true };
+      },
+      async run<T = Record<string, unknown>>(): Promise<CfD1Result<T>> {
+        sqlite.prepare(sql).run(...(params as never[]));
+        return { results: [], success: true };
+      },
+    });
+    localAccountDb = {
+      prepare(sql: string) {
+        return makeLocalStmt(sql, []);
+      },
+      async batch<T = Record<string, unknown>>(statements: CfD1PreparedStatement[]) {
+        const out: CfD1Result<T>[] = [];
+        for (const s of statements) {
+          out.push(await s.run<T>());
+        }
+        return out;
+      },
+    };
+  } catch (err) {
+    console.warn('[Server] Local SQLite account DB unavailable:', err instanceof Error ? err.message : err);
+  }
+
+  app.use(async (req: Request, res: Response, next) => {
+    if (!isAccountOrCloudSavePath(req.path)) {
+      next();
+      return;
+    }
+    try {
+      const origin = `${req.protocol}://${req.get('host') || `localhost:${PORT}`}`;
+      const fullUrl = new URL(req.originalUrl, origin).toString();
+      const headers = new Headers();
+      for (const [k, v] of Object.entries(req.headers)) {
+        if (typeof v === 'string') headers.set(k, v);
+        else if (Array.isArray(v)) headers.set(k, v.join(', '));
+      }
+      const hasBody = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS';
+      const bodyStr = hasBody && req.body && Object.keys(req.body).length > 0
+        ? JSON.stringify(req.body)
+        : hasBody
+          ? '{}'
+          : undefined;
+      const webReq = new globalThis.Request(fullUrl, {
+        method: req.method,
+        headers,
+        ...(bodyStr !== undefined ? { body: bodyStr } : {}),
+      });
+      const workerEnv = {
+        DB: localAccountDb ?? undefined,
+        ENVIRONMENT: process.env.NODE_ENV === 'production' ? 'production' : 'development',
+      } as unknown as CfEnv;
+      const clientIp = req.ip || '127.0.0.1';
+      const workerRes = await handleAccountRoute(webReq, workerEnv, clientIp);
+      res.status(workerRes.status);
+      workerRes.headers.forEach((value, key) => {
+        res.setHeader(key, value);
+      });
+      const text = await workerRes.text();
+      res.send(text);
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        success: false,
+        error: 'INTERNAL_SERVER_ERROR',
+        message: 'Account server encountered an unexpected error.',
       });
     }
   });

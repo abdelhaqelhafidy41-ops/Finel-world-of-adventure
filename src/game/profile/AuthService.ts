@@ -11,6 +11,24 @@ import type {
 } from '../../../shared/profileTypes';
 import { resolveMultiplayerServerUrl } from '../multiplayer/multiplayerConfig';
 
+/**
+ * Resolves the base URL for Account & Cloud Save API calls.
+ * - Uses `VITE_MULTIPLAYER_URL` (Cloudflare Worker) whenever configured (production, GitHub Pages, Android, Windows).
+ * - In local dev / AI Studio Preview where `VITE_MULTIPLAYER_URL` is unset, falls back to the active dev server origin.
+ */
+export function resolveAccountApiBaseUrl(): string | null {
+  const configured = resolveMultiplayerServerUrl();
+  if (configured) return configured.replace(/\/+$/, '');
+  if (
+    typeof window !== 'undefined' &&
+    typeof window.location?.origin === 'string' &&
+    /^https?:\/\//i.test(window.location.origin)
+  ) {
+    return window.location.origin.replace(/\/+$/, '');
+  }
+  return null;
+}
+
 const AUTH_SESSION_STORAGE_KEY = 'woa_auth_session_v1';
 const CLOUD_ACCOUNT_CACHE_KEY = 'woa_cloud_account_cache_v1';
 const FIRST_LAUNCH_PROMPT_SEEN_KEY = 'woa_account_prompt_seen_v1';
@@ -450,7 +468,7 @@ class AuthServiceImpl {
   }
 
   private requireServerBaseUrl(): string {
-    const baseUrl = resolveMultiplayerServerUrl();
+    const baseUrl = resolveAccountApiBaseUrl();
     if (!baseUrl) {
       throw new AuthServiceError(
         'SERVER_NOT_CONFIGURED',
@@ -458,7 +476,7 @@ class AuthServiceImpl {
         null,
       );
     }
-    return baseUrl.replace(/\/+$/, '');
+    return baseUrl;
   }
 
   public async registerAccount(input: {
@@ -573,7 +591,7 @@ class AuthServiceImpl {
   public async refreshCloudSession(): Promise<CloudAccountInfo | null> {
     this.ensureLoaded();
     const sess = this.cachedSession;
-    const baseUrl = resolveMultiplayerServerUrl();
+    const baseUrl = resolveAccountApiBaseUrl();
     if (!sess?.isCloudAccount || !sess.refreshToken || !baseUrl) return null;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return null;
 
@@ -602,7 +620,7 @@ class AuthServiceImpl {
 
   public async fetchAccountMe(): Promise<AuthResponsePayload | null> {
     this.ensureLoaded();
-    const baseUrl = resolveMultiplayerServerUrl();
+    const baseUrl = resolveAccountApiBaseUrl();
     if (!this.isSignedInCloudAccount() || !baseUrl) return null;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return null;
 
@@ -850,7 +868,7 @@ class AuthServiceImpl {
   }
 
   public async logoutAccount(): Promise<void> {
-    const baseUrl = resolveMultiplayerServerUrl();
+    const baseUrl = resolveAccountApiBaseUrl();
     const headers = this.getBearerHeaders();
     if (baseUrl && headers.Authorization) {
       try {
