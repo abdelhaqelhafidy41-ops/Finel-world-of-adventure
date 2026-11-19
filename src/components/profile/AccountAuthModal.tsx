@@ -4,6 +4,8 @@ import {
   Cloud,
   CloudDownload,
   CloudUpload,
+  Eye,
+  EyeOff,
   KeyRound,
   Lock,
   LogIn,
@@ -16,7 +18,7 @@ import {
 } from 'lucide-react';
 import type { AuthResponsePayload } from '../../../shared/accountTypes';
 import type { Language } from '../../game/i18n/translations';
-import { AuthService } from '../../game/profile/AuthService';
+import { AuthService, formatAuthError } from '../../game/profile/AuthService';
 import { ProfileManager } from '../../game/profile/ProfileManager';
 import { CloudSaveService } from '../../game/save/CloudSaveService';
 
@@ -53,10 +55,26 @@ export const AccountAuthModal: React.FC<AccountAuthModalProps> = ({
   const [confirmPassword, setConfirmPassword] = useState('');
   const [resetCode, setResetCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [showRegisterPassword, setShowRegisterPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [showResetNewPassword, setShowResetNewPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pendingAuth, setPendingAuth] = useState<AuthResponsePayload | null>(null);
+
+  const switchView = (nextView: AccountAuthView) => {
+    setError(null);
+    setShowLoginPassword(false);
+    setShowRegisterPassword(false);
+    setShowConfirmPassword(false);
+    setShowResetNewPassword(false);
+    setView(nextView);
+  };
+
+  const showPasswordLabel = isAr ? 'إظهار كلمة المرور' : 'Show password';
+  const hidePasswordLabel = isAr ? 'إخفاء كلمة المرور' : 'Hide password';
 
   const finalizeCloudLogin = async (
     authRes: AuthResponsePayload,
@@ -125,13 +143,7 @@ export const AccountAuthModal: React.FC<AccountAuthModalProps> = ({
       });
       await finalizeCloudLogin(res, 'auto');
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : isAr
-            ? 'فشل تسجيل الدخول.'
-            : 'Login failed.',
-      );
+      setError(formatAuthError(err, lang, 'login'));
     } finally {
       setBusy(false);
     }
@@ -175,13 +187,7 @@ export const AccountAuthModal: React.FC<AccountAuthModalProps> = ({
       );
       onClose();
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : isAr
-            ? 'تعذر إنشاء الحساب.'
-            : 'Account creation failed.',
-      );
+      setError(formatAuthError(err, lang, 'register'));
     } finally {
       setBusy(false);
     }
@@ -202,13 +208,7 @@ export const AccountAuthModal: React.FC<AccountAuthModalProps> = ({
       );
       setView('reset');
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : isAr
-            ? 'تعذر إرسال رمز الاستعادة.'
-            : 'Failed to request password reset.',
-      );
+      setError(formatAuthError(err, lang, 'forgot'));
     } finally {
       setBusy(false);
     }
@@ -232,13 +232,7 @@ export const AccountAuthModal: React.FC<AccountAuthModalProps> = ({
       setResetCode('');
       setView('login');
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : isAr
-            ? 'تعذر إعادة تعيين كلمة المرور.'
-            : 'Password reset failed.',
-      );
+      setError(formatAuthError(err, lang, 'reset'));
     } finally {
       setBusy(false);
     }
@@ -390,15 +384,30 @@ export const AccountAuthModal: React.FC<AccountAuthModalProps> = ({
                   {isAr ? 'كلمة المرور' : 'Password'}
                 </label>
                 <div className="relative">
-                  <Lock className="w-4 h-4 text-[#7d9785] absolute top-3.5 start-3" />
+                  <Lock className="w-4 h-4 text-[#7d9785] absolute top-3.5 start-3 pointer-events-none" />
                   <input
-                    type="password"
+                    type={showLoginPassword ? 'text' : 'password'}
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full min-h-[44px] ps-9 pe-3 rounded-xl bg-[#0a140f] border border-[#2f493b] focus:border-[#7fe094] focus:outline-none text-sm text-white"
+                    data-testid="login-password-input"
+                    className="w-full min-h-[44px] ps-9 pe-11 rounded-xl bg-[#0a140f] border border-[#2f493b] focus:border-[#7fe094] focus:outline-none text-sm text-white"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowLoginPassword((prev) => !prev)}
+                    aria-label={showLoginPassword ? hidePasswordLabel : showPasswordLabel}
+                    aria-pressed={showLoginPassword}
+                    data-testid="login-password-toggle"
+                    className="absolute inset-y-0 end-1 my-auto w-9 h-9 rounded-lg flex items-center justify-center text-[#9db1a1] hover:text-white active:bg-white/10 transition-colors cursor-pointer touch-manipulation"
+                  >
+                    {showLoginPassword ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
                 </div>
               </div>
 
@@ -419,20 +428,14 @@ export const AccountAuthModal: React.FC<AccountAuthModalProps> = ({
               <div className="flex items-center justify-between text-xs pt-1">
                 <button
                   type="button"
-                  onClick={() => {
-                    setError(null);
-                    setView('forgot');
-                  }}
+                  onClick={() => switchView('forgot')}
                   className="text-[#e5a93c] hover:underline cursor-pointer"
                 >
                   {isAr ? 'نسيت كلمة المرور؟' : 'Forgot Password?'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setError(null);
-                    setView('register');
-                  }}
+                  onClick={() => switchView('register')}
                   className="text-[#7fe094] hover:underline cursor-pointer"
                 >
                   {isAr ? 'إنشاء حساب جديد' : 'Create Account'}
@@ -485,16 +488,31 @@ export const AccountAuthModal: React.FC<AccountAuthModalProps> = ({
                   {isAr ? 'كلمة المرور (8 أحرف على الأقل)' : 'Password (min 8 chars)'}
                 </label>
                 <div className="relative">
-                  <Lock className="w-4 h-4 text-[#7d9785] absolute top-3.5 start-3" />
+                  <Lock className="w-4 h-4 text-[#7d9785] absolute top-3.5 start-3 pointer-events-none" />
                   <input
-                    type="password"
+                    type={showRegisterPassword ? 'text' : 'password'}
                     required
                     minLength={8}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full min-h-[44px] ps-9 pe-3 rounded-xl bg-[#0a140f] border border-[#2f493b] focus:border-[#7fe094] focus:outline-none text-sm text-white"
+                    data-testid="register-password-input"
+                    className="w-full min-h-[44px] ps-9 pe-11 rounded-xl bg-[#0a140f] border border-[#2f493b] focus:border-[#7fe094] focus:outline-none text-sm text-white"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowRegisterPassword((prev) => !prev)}
+                    aria-label={showRegisterPassword ? hidePasswordLabel : showPasswordLabel}
+                    aria-pressed={showRegisterPassword}
+                    data-testid="register-password-toggle"
+                    className="absolute inset-y-0 end-1 my-auto w-9 h-9 rounded-lg flex items-center justify-center text-[#9db1a1] hover:text-white active:bg-white/10 transition-colors cursor-pointer touch-manipulation"
+                  >
+                    {showRegisterPassword ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
                 </div>
               </div>
 
@@ -503,16 +521,31 @@ export const AccountAuthModal: React.FC<AccountAuthModalProps> = ({
                   {isAr ? 'تأكيد كلمة المرور' : 'Confirm Password'}
                 </label>
                 <div className="relative">
-                  <ShieldCheck className="w-4 h-4 text-[#7d9785] absolute top-3.5 start-3" />
+                  <ShieldCheck className="w-4 h-4 text-[#7d9785] absolute top-3.5 start-3 pointer-events-none" />
                   <input
-                    type="password"
+                    type={showConfirmPassword ? 'text' : 'password'}
                     required
                     minLength={8}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full min-h-[44px] ps-9 pe-3 rounded-xl bg-[#0a140f] border border-[#2f493b] focus:border-[#7fe094] focus:outline-none text-sm text-white"
+                    data-testid="register-confirm-password-input"
+                    className="w-full min-h-[44px] ps-9 pe-11 rounded-xl bg-[#0a140f] border border-[#2f493b] focus:border-[#7fe094] focus:outline-none text-sm text-white"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword((prev) => !prev)}
+                    aria-label={showConfirmPassword ? hidePasswordLabel : showPasswordLabel}
+                    aria-pressed={showConfirmPassword}
+                    data-testid="register-confirm-password-toggle"
+                    className="absolute inset-y-0 end-1 my-auto w-9 h-9 rounded-lg flex items-center justify-center text-[#9db1a1] hover:text-white active:bg-white/10 transition-colors cursor-pointer touch-manipulation"
+                  >
+                    {showConfirmPassword ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
                 </div>
               </div>
 
@@ -609,15 +642,30 @@ export const AccountAuthModal: React.FC<AccountAuthModalProps> = ({
                 <label className="block text-xs font-semibold text-[#dce5d8] mb-1">
                   {isAr ? 'كلمة المرور الجديدة' : 'New Password'}
                 </label>
-                <input
-                  type="password"
-                  required
-                  minLength={8}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full min-h-[44px] px-3.5 rounded-xl bg-[#0a140f] border border-[#2f493b] focus:border-[#7fe094] focus:outline-none text-sm text-white"
-                />
+                <div className="relative">
+                  <input
+                    type={showResetNewPassword ? 'text' : 'password'}
+                    required
+                    minLength={8}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full min-h-[44px] ps-3.5 pe-11 rounded-xl bg-[#0a140f] border border-[#2f493b] focus:border-[#7fe094] focus:outline-none text-sm text-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowResetNewPassword((prev) => !prev)}
+                    aria-label={showResetNewPassword ? hidePasswordLabel : showPasswordLabel}
+                    aria-pressed={showResetNewPassword}
+                    className="absolute inset-y-0 end-1 my-auto w-9 h-9 rounded-lg flex items-center justify-center text-[#9db1a1] hover:text-white active:bg-white/10 transition-colors cursor-pointer touch-manipulation"
+                  >
+                    {showResetNewPassword ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
               </div>
               <button
                 type="submit"

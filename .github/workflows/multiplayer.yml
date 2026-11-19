@@ -7,6 +7,8 @@ on:
     paths:
       - "workers/multiplayer/**"
       - "shared/multiplayerProtocol.ts"
+      - "shared/accountTypes.ts"
+      - "shared/profileTypes.ts"
       - "wrangler.toml"
       - "_verify_mp_room.ts"
       - ".github/workflows/multiplayer.yml"
@@ -16,6 +18,8 @@ on:
     paths:
       - "workers/multiplayer/**"
       - "shared/multiplayerProtocol.ts"
+      - "shared/accountTypes.ts"
+      - "shared/profileTypes.ts"
       - "wrangler.toml"
       - "_verify_mp_room.ts"
       - ".github/workflows/multiplayer.yml"

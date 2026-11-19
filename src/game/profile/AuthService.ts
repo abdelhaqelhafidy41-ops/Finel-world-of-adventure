@@ -96,6 +96,182 @@ function writeCachedCloudAccount(account: CloudAccountInfo | null): void {
   }
 }
 
+export type AuthErrorContext = 'register' | 'login' | 'forgot' | 'reset' | 'account';
+
+export class AuthServiceError extends Error {
+  public readonly code: string;
+  public readonly status: number | null;
+  public readonly isNetworkError: boolean;
+  public readonly responseType: string;
+
+  constructor(
+    code: string,
+    message: string,
+    status: number | null = null,
+    options?: { isNetworkError?: boolean; responseType?: string },
+  ) {
+    super(message);
+    this.name = 'AuthServiceError';
+    this.code = code;
+    this.status = status;
+    this.isNetworkError = Boolean(options?.isNetworkError);
+    this.responseType = options?.responseType ?? (status === null ? 'network' : 'unknown');
+  }
+}
+
+function logAuthDiagnosticDev(info: {
+  action: string;
+  method: string;
+  url: string;
+  status: number | null;
+  responseType: string;
+  code: string;
+  safeMessage?: string;
+}): void {
+  if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+    console.warn(
+      `[Auth:${info.action}] ${info.method} ${info.url} -> status=${info.status ?? 'NETWORK_ERROR'} type=${info.responseType} code=${info.code}${info.safeMessage ? ` message="${info.safeMessage}"` : ''}`,
+    );
+  }
+}
+
+async function safeParseAuthResponse<T extends object>(
+  res: Response,
+): Promise<{ data: T | null; responseType: string; safeSnippet: string }> {
+  const responseType = (res.headers.get('content-type') || 'unknown').split(';')[0].trim().toLowerCase();
+  const rawText = await res.text().catch(() => '');
+  if (!rawText.trim()) {
+    return { data: null, responseType, safeSnippet: '' };
+  }
+  try {
+    const parsed = JSON.parse(rawText) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
+      const safeSnippet =
+        typeof obj.message === 'string'
+          ? obj.message.slice(0, 140)
+          : typeof obj.error === 'string'
+            ? obj.error.slice(0, 80)
+            : '';
+      return { data: parsed as T, responseType, safeSnippet };
+    }
+  } catch {
+    // Non-JSON response (e.g., HTML error page or plain text)
+  }
+  return {
+    data: null,
+    responseType,
+    safeSnippet: rawText.replace(/\s+/g, ' ').trim().slice(0, 120),
+  };
+}
+
+/**
+ * Converts technical auth / network errors into accurate, friendly localized messages.
+ * Strictly separates REAL network failures from HTTP 400/401/403/404/409/429/500+ server errors.
+ * Never exposes raw server codes like NOT_FOUND, CLOUD_DB_NOT_CONFIGURED, or stack traces.
+ */
+export function formatAuthError(
+  err: unknown,
+  lang: 'ar' | 'en',
+  context: AuthErrorContext = 'account',
+): string {
+  const isAr = lang === 'ar';
+  const authErr = err instanceof AuthServiceError ? err : null;
+  const status = authErr?.status ?? null;
+  const code = (
+    authErr?.code ??
+    (err instanceof Error ? err.message.trim() : '')
+  ).toUpperCase();
+
+  // A. REAL NETWORK FAILURE ONLY (fetch threw, DNS/connection refused, or offline)
+  if (authErr?.isNetworkError || code === 'NETWORK_ERROR' || err instanceof TypeError) {
+    return isAr
+      ? 'تعذر الاتصال بالخادم. تحقق من اتصال الإنترنت وحاول مرة أخرى.'
+      : 'Unable to connect to the server. Please check your internet connection and try again.';
+  }
+
+  // F. HTTP 409 — Duplicate account / email
+  if (
+    status === 409 ||
+    code === 'EMAIL_ALREADY_REGISTERED' ||
+    code === 'ACCOUNT_ALREADY_EXISTS' ||
+    code === 'EMAIL_ALREADY_EXISTS'
+  ) {
+    return isAr
+      ? 'هذا البريد الإلكتروني مستخدم بالفعل.'
+      : 'This email address is already registered.';
+  }
+
+  // B. HTTP 400 — Validation / Bad Request
+  if (code === 'INVALID_EMAIL') {
+    return isAr
+      ? 'يرجى إدخال بريد إلكتروني صحيح.'
+      : 'Please enter a valid email address.';
+  }
+  if (code === 'WEAK_PASSWORD') {
+    return isAr
+      ? 'يجب أن تتكون كلمة المرور من 8 أحرف على الأقل.'
+      : 'Password must be at least 8 characters long.';
+  }
+  if (
+    code === 'INVALID_NAME' ||
+    code === 'NAME_TOO_SHORT' ||
+    code === 'NAME_TOO_LONG' ||
+    code === 'INVALID_PLAYER_NAME'
+  ) {
+    return isAr
+      ? 'يجب أن يكون اسم اللاعب بين 3 و20 حرفاً صالحاً.'
+      : 'Display name must be 3–20 valid characters.';
+  }
+  if (code === 'INVALID_RESET_CODE') {
+    return isAr
+      ? 'رمز الاستعادة غير صحيح أو منتهي الصلاحية.'
+      : 'The recovery code is invalid or has expired.';
+  }
+  if (status === 400) {
+    return isAr
+      ? 'يرجى التحقق من البيانات المدخلة والمحاولة مرة أخرى.'
+      : 'Please check the entered information and try again.';
+  }
+
+  // C. HTTP 401 — Authentication error
+  if (status === 401 || code === 'INVALID_CREDENTIALS' || code === 'UNAUTHORIZED') {
+    if (context === 'login' || code === 'INVALID_CREDENTIALS') {
+      return isAr
+        ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة.'
+        : 'Invalid email or password.';
+    }
+    return isAr
+      ? 'انتهت جلسة تسجيل الدخول. يرجى تسجيل الدخول مرة أخرى.'
+      : 'Authentication required. Please log in again.';
+  }
+
+  // D. HTTP 403 — Authorization error
+  if (code === 'INVALID_CURRENT_PASSWORD' || code === 'INVALID_PASSWORD') {
+    return isAr
+      ? 'كلمة المرور الحالية غير صحيحة.'
+      : 'Current password is incorrect.';
+  }
+  if (status === 403 || code === 'ORIGIN_NOT_ALLOWED') {
+    return isAr
+      ? 'ليس لديك صلاحية لإجراء هذه العملية.'
+      : 'You are not authorized to perform this action.';
+  }
+
+  // G. HTTP 429 — Rate limited
+  if (status === 429 || code === 'RATE_LIMITED') {
+    return isAr
+      ? 'تم إرسال محاولات كثيرة جداً. يرجى الانتظار دقيقة ثم المحاولة مرة أخرى.'
+      : 'Too many attempts. Please wait a minute and try again.';
+  }
+
+  // E. HTTP 404 (missing/misconfigured API route) & H. HTTP 500+ / server errors
+  // NEVER describe server or API endpoint errors as an internet connection problem.
+  return isAr
+    ? 'حدث خطأ في الخادم. حاول مرة أخرى لاحقًا.'
+    : 'A server error occurred. Please try again later.';
+}
+
 class AuthServiceImpl {
   private cachedSession: AuthSession | null = null;
   private cachedAccount: CloudAccountInfo | null = null;
@@ -276,9 +452,13 @@ class AuthServiceImpl {
   private requireServerBaseUrl(): string {
     const baseUrl = resolveMultiplayerServerUrl();
     if (!baseUrl) {
-      throw new Error('Online account server URL is not configured.');
+      throw new AuthServiceError(
+        'SERVER_NOT_CONFIGURED',
+        'Online account server URL is not configured.',
+        null,
+      );
     }
-    return baseUrl;
+    return baseUrl.replace(/\/+$/, '');
   }
 
   public async registerAccount(input: {
@@ -289,14 +469,49 @@ class AuthServiceImpl {
     language?: string;
   }): Promise<AuthResponsePayload> {
     const baseUrl = this.requireServerBaseUrl();
-    const res = await fetch(`${baseUrl}/auth/register`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    const data = (await res.json().catch(() => null)) as AuthResponsePayload | null;
-    if (!res.ok || !data?.ok || !data.account || !data.tokens) {
-      throw new Error(data?.message || data?.error || 'Account registration failed.');
+    const endpoint = `${baseUrl}/auth/register`;
+    let res: Response;
+    try {
+      res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify(input),
+      });
+    } catch {
+      logAuthDiagnosticDev({
+        action: 'register',
+        method: 'POST',
+        url: endpoint,
+        status: null,
+        responseType: 'network',
+        code: 'NETWORK_ERROR',
+      });
+      throw new AuthServiceError('NETWORK_ERROR', 'Unable to reach account server.', null, {
+        isNetworkError: true,
+        responseType: 'network',
+      });
+    }
+    const { data, responseType, safeSnippet } = await safeParseAuthResponse<
+      AuthResponsePayload & { success?: boolean }
+    >(res);
+    const succeeded = Boolean(data?.ok || data?.success);
+    if (!res.ok || !succeeded || !data?.account || !data?.tokens) {
+      const code = String(
+        data?.error || (res.status === 404 ? 'NOT_FOUND' : !data ? 'INVALID_SERVER_RESPONSE' : `HTTP_${res.status}`),
+      );
+      logAuthDiagnosticDev({
+        action: 'register',
+        method: 'POST',
+        url: endpoint,
+        status: res.status,
+        responseType,
+        code,
+        safeMessage: safeSnippet,
+      });
+      throw new AuthServiceError(code, data?.message || 'Account registration failed.', res.status, {
+        isNetworkError: false,
+        responseType,
+      });
     }
     this.applyCloudAuthSuccess(data.account, data.tokens);
     return data;
@@ -307,14 +522,49 @@ class AuthServiceImpl {
     password: string;
   }): Promise<AuthResponsePayload> {
     const baseUrl = this.requireServerBaseUrl();
-    const res = await fetch(`${baseUrl}/auth/login`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    const data = (await res.json().catch(() => null)) as AuthResponsePayload | null;
-    if (!res.ok || !data?.ok || !data.account || !data.tokens) {
-      throw new Error(data?.message || data?.error || 'Invalid email or password.');
+    const endpoint = `${baseUrl}/auth/login`;
+    let res: Response;
+    try {
+      res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify(input),
+      });
+    } catch {
+      logAuthDiagnosticDev({
+        action: 'login',
+        method: 'POST',
+        url: endpoint,
+        status: null,
+        responseType: 'network',
+        code: 'NETWORK_ERROR',
+      });
+      throw new AuthServiceError('NETWORK_ERROR', 'Unable to reach account server.', null, {
+        isNetworkError: true,
+        responseType: 'network',
+      });
+    }
+    const { data, responseType, safeSnippet } = await safeParseAuthResponse<
+      AuthResponsePayload & { success?: boolean }
+    >(res);
+    const succeeded = Boolean(data?.ok || data?.success);
+    if (!res.ok || !succeeded || !data?.account || !data?.tokens) {
+      const code = String(
+        data?.error || (res.status === 404 ? 'NOT_FOUND' : !data ? 'INVALID_SERVER_RESPONSE' : `HTTP_${res.status}`),
+      );
+      logAuthDiagnosticDev({
+        action: 'login',
+        method: 'POST',
+        url: endpoint,
+        status: res.status,
+        responseType,
+        code,
+        safeMessage: safeSnippet,
+      });
+      throw new AuthServiceError(code, data?.message || 'Invalid email or password.', res.status, {
+        isNetworkError: false,
+        responseType,
+      });
     }
     this.applyCloudAuthSuccess(data.account, data.tokens);
     return data;
@@ -429,24 +679,58 @@ class AuthServiceImpl {
     devResetCode?: string;
   }> {
     const baseUrl = this.requireServerBaseUrl();
-    const res = await fetch(`${baseUrl}/auth/forgot-password`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email }),
-    });
-    const data = (await res.json().catch(() => null)) as {
+    const endpoint = `${baseUrl}/auth/forgot-password`;
+    let res: Response;
+    try {
+      res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+    } catch {
+      logAuthDiagnosticDev({
+        action: 'forgot-password',
+        method: 'POST',
+        url: endpoint,
+        status: null,
+        responseType: 'network',
+        code: 'NETWORK_ERROR',
+      });
+      throw new AuthServiceError('NETWORK_ERROR', 'Unable to reach account server.', null, {
+        isNetworkError: true,
+        responseType: 'network',
+      });
+    }
+    const { data, responseType, safeSnippet } = await safeParseAuthResponse<{
       ok?: boolean;
+      success?: boolean;
       error?: string;
       message?: string;
       devResetCode?: string;
-    } | null;
-    if (!res.ok || !data?.ok) {
-      throw new Error(data?.message || data?.error || 'Failed to request password reset.');
+    }>(res);
+    const succeeded = Boolean(data?.ok || data?.success);
+    if (!res.ok || !succeeded) {
+      const code = String(
+        data?.error || (res.status === 404 ? 'NOT_FOUND' : !data ? 'INVALID_SERVER_RESPONSE' : `HTTP_${res.status}`),
+      );
+      logAuthDiagnosticDev({
+        action: 'forgot-password',
+        method: 'POST',
+        url: endpoint,
+        status: res.status,
+        responseType,
+        code,
+        safeMessage: safeSnippet,
+      });
+      throw new AuthServiceError(code, data?.message || 'Failed to request password reset.', res.status, {
+        isNetworkError: false,
+        responseType,
+      });
     }
     return {
       ok: true,
-      message: data.message || 'Password reset code sent if the email exists.',
-      devResetCode: data.devResetCode,
+      message: data?.message || 'Password reset code sent if the email exists.',
+      devResetCode: data?.devResetCode,
     };
   }
 
@@ -456,20 +740,54 @@ class AuthServiceImpl {
     newPassword: string;
   }): Promise<string> {
     const baseUrl = this.requireServerBaseUrl();
-    const res = await fetch(`${baseUrl}/auth/reset-password`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    const data = (await res.json().catch(() => null)) as {
+    const endpoint = `${baseUrl}/auth/reset-password`;
+    let res: Response;
+    try {
+      res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify(input),
+      });
+    } catch {
+      logAuthDiagnosticDev({
+        action: 'reset-password',
+        method: 'POST',
+        url: endpoint,
+        status: null,
+        responseType: 'network',
+        code: 'NETWORK_ERROR',
+      });
+      throw new AuthServiceError('NETWORK_ERROR', 'Unable to reach account server.', null, {
+        isNetworkError: true,
+        responseType: 'network',
+      });
+    }
+    const { data, responseType, safeSnippet } = await safeParseAuthResponse<{
       ok?: boolean;
+      success?: boolean;
       error?: string;
       message?: string;
-    } | null;
-    if (!res.ok || !data?.ok) {
-      throw new Error(data?.message || data?.error || 'Password reset failed.');
+    }>(res);
+    const succeeded = Boolean(data?.ok || data?.success);
+    if (!res.ok || !succeeded) {
+      const code = String(
+        data?.error || (res.status === 404 ? 'NOT_FOUND' : !data ? 'INVALID_SERVER_RESPONSE' : `HTTP_${res.status}`),
+      );
+      logAuthDiagnosticDev({
+        action: 'reset-password',
+        method: 'POST',
+        url: endpoint,
+        status: res.status,
+        responseType,
+        code,
+        safeMessage: safeSnippet,
+      });
+      throw new AuthServiceError(code, data?.message || 'Password reset failed.', res.status, {
+        isNetworkError: false,
+        responseType,
+      });
     }
-    return data.message || 'Password updated successfully.';
+    return data?.message || 'Password updated successfully.';
   }
 
   public async changePassword(input: {
@@ -477,23 +795,58 @@ class AuthServiceImpl {
     newPassword: string;
   }): Promise<string> {
     const baseUrl = this.requireServerBaseUrl();
-    const res = await fetch(`${baseUrl}/auth/change-password`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...this.getBearerHeaders(),
-      },
-      body: JSON.stringify(input),
-    });
-    const data = (await res.json().catch(() => null)) as {
+    const endpoint = `${baseUrl}/auth/change-password`;
+    let res: Response;
+    try {
+      res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json',
+          ...this.getBearerHeaders(),
+        },
+        body: JSON.stringify(input),
+      });
+    } catch {
+      logAuthDiagnosticDev({
+        action: 'change-password',
+        method: 'POST',
+        url: endpoint,
+        status: null,
+        responseType: 'network',
+        code: 'NETWORK_ERROR',
+      });
+      throw new AuthServiceError('NETWORK_ERROR', 'Unable to reach account server.', null, {
+        isNetworkError: true,
+        responseType: 'network',
+      });
+    }
+    const { data, responseType, safeSnippet } = await safeParseAuthResponse<{
       ok?: boolean;
+      success?: boolean;
       error?: string;
       message?: string;
-    } | null;
-    if (!res.ok || !data?.ok) {
-      throw new Error(data?.message || data?.error || 'Failed to change password.');
+    }>(res);
+    const succeeded = Boolean(data?.ok || data?.success);
+    if (!res.ok || !succeeded) {
+      const code = String(
+        data?.error || (res.status === 404 ? 'NOT_FOUND' : !data ? 'INVALID_SERVER_RESPONSE' : `HTTP_${res.status}`),
+      );
+      logAuthDiagnosticDev({
+        action: 'change-password',
+        method: 'POST',
+        url: endpoint,
+        status: res.status,
+        responseType,
+        code,
+        safeMessage: safeSnippet,
+      });
+      throw new AuthServiceError(code, data?.message || 'Failed to change password.', res.status, {
+        isNetworkError: false,
+        responseType,
+      });
     }
-    return data.message || 'Password changed successfully.';
+    return data?.message || 'Password changed successfully.';
   }
 
   public async logoutAccount(): Promise<void> {

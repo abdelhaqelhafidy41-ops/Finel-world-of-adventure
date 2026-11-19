@@ -52,7 +52,11 @@ const ALLOWED_WORLD_MODES = new Set(['normal', 'adventure', 'survival', 'creativ
 const ALLOWED_DIFFICULTIES = new Set(['easy', 'normal', 'hard']);
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
-  return Response.json(body, { status });
+  const normalized =
+    typeof body.ok === 'boolean' && typeof body.success !== 'boolean'
+      ? { ...body, success: body.ok }
+      : body;
+  return Response.json(normalized, { status });
 }
 
 function safeJsonParse<T>(raw: unknown, fallback: T): T {
@@ -491,15 +495,16 @@ export async function resolveAccountSessionIdentity(
  * Normalizes /api/auth/* -> /auth/* etc. so both canonical paths and /api/* prefixed paths work.
  */
 function normalizeAccountPath(pathname: string): string {
+  const trimmed = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
   if (
-    pathname.startsWith('/api/auth/') ||
-    pathname.startsWith('/api/account') ||
-    pathname.startsWith('/api/player/save') ||
-    pathname.startsWith('/api/world-saves')
+    trimmed.startsWith('/api/auth/') ||
+    trimmed.startsWith('/api/account') ||
+    trimmed.startsWith('/api/player/save') ||
+    trimmed.startsWith('/api/world-saves')
   ) {
-    return pathname.slice('/api'.length);
+    return trimmed.slice('/api'.length);
   }
-  return pathname;
+  return trimmed;
 }
 
 export function isAccountOrCloudSavePath(pathname: string): boolean {
@@ -536,6 +541,7 @@ export async function handleAccountRoute(
 
   const db = env.DB;
 
+  try {
   // ---------------------------------------------------------------------------
   // 1. POST /auth/register
   // ---------------------------------------------------------------------------
@@ -666,6 +672,7 @@ export async function handleAccountRoute(
     return jsonResponse(
       {
         ok: true,
+        success: true,
         account,
         tokens,
         playerSave,
@@ -760,6 +767,7 @@ export async function handleAccountRoute(
 
     return jsonResponse({
       ok: true,
+      success: true,
       account,
       tokens,
       playerSave,
@@ -1640,4 +1648,18 @@ export async function handleAccountRoute(
   }
 
   return jsonResponse({ ok: false, error: 'NOT_FOUND' }, 404);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : '';
+    if (/no such table/i.test(msg)) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: 'CLOUD_DB_MIGRATION_REQUIRED',
+          message: 'Account database schema has not been migrated yet.',
+        },
+        503,
+      );
+    }
+    throw err;
+  }
 }
