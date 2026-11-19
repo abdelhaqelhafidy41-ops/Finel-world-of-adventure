@@ -86,6 +86,10 @@ export interface CfEnv {
   RESET_EMAIL_API_URL?: string;
   RESET_EMAIL_API_KEY?: string;
   RESET_EMAIL_FROM?: string;
+  LATEST_APP_VERSION?: string;
+  APP_UPDATE_URL_WEB?: string;
+  APP_UPDATE_URL_ANDROID?: string;
+  APP_UPDATE_URL_WINDOWS?: string;
 }
 
 export function createCfWebSocketPair(): [CfWebSocket, CfWebSocket] {

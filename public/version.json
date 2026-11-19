@@ -1,0 +1,13 @@
+{
+  "latestVersion": "1.0.0",
+  "updateUrl": "https://abdelhaqelhafidy41-ops.github.io/Finel-world-of-adventure/",
+  "platformUrls": {
+    "web": "https://abdelhaqelhafidy41-ops.github.io/Finel-world-of-adventure/",
+    "android": "https://github.com/abdelhaqelhafidy41-ops/Finel-world-of-adventure/releases/latest",
+    "windows": "https://github.com/abdelhaqelhafidy41-ops/Finel-world-of-adventure/releases/latest"
+  },
+  "releaseNotes": {
+    "ar": "قم بتحديث اللعبة للاستمتاع بالمزايا الجديدة وإصلاح الأخطاء وتحسين تجربة اللعب.",
+    "en": "Update the game to enjoy the new features, bug fixes, and an improved gameplay experience."
+  }
+}

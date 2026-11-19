@@ -56,6 +56,12 @@ import { SaveSlotsModal } from './components/SaveSlotsModal';
 import { GraphicsSettingsModal } from './components/GraphicsSettingsModal';
 import { DebugPerformanceOverlay } from './components/DebugPerformanceOverlay';
 import { SettingsScreen } from './components/menu/SettingsScreen';
+import { UpdateNotificationModal } from './components/menu/UpdateNotificationModal';
+import {
+  checkForAppUpdate,
+  suppressUpdateVersion,
+  type AppUpdateInfo,
+} from './game/settings/AppUpdateService';
 import {
   DEFAULT_GRAPHICS_SETTINGS,
   isDeveloperToolsEnabled,
@@ -232,6 +238,19 @@ export default function App() {
       !CloudSaveService.hasLocalData()
     );
   });
+  const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void checkForAppUpdate({ timeoutMs: 4000 }).then((res) => {
+      if (!cancelled && res.hasUpdate && res.updateInfo) {
+        setAvailableUpdate(res.updateInfo);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const languageRef = useRef<Language>(language);
   languageRef.current = language;
   const noticeTimerRef = useRef<number>(0);
@@ -2250,6 +2269,18 @@ export default function App() {
           onAuthComplete={(msg) => {
             refreshSaveSlots();
             if (msg) showNotice(msg);
+          }}
+        />
+      )}
+
+      {availableUpdate && !accountAuthModalOpen && (
+        <UpdateNotificationModal
+          lang={language}
+          updateInfo={availableUpdate}
+          onClose={() => setAvailableUpdate(null)}
+          onDontShowAgain={(version) => {
+            suppressUpdateVersion(version);
+            setAvailableUpdate(null);
           }}
         />
       )}

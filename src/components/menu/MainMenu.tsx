@@ -8,10 +8,12 @@ import {
   Play,
   PlusCircle,
   Settings,
+  Smartphone,
   User,
   Users,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import {
   BIOME_LABELS,
@@ -20,6 +22,11 @@ import {
 } from '../../game/i18n/translations';
 import { ProfileManager } from '../../game/profile/ProfileManager';
 import type { SaveGameMeta } from '../../game/save/saveTypes';
+import {
+  dismissPortraitTip,
+  isMobilePhoneDevice,
+  isPortraitTipDismissed,
+} from '../../game/settings/AppUpdateService';
 import { useMenuNavigation } from '../../hooks/useMenuNavigation';
 import { AvatarBadge } from '../profile/AvatarBadge';
 import { MainMenuButton } from './MainMenuButton';
@@ -60,6 +67,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   const t = UI_TEXT[lang];
   const isRtl = lang === 'ar';
   const [noSaveModalOpen, setNoSaveModalOpen] = useState(false);
+  const [showPortraitTip, setShowPortraitTip] = useState<boolean>(
+    () => isMobilePhoneDevice() && !isPortraitTipDismissed(),
+  );
   const [profileSnap, setProfileSnap] = React.useState(() =>
     ProfileManager.getSnapshot(),
   );
@@ -173,6 +183,37 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Mobile-only Portrait Mode Recommendation Banner (non-blocking & dismissible) */}
+      {showPortraitTip && (
+        <div
+          dir={isRtl ? 'rtl' : 'ltr'}
+          role="status"
+          data-testid="mobile-portrait-recommendation"
+          className="woa-surface pointer-events-auto mt-2.5 self-center w-full max-w-md rounded-xl bg-[#0e1a14]/88 backdrop-blur-md border border-[#e5a93c]/40 px-3 py-2 text-[#eef4eb] shadow-lg flex items-center justify-between gap-2.5 shrink-0"
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-7 h-7 rounded-lg bg-[#e5a93c]/15 border border-[#e5a93c]/35 flex items-center justify-center shrink-0 text-[#e5a93c]">
+              <Smartphone className="w-4 h-4" />
+            </div>
+            <p className="text-[11px] sm:text-xs leading-snug text-[#e6efe3] text-start">
+              {t.portraitRecommendationText}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              dismissPortraitTip();
+              setShowPortraitTip(false);
+            }}
+            aria-label={t.portraitRecommendationDismissAria}
+            data-testid="mobile-portrait-recommendation-dismiss"
+            className="min-w-[30px] min-h-[30px] rounded-lg bg-[#182920] hover:bg-[#22392d] border border-[#2f493b] flex items-center justify-center shrink-0 text-[#bfd1c0] cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Center / Hero Brand + Vertical 6-Button Menu */}
       <div className="my-auto py-2 sm:py-6 flex flex-col sm:landscape:flex-row sm:landscape:items-end sm:landscape:justify-between lg:flex-row lg:items-end lg:justify-between gap-4 sm:gap-6 lg:gap-10">

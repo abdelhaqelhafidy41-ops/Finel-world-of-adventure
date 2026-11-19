@@ -223,6 +223,35 @@ export default {
       );
     }
 
+    if (
+      (request.method === 'GET' || request.method === 'HEAD') &&
+      (url.pathname === '/app/version' || url.pathname === '/api/app/version')
+    ) {
+      const latestVersion = (env.LATEST_APP_VERSION ?? '1.0.0').trim() || '1.0.0';
+      const webUrl =
+        (env.APP_UPDATE_URL_WEB ?? '').trim() ||
+        'https://abdelhaqelhafidy41-ops.github.io/Finel-world-of-adventure/';
+      const releasesUrl =
+        'https://github.com/abdelhaqelhafidy41-ops/Finel-world-of-adventure/releases/latest';
+      return withCors(
+        Response.json({
+          ok: true,
+          latestVersion,
+          updateUrl: webUrl,
+          platformUrls: {
+            web: webUrl,
+            android: (env.APP_UPDATE_URL_ANDROID ?? '').trim() || releasesUrl,
+            windows: (env.APP_UPDATE_URL_WINDOWS ?? '').trim() || releasesUrl,
+          },
+          releaseNotes: {
+            ar: 'قم بتحديث اللعبة للاستمتاع بالمزايا الجديدة وإصلاح الأخطاء وتحسين تجربة اللعب.',
+            en: 'Update the game to enjoy the new features, bug fixes, and an improved gameplay experience.',
+          },
+        }),
+        cors,
+      );
+    }
+
     try {
     const clientIp = getClientIp(request);
 

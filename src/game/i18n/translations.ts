@@ -923,6 +923,15 @@ export interface UiStrings {
   goodMorningNotice: string;
   cannotSleepDayNotice: string;
   bedPlacedNotice: string;
+  portraitRecommendationText: string;
+  portraitRecommendationDismissAria: string;
+  updateAvailableTitle: string;
+  updateAvailableBody: string;
+  updateCurrentVersionLabel: string;
+  updateNewVersionLabel: string;
+  updateNowBtn: string;
+  updateCloseBtn: string;
+  updateDontShowAgainBtn: string;
   bedCannotPlaceNotice: string;
   placeBedBtn: string;
   placeStationBtn: string;
@@ -2000,6 +2009,17 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     goodMorningNotice: 'Good morning.',
     cannotSleepDayNotice: 'You can only rest at evening or night.',
     bedPlacedNotice: 'Camp Bed placed nearby. Interact with it at night to rest.',
+    portraitRecommendationText:
+      'For the best experience, hold your phone vertically for a smoother and more enjoyable experience.',
+    portraitRecommendationDismissAria: 'Dismiss orientation tip',
+    updateAvailableTitle: 'New update available!',
+    updateAvailableBody:
+      'Update the game to enjoy the new features, bug fixes, and an improved gameplay experience.',
+    updateCurrentVersionLabel: 'Current Version',
+    updateNewVersionLabel: 'New Version',
+    updateNowBtn: 'Update Now',
+    updateCloseBtn: 'Close',
+    updateDontShowAgainBtn: "Don't show this message again",
     bedCannotPlaceNotice: 'Cannot place bed on water or steep terrain.',
     placeBedBtn: 'Place Bed',
     placeStationBtn: 'Place Station',
@@ -3150,7 +3170,18 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     sleepTransitionLabel: 'جارٍ النوم...',
     goodMorningNotice: 'صباح الخير.',
     cannotSleepDayNotice: 'يمكنك النوم فقط في المساء أو الليل.',
-    bedPlacedNotice: 'تم وضع سرير المخيم. تفاعل معه ليلًا للنوم حتى الصباح.',
+    bedPlacedNotice: 'تم وضع سرير التخييم. تفاعل معه ليلًا للنوم حتى الصباح.',
+    portraitRecommendationText:
+      'إذا أردت اللعب بشكل أفضل، اجعل الهاتف عموديًا لتجربة أكثر سلاسة ومتعة.',
+    portraitRecommendationDismissAria: 'إخفاء نصيحة الوضع العمودي',
+    updateAvailableTitle: 'تحديث جديد متوفر!',
+    updateAvailableBody:
+      'قم بتحديث اللعبة للاستمتاع بالمزايا الجديدة وإصلاح الأخطاء وتحسين تجربة اللعب.',
+    updateCurrentVersionLabel: 'الإصدار الحالي',
+    updateNewVersionLabel: 'الإصدار الجديد',
+    updateNowBtn: 'تحديث الآن',
+    updateCloseBtn: 'إغلاق',
+    updateDontShowAgainBtn: 'لا تظهر هذه الرسالة مرة أخرى',
     bedCannotPlaceNotice: 'لا يمكن وضع السرير فوق الماء أو المنحدرات الحادة.',
     placeBedBtn: 'وضع السرير',
     placeStationBtn: 'وضع المحطة',
