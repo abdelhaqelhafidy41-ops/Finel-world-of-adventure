@@ -1,6 +1,8 @@
 package com.worldofadventure.game;
 
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -87,11 +89,18 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR);
         lanServer = new LanMultiplayerServer(this);
         configureFullscreen();
         configureWebView();
         registerBackButtonHandler();
         handleJoinIntent(getIntent());
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        hideSystemBars();
     }
 
     @Override

@@ -28,7 +28,13 @@ import {
   sha256Hex,
   verifyPassword,
 } from './accountCrypto';
-import type { CfD1Database, CfEnv } from './cfTypes';
+import type {
+  CfD1Database,
+  CfD1PreparedStatement,
+  CfD1Result,
+  CfDurableObjectNamespace,
+  CfEnv,
+} from './cfTypes';
 import { IpRateLimiter } from './rateLimiter';
 import { workerSecurityLogger } from './securityLogger';
 
@@ -463,19 +469,95 @@ async function sendResetEmailIfConfigured(
   }
 }
 
+interface DurableSqlPreparedStatement extends CfD1PreparedStatement {
+  readonly __query: string;
+  readonly __params: unknown[];
+}
+
+function createDurableObjectSqlAdapter(ns: CfDurableObjectNamespace): CfD1Database {
+  const stub = ns.get(ns.idFromName('global'));
+
+  async function execRemote(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const res = await stub.fetch('https://profiles.internal/internal/account-sql', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!res.ok || !data?.ok) {
+      throw new Error(String(data?.message || data?.error || `SQL_HTTP_${res.status}`));
+    }
+    return data;
+  }
+
+  function makeStmt(query: string, params: unknown[] = []): DurableSqlPreparedStatement {
+    return {
+      __query: query,
+      __params: params,
+      bind(...values: unknown[]): CfD1PreparedStatement {
+        return makeStmt(query, values);
+      },
+      async first<T = Record<string, unknown>>(colName?: string): Promise<T | null> {
+        const data = await execRemote({ mode: 'first', query, params });
+        const row = (data.row ?? null) as Record<string, unknown> | null;
+        if (!row) return null;
+        if (colName) return (row[colName] ?? null) as T | null;
+        return row as T;
+      },
+      async all<T = Record<string, unknown>>(): Promise<CfD1Result<T>> {
+        const data = await execRemote({ mode: 'all', query, params });
+        return {
+          results: (Array.isArray(data.results) ? data.results : []) as T[],
+          success: true,
+        };
+      },
+      async run<T = Record<string, unknown>>(): Promise<CfD1Result<T>> {
+        const data = await execRemote({ mode: 'run', query, params });
+        return {
+          results: (Array.isArray(data.results) ? data.results : []) as T[],
+          success: true,
+        };
+      },
+    };
+  }
+
+  return {
+    prepare(query: string): CfD1PreparedStatement {
+      return makeStmt(query, []);
+    },
+    async batch<T = Record<string, unknown>>(
+      statements: CfD1PreparedStatement[],
+    ): Promise<CfD1Result<T>[]> {
+      const serialized = statements.map((stmt) => {
+        const s = stmt as DurableSqlPreparedStatement;
+        return { query: s.__query, params: s.__params };
+      });
+      const data = await execRemote({ mode: 'batch', statements: serialized });
+      return (Array.isArray(data.results) ? data.results : []) as CfD1Result<T>[];
+    },
+  };
+}
+
+function resolveAccountDb(env: CfEnv): CfD1Database | null {
+  if (env.DB) return env.DB;
+  if (env.PLAYER_PROFILES) return createDurableObjectSqlAdapter(env.PLAYER_PROFILES);
+  return null;
+}
+
 /**
- * Used by MultiplayerRoomDO / Worker index.ts to authenticate a player's D1 account session
+ * Used by MultiplayerRoomDO / Worker index.ts to authenticate a player's cloud account session
  * when joining or creating multiplayer rooms, without modifying multiplayer gameplay.
  */
 export async function resolveAccountSessionIdentity(
   request: Request,
   env: CfEnv,
 ): Promise<Record<string, unknown> | null> {
-  if (!env.DB) return null;
+  const db = resolveAccountDb(env);
+  if (!db) return null;
   try {
-    const auth = await authenticateRequest(request, env.DB);
+    const auth = await authenticateRequest(request, db);
     if (!auth) return null;
-    const account = await loadAccountInfo(env.DB, auth.accountId);
+    const account = await loadAccountInfo(db, auth.accountId);
     if (!account) return null;
     return {
       accountId: account.accountId,
@@ -528,18 +610,17 @@ export async function handleAccountRoute(
   const path = normalizeAccountPath(url.pathname);
   const method = request.method.toUpperCase();
 
-  if (!env.DB) {
+  const db = resolveAccountDb(env);
+  if (!db) {
     return jsonResponse(
       {
         ok: false,
         error: 'CLOUD_DB_NOT_CONFIGURED',
-        message: 'Cloudflare D1 database binding (DB) is not configured on this Worker.',
+        message: 'Cloud account database storage is not configured on this Worker.',
       },
       503,
     );
   }
-
-  const db = env.DB;
 
   try {
   // ---------------------------------------------------------------------------

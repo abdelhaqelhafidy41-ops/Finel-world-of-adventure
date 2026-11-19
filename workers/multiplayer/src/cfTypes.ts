@@ -19,6 +19,17 @@ export interface CfDurableObjectNamespace {
   get(id: CfDurableObjectId): CfDurableObjectStub;
 }
 
+export interface CfDurableObjectSqlCursor<T = Record<string, unknown>> {
+  toArray(): T[];
+}
+
+export interface CfDurableObjectSql {
+  exec<T = Record<string, unknown>>(
+    query: string,
+    ...bindings: unknown[]
+  ): CfDurableObjectSqlCursor<T>;
+}
+
 export interface CfDurableObjectStorage {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put<T = unknown>(key: string, value: T): Promise<void>;
@@ -26,6 +37,7 @@ export interface CfDurableObjectStorage {
   deleteAll(): Promise<void>;
   setAlarm?(scheduledTime: number | Date): Promise<void>;
   deleteAlarm?(): Promise<void>;
+  sql?: CfDurableObjectSql;
 }
 
 export interface CfWebSocket extends WebSocket {

@@ -27,11 +27,12 @@ class_name = "RoomDirectoryDO"
 name = "PLAYER_PROFILES"
 class_name = "PlayerProfileDO"
 
-[[d1_databases]]
-binding = "DB"
-database_name = "world-of-adventure-accounts"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
-migrations_dir = "workers/multiplayer/migrations"
+# Optional dedicated Cloudflare D1 binding (when omitted, accounts persist in PlayerProfileDO SQLite storage).
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "world-of-adventure-accounts"
+# database_id = "<YOUR_REAL_D1_UUID>"
+# migrations_dir = "workers/multiplayer/migrations"
 
 [[migrations]]
 tag = "v1"
@@ -103,7 +104,7 @@ workers_dev = true
 [env.production.vars]
 ENVIRONMENT = "production"
 # Explicit allowed origins for GitHub Pages, local dev, and Capacitor/Electron clients
-ALLOWED_ORIGINS = "https://abdelhaqelhafidy41-ops.github.io,http://localhost:3000,http://127.0.0.1:3000,capacitor://localhost,http://localhost"
+ALLOWED_ORIGINS = "https://abdelhaqelhafidy41-ops.github.io,https://localhost,http://localhost:3000,http://127.0.0.1:3000,capacitor://localhost,http://localhost"
 MAX_ROOMS_PER_LIST = "50"
 HOST_DISCONNECT_GRACE_MS = "12000"
 PLAYER_RECONNECT_GRACE_MS = "45000"
@@ -120,8 +121,9 @@ class_name = "RoomDirectoryDO"
 name = "PLAYER_PROFILES"
 class_name = "PlayerProfileDO"
 
-[[env.production.d1_databases]]
-binding = "DB"
-database_name = "world-of-adventure-accounts"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
-migrations_dir = "workers/multiplayer/migrations"
+# Optional dedicated Cloudflare D1 binding (when omitted, accounts persist in PlayerProfileDO SQLite storage).
+# [[env.production.d1_databases]]
+# binding = "DB"
+# database_name = "world-of-adventure-accounts"
+# database_id = "<YOUR_REAL_D1_UUID>"
+# migrations_dir = "workers/multiplayer/migrations"
