@@ -7,6 +7,7 @@ import {
   LogOut,
   Play,
   PlusCircle,
+  RotateCw,
   Settings,
   Smartphone,
   User,
@@ -28,6 +29,7 @@ import {
   isPortraitTipDismissed,
 } from '../../game/settings/AppUpdateService';
 import { useMenuNavigation } from '../../hooks/useMenuNavigation';
+import { useScreenOrientation } from '../../utils/screenOrientation';
 import { AvatarBadge } from '../profile/AvatarBadge';
 import { MainMenuButton } from './MainMenuButton';
 
@@ -70,6 +72,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   const [showPortraitTip, setShowPortraitTip] = useState<boolean>(
     () => isMobilePhoneDevice() && !isPortraitTipDismissed(),
   );
+  const { orientation, showOrientationToggle, toggleOrientation } =
+    useScreenOrientation();
   const [profileSnap, setProfileSnap] = React.useState(() =>
     ProfileManager.getSnapshot(),
   );
@@ -164,6 +168,44 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             <Languages className="w-4 h-4 text-[#e5a93c]" />
             <span>{lang === 'en' ? 'العربية' : 'English'}</span>
           </button>
+
+          {showOrientationToggle && (
+            <button
+              type="button"
+              data-testid="title-orientation-toggle"
+              onClick={toggleOrientation}
+              aria-label={
+                orientation === 'landscape'
+                  ? lang === 'ar'
+                    ? 'التبديل إلى الوضع العمودي'
+                    : 'Switch to Portrait'
+                  : lang === 'ar'
+                    ? 'التبديل إلى الوضع الأفقي'
+                    : 'Switch to Landscape'
+              }
+              title={
+                orientation === 'landscape'
+                  ? lang === 'ar'
+                    ? 'التبديل إلى الوضع العمودي'
+                    : 'Switch to Portrait'
+                  : lang === 'ar'
+                    ? 'التبديل إلى الوضع الأفقي'
+                    : 'Switch to Landscape'
+              }
+              className="woa-surface pointer-events-auto inline-flex items-center gap-1.5 min-h-[44px] px-3 py-2 rounded-xl bg-[#0e1a14]/78 backdrop-blur-md border border-white/15 text-xs font-medium text-[#e9efe6] hover:bg-[#182920] transition-colors focus-visible:outline-2 focus-visible:outline-[#e5a93c] whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <RotateCw className="w-4 h-4 text-[#e5a93c]" />
+              <span>
+                {orientation === 'landscape'
+                  ? lang === 'ar'
+                    ? 'عمودي'
+                    : 'Portrait'
+                  : lang === 'ar'
+                    ? 'أفقي'
+                    : 'Landscape'}
+              </span>
+            </button>
+          )}
 
           <button
             type="button"

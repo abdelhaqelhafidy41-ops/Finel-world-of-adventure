@@ -14,6 +14,7 @@ import {
   Moon,
   Play,
   RotateCcw,
+  RotateCw,
   Save,
   Settings,
   Sliders,
@@ -37,6 +38,7 @@ import {
 } from '../game/world/WeatherManager';
 import { UI_TEXT, type Language } from '../game/i18n/translations';
 import { useMenuNavigation } from '../hooks/useMenuNavigation';
+import { useScreenOrientation } from '../utils/screenOrientation';
 import { ExitConfirmationDialog } from './menu/ExitConfirmationDialog';
 
 interface PauseMenuProps {
@@ -119,6 +121,8 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [unsavedPromptOpen, setUnsavedPromptOpen] = useState(false);
   const [exitPromptOpen, setExitPromptOpen] = useState(false);
+  const { orientation, showOrientationToggle, toggleOrientation } =
+    useScreenOrientation();
 
   const dayDurationSec = timeSnapshot?.fullDayDurationSeconds ?? 360;
   const weatherTarget = weatherSnapshot?.targetState ?? 'clear';
@@ -185,6 +189,44 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
               <Languages className="w-3.5 h-3.5 text-[#e5a93c]" />
               <span>{lang === 'en' ? 'العربية' : 'English'}</span>
             </button>
+
+            {showOrientationToggle && (
+              <button
+                type="button"
+                data-testid="pause-orientation-toggle"
+                onClick={toggleOrientation}
+                aria-label={
+                  orientation === 'landscape'
+                    ? lang === 'ar'
+                      ? 'التبديل إلى الوضع العمودي'
+                      : 'Switch to Portrait'
+                    : lang === 'ar'
+                      ? 'التبديل إلى الوضع الأفقي'
+                      : 'Switch to Landscape'
+                }
+                title={
+                  orientation === 'landscape'
+                    ? lang === 'ar'
+                      ? 'التبديل إلى الوضع العمودي'
+                      : 'Switch to Portrait'
+                    : lang === 'ar'
+                      ? 'التبديل إلى الوضع الأفقي'
+                      : 'Switch to Landscape'
+                }
+                className="min-h-[40px] inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#192b22] hover:bg-[#22392d] border border-[#2f493b] text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <RotateCw className="w-3.5 h-3.5 text-[#e5a93c]" />
+                <span>
+                  {orientation === 'landscape'
+                    ? lang === 'ar'
+                      ? 'عمودي'
+                      : 'Portrait'
+                    : lang === 'ar'
+                      ? 'أفقي'
+                      : 'Landscape'}
+                </span>
+              </button>
+            )}
 
             <button
               type="button"

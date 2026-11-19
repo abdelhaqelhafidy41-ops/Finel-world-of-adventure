@@ -84,6 +84,26 @@ public class MainActivity extends BridgeActivity {
             }
             return lanServer.discoverLanHostsJson(timeoutMs);
         }
+
+        @JavascriptInterface
+        public void setOrientation(String mode) {
+            runOnUiThread(() -> {
+                if ("landscape".equalsIgnoreCase(mode)) {
+                    setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+                } else if ("portrait".equalsIgnoreCase(mode)) {
+                    setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT);
+                } else {
+                    setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR);
+                }
+                hideSystemBars();
+            });
+        }
+
+        @JavascriptInterface
+        public String getOrientation() {
+            int current = getResources().getConfiguration().orientation;
+            return current == Configuration.ORIENTATION_LANDSCAPE ? "landscape" : "portrait";
+        }
     }
 
     @Override

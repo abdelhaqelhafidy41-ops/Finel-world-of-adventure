@@ -32,6 +32,8 @@ interface AndroidNativeBridgeApi {
   getLanStatus?: () => string;
   getLocalIp?: () => string;
   discoverLanHosts?: (timeoutMs: number) => string;
+  setOrientation?: (mode: string) => void;
+  getOrientation?: () => string;
 }
 
 interface CapacitorGlobal {
