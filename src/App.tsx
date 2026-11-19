@@ -79,6 +79,7 @@ import {
   createMultiplayerService,
   loadSavedMultiplayerName,
 } from './game/multiplayer/MultiplayerService';
+import { SwitchingMultiplayerTransport } from './game/multiplayer/MultiplayerTransport';
 import { extractJoinTargetFromUrl } from './game/multiplayer/inviteUtils';
 import type {
   IMultiplayerService,
@@ -159,7 +160,9 @@ export default function App() {
   }
   const multiplayerServiceRef = useRef<IMultiplayerService | null>(null);
   if (!multiplayerServiceRef.current) {
-    multiplayerServiceRef.current = createMultiplayerService();
+    multiplayerServiceRef.current = new SwitchingMultiplayerTransport(
+      createMultiplayerService(),
+    );
   }
 
   const [language, setLanguage] = useState<Language>(() => loadSavedLanguage());

@@ -19,6 +19,8 @@ import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
 
+    private LanMultiplayerServer lanServer;
+
     private class AndroidNativeBridge {
         @JavascriptInterface
         public void exitApp() {
@@ -45,15 +47,59 @@ public class MainActivity extends BridgeActivity {
                 startActivity(chooser);
             });
         }
+
+        @JavascriptInterface
+        public String startLanHost(int port, String roomOptionsJson) {
+            if (lanServer == null) {
+                lanServer = new LanMultiplayerServer(MainActivity.this);
+            }
+            return lanServer.startHostJson(port, roomOptionsJson);
+        }
+
+        @JavascriptInterface
+        public String stopLanHost() {
+            if (lanServer == null) return "{\"ok\":true}";
+            return lanServer.stopHostJson();
+        }
+
+        @JavascriptInterface
+        public String getLanStatus() {
+            if (lanServer == null) {
+                lanServer = new LanMultiplayerServer(MainActivity.this);
+            }
+            return lanServer.getStatusJson();
+        }
+
+        @JavascriptInterface
+        public String getLocalIp() {
+            return LanMultiplayerServer.getPrimaryLanIp();
+        }
+
+        @JavascriptInterface
+        public String discoverLanHosts(int timeoutMs) {
+            if (lanServer == null) {
+                lanServer = new LanMultiplayerServer(MainActivity.this);
+            }
+            return lanServer.discoverLanHostsJson(timeoutMs);
+        }
     }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        lanServer = new LanMultiplayerServer(this);
         configureFullscreen();
         configureWebView();
         registerBackButtonHandler();
         handleJoinIntent(getIntent());
+    }
+
+    @Override
+    public void onDestroy() {
+        if (lanServer != null) {
+            lanServer.stopHostJson();
+        }
+        super.onDestroy();
     }
 
     @Override

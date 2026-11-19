@@ -10,6 +10,14 @@ const {
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const {
+  OfflineLanServer,
+  discoverLanHosts,
+  getPrimaryLanIp,
+  DEFAULT_LAN_PORT,
+} = require('./lanServer.cjs');
+
+const lanServer = new OfflineLanServer();
 
 const APP_NAME = 'World of Adventure';
 const APP_SCHEME = 'app';
@@ -193,7 +201,38 @@ ipcMain.handle('desktop:is-fullscreen', () => {
 });
 
 ipcMain.handle('desktop:quit-app', () => {
+  void lanServer.stop();
   app.quit();
+});
+
+ipcMain.handle('lan:start-host', async (_event, opts = {}) => {
+  try {
+    const port = opts && typeof opts.port === 'number' ? opts.port : DEFAULT_LAN_PORT;
+    return await lanServer.start(port, opts && opts.roomOptions ? opts.roomOptions : null);
+  } catch (err) {
+    const code = err && err.code ? String(err.code) : 'LAN_START_FAILED';
+    const firewallHint =
+      code === 'EACCES' || code === 'EPERM'
+        ? 'Windows Firewall or network permissions blocked the local LAN server. Allow World of Adventure on Private Networks in Windows Defender Firewall.'
+        : (err && err.message) || 'Failed to start local LAN server.';
+    return { ok: false, error: code, message: firewallHint };
+  }
+});
+
+ipcMain.handle('lan:stop-host', async () => {
+  return lanServer.stop();
+});
+
+ipcMain.handle('lan:get-status', () => {
+  return lanServer.getStatus();
+});
+
+ipcMain.handle('lan:get-local-ip', () => {
+  return getPrimaryLanIp();
+});
+
+ipcMain.handle('lan:discover', async (_event, timeoutMs = 1500) => {
+  return discoverLanHosts(timeoutMs);
 });
 
 app.on('second-instance', () => {
@@ -219,7 +258,12 @@ app.whenReady().then(() => {
   });
 });
 
+app.on('before-quit', () => {
+  void lanServer.stop();
+});
+
 app.on('window-all-closed', () => {
+  void lanServer.stop();
   if (process.platform !== 'darwin') {
     app.quit();
   }

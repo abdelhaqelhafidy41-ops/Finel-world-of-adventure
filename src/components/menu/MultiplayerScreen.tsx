@@ -78,9 +78,13 @@ import { ConnectionStatusBanner } from '../multiplayer/ConnectionStatusBanner';
 import { AvatarBadge } from '../profile/AvatarBadge';
 import { PlayerProfileModal } from '../profile/PlayerProfileModal';
 import { ProfileSetupModal } from '../profile/ProfileSetupModal';
+import { isSwitchingMultiplayerTransport } from '../../game/multiplayer/MultiplayerTransport';
+import { LanMultiplayerScreen } from './LanMultiplayerScreen';
 import { MainMenuButton } from './MainMenuButton';
 
 export type MultiplayerSubView =
+  | 'modeSelect'
+  | 'offlineLan'
   | 'hub'
   | 'createRoom'
   | 'joinRoom'
@@ -113,9 +117,16 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
     [injectedService],
   );
 
+  const transport = isSwitchingMultiplayerTransport(service) ? service : null;
   const initialRoom = service.getRoomState();
   const [subView, setSubView] = useState<MultiplayerSubView>(() =>
-    initialRoom ? 'lobby' : initialJoinCode ? 'joinRoom' : 'hub',
+    initialRoom
+      ? transport?.getActiveMode() === 'lan'
+        ? 'offlineLan'
+        : 'lobby'
+      : initialJoinCode
+        ? 'joinRoom'
+        : 'modeSelect',
   );
   const [returnToLobbyAfterFriends, setReturnToLobbyAfterFriends] =
     useState(false);
@@ -448,8 +459,16 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
 
   const handleNavigateBack = useCallback(() => {
     clearNotices();
-    if (subView === 'hub') {
+    if (subView === 'modeSelect') {
       onBack();
+      return;
+    }
+    if (subView === 'offlineLan') {
+      setSubView('modeSelect');
+      return;
+    }
+    if (subView === 'hub') {
+      setSubView('modeSelect');
       return;
     }
     if (subView === 'inviteFriends') {
@@ -882,19 +901,23 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
   ];
 
   const headerTitle =
-    subView === 'createRoom'
-      ? t.mpCreateRoom
-      : subView === 'joinRoom'
-        ? t.mpJoinRoom
-        : subView === 'friends'
-          ? t.mpFriends
-          : subView === 'invites'
-            ? t.mpInvites
-            : subView === 'inviteFriends'
-              ? t.mpInviteFriends
-              : subView === 'lobby'
-                ? activeRoom?.roomName || t.mpLobbyTitle
-                : t.menuMultiplayer;
+    subView === 'offlineLan'
+      ? lang === 'ar'
+        ? 'اللعب المحلي (OFFLINE LAN)'
+        : 'OFFLINE LAN'
+      : subView === 'createRoom'
+        ? t.mpCreateRoom
+        : subView === 'joinRoom'
+          ? t.mpJoinRoom
+          : subView === 'friends'
+            ? t.mpFriends
+            : subView === 'invites'
+              ? t.mpInvites
+              : subView === 'inviteFriends'
+                ? t.mpInviteFriends
+                : subView === 'lobby'
+                  ? activeRoom?.roomName || t.mpLobbyTitle
+                  : t.menuMultiplayer;
 
   const headerSubtitle =
     subView === 'friends'
@@ -1091,6 +1114,105 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
 
         {/* Main Scrollable Content */}
         <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-4">
+          {/* 0. MULTIPLAYER MODE SELECTOR (ONLINE vs OFFLINE LAN) */}
+          {subView === 'modeSelect' && (
+            <div className="space-y-4" data-testid="mp-mode-select-view">
+              <div className="grid grid-cols-1 gap-3">
+                <button
+                  type="button"
+                  data-testid="mp-mode-online-btn"
+                  onClick={() => {
+                    clearNotices();
+                    transport?.useOnlineMode();
+                    setSubView('hub');
+                  }}
+                  className="w-full p-4 rounded-2xl bg-[#13231b] hover:bg-[#192f24] border border-[#2f4d3d] hover:border-[#e5a93c]/70 text-start transition cursor-pointer flex items-center justify-between gap-4"
+                >
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    <div className="w-11 h-11 rounded-xl bg-[#272011] border border-[#e5a93c]/45 flex items-center justify-center shrink-0">
+                      <Globe className="w-6 h-6 text-[#e5a93c]" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-display font-bold text-base sm:text-lg text-white">
+                          {lang === 'ar'
+                            ? 'اللعب أونلاين (ONLINE MULTIPLAYER)'
+                            : 'ONLINE MULTIPLAYER'}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-[#2a2313] border border-[#e5a93c]/45 text-[10px] font-bold text-[#f7d488] uppercase">
+                          {lang === 'ar' ? 'إنترنت' : 'Internet'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#9db1a1] mt-0.5">
+                        {lang === 'ar'
+                          ? 'غرف عبر الإنترنت، الأصدقاء، الدعوات، والانضمام السريع.'
+                          : 'Global online rooms, friends, invites, and quick join.'}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  data-testid="mp-mode-lan-btn"
+                  onClick={() => {
+                    clearNotices();
+                    setSubView('offlineLan');
+                  }}
+                  className="w-full p-4 rounded-2xl bg-[#11241a] hover:bg-[#163123] border border-[#325d45] hover:border-[#7fe094]/80 text-start transition cursor-pointer flex items-center justify-between gap-4"
+                >
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    <div className="w-11 h-11 rounded-xl bg-[#173624] border border-[#7fe094]/50 flex items-center justify-center shrink-0">
+                      <Wifi className="w-6 h-6 text-[#7fe094]" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-display font-bold text-base sm:text-lg text-white">
+                          {lang === 'ar'
+                            ? 'اللعب المحلي (OFFLINE LAN)'
+                            : 'OFFLINE LAN'}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-[#183926] border border-[#7fe094]/45 text-[10px] font-bold text-[#9ef0b0] uppercase">
+                          {lang === 'ar'
+                            ? 'بدون إنترنت · 4 لاعبين'
+                            : 'No Internet · Max 4'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#9dc4a8] mt-0.5">
+                        {lang === 'ar'
+                          ? 'العب مع الأصدقاء على نفس شبكة Wi-Fi بدون الحاجة للإنترنت (حتى 4 لاعبين).'
+                          : 'Play over local Wi-Fi with zero Internet required (up to 4 players).'}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              </div>
+
+              <MainMenuButton
+                testId="mp-mode-back-btn"
+                label={t.backBtn}
+                icon={
+                  <ArrowLeft className={`w-5 h-5 ${isRtl ? 'rotate-180' : ''}`} />
+                }
+                isRtl={isRtl}
+                onClick={onBack}
+              />
+            </div>
+          )}
+
+          {/* 0B. OFFLINE LAN SCREEN */}
+          {subView === 'offlineLan' && (
+            <LanMultiplayerScreen
+              lang={lang}
+              service={service}
+              onStartMultiplayerWorld={onStartMultiplayerWorld}
+              onBack={() => {
+                clearNotices();
+                setSubView('modeSelect');
+              }}
+            />
+          )}
+
           {/* 1. MULTIPLAYER HUB */}
           {subView === 'hub' && (
             <div className="space-y-4" data-testid="mp-hub-view">

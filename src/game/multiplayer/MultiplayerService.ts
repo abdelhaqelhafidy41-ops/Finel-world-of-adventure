@@ -582,6 +582,12 @@ export class MultiplayerService implements IMultiplayerService {
           settled = true;
           console.error('[Multiplayer] WebSocket connection timed out.');
           listenerAbort.abort();
+          if (this.socket === ws) {
+            this.socket = null;
+          }
+          if (this.socketListenerAbort === listenerAbort) {
+            this.socketListenerAbort = null;
+          }
           try {
             ws.close();
           } catch {
@@ -592,7 +598,7 @@ export class MultiplayerService implements IMultiplayerService {
           }
           reject(new Error('Unable to connect to multiplayer server.'));
         }
-      }, 10_000);
+      }, 15_000);
 
       ws.addEventListener(
         'open',
