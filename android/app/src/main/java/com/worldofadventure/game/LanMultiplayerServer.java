@@ -46,6 +46,7 @@ public class LanMultiplayerServer {
     private static final String DISCOVERY_MAGIC = "WOA_LAN_V1";
     private static final String WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     private static final String[] AVATAR_COLORS = {"#6ab06e", "#e5a93c", "#58b4d1", "#d96b6b"};
+    private static final String[] PARTY_MARKER_COLORS = {"#3b82f6", "#10b981", "#f59e0b", "#ec4899"};
     private static final String CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
     private final Context appContext;
@@ -64,6 +65,27 @@ public class LanMultiplayerServer {
     private final Map<String, PlayerSession> sessions = new ConcurrentHashMap<>();
     private final List<JSONObject> chatHistory = Collections.synchronizedList(new ArrayList<>());
 
+    private static final class PartyRecord {
+        String partyId;
+        String roomId;
+        String leaderPlayerId;
+        long createdAt;
+        final List<String> memberIds = new ArrayList<>();
+        JSONObject activeObjective = null;
+    }
+
+    private static final class PartyInviteRecord {
+        String inviteId;
+        String partyId;
+        String roomId;
+        String fromPlayerId;
+        String fromPlayerName;
+        String toPlayerId;
+        String toPlayerName;
+        long createdAt;
+        String status = "pending";
+    }
+
     private static final class RoomRecord {
         String roomId;
         String roomCode;
@@ -76,9 +98,13 @@ public class LanMultiplayerServer {
         String hostName;
         String status;
         long createdAt;
+        String worldSettingsPermission = "HOST_ONLY";
+        boolean friendlyFire = false;
         JSONObject worldTime;
         JSONObject worldWeather;
         final Map<String, PlayerRecord> players = new LinkedHashMap<>();
+        final Map<String, PartyRecord> parties = new LinkedHashMap<>();
+        final Map<String, PartyInviteRecord> partyInvites = new LinkedHashMap<>();
     }
 
     private static final class PlayerRecord {
@@ -89,6 +115,13 @@ public class LanMultiplayerServer {
         boolean isReady;
         long joinedAt;
         String avatarColor;
+        String partyId = null;
+        boolean partyReady = false;
+        long partyJoinedAt = 0;
+        int level = 1;
+        int health = 100;
+        int maxHealth = 100;
+        boolean isDead = false;
         JSONObject state;
     }
 
@@ -209,6 +242,7 @@ public class LanMultiplayerServer {
                 acquireMulticastLock();
                 startAcceptLoop(ss);
                 startDiscoveryResponder();
+                startTimeSyncLoop();
             }
 
             JSONObject hostSession = null;
@@ -385,6 +419,214 @@ public class LanMultiplayerServer {
                 }
             }
         });
+    }
+
+    private void startTimeSyncLoop() {
+        executor.execute(() -> {
+            while (running) {
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException ignored) {
+                    break;
+                }
+                if (!running) break;
+                synchronized (roomLock) {
+                    if (room == null || !"in-game".equals(room.status)) continue;
+                    boolean hasOpen = false;
+                    for (PlayerSession s : sessions.values()) {
+                        if (s.open) {
+                            hasOpen = true;
+                            break;
+                        }
+                    }
+                    if (!hasOpen) continue;
+                    try {
+                        long now = System.currentTimeMillis();
+                        JSONObject wt = materializeWorldTime(now);
+                        JSONObject out = new JSONObject();
+                        out.put("worldTime", wt);
+                        out.put("serverTimestamp", now);
+                        out.put("updatedBy", room.hostId);
+                        broadcast("WORLD_TIME_CHANGED", "server", out, null);
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+        });
+    }
+
+    private JSONObject materializeWorldTime(long now) throws Exception {
+        if (room == null || room.worldTime == null) {
+            JSONObject def = new JSONObject();
+            def.put("worldHours", 8.5);
+            def.put("dayCount", 1);
+            def.put("timeScale", 1.0);
+            def.put("paused", false);
+            def.put("fullDayDurationSeconds", 360);
+            def.put("anchorServerMs", now);
+            return def;
+        }
+        JSONObject wt = room.worldTime;
+        double fullDaySec = wt.optDouble("fullDayDurationSeconds", 360.0);
+        if (Double.isNaN(fullDaySec) || Double.isInfinite(fullDaySec)) fullDaySec = 360.0;
+        fullDaySec = Math.max(30.0, Math.min(1800.0, fullDaySec));
+
+        double timeScale = wt.optDouble("timeScale", 1.0);
+        if (Double.isNaN(timeScale) || Double.isInfinite(timeScale)) timeScale = 1.0;
+        timeScale = Math.max(0.0, Math.min(10.0, timeScale));
+
+        double worldHours = wt.optDouble("worldHours", 8.5);
+        if (Double.isNaN(worldHours) || Double.isInfinite(worldHours)) worldHours = 8.5;
+        worldHours = ((worldHours % 24.0) + 24.0) % 24.0;
+
+        int dayCount = Math.max(1, wt.optInt("dayCount", 1));
+        boolean paused = wt.optBoolean("paused", false);
+        long anchorMs = wt.optLong("anchorServerMs", now);
+
+        if (!paused && timeScale > 0 && fullDaySec > 0 && now > anchorMs) {
+            double elapsedSec = Math.max(0.0, (now - anchorMs) / 1000.0);
+            double total = worldHours + elapsedSec * (24.0 / fullDaySec) * timeScale;
+            if (total >= 24.0) {
+                dayCount += (int) Math.floor(total / 24.0);
+            }
+            worldHours = ((total % 24.0) + 24.0) % 24.0;
+        }
+
+        worldHours = Math.round(worldHours * 1000.0) / 1000.0;
+        wt.put("worldHours", worldHours);
+        wt.put("dayCount", dayCount);
+        wt.put("timeScale", timeScale);
+        wt.put("paused", paused);
+        wt.put("fullDayDurationSeconds", fullDaySec);
+        wt.put("anchorServerMs", now);
+        return new JSONObject(wt.toString());
+    }
+
+    private JSONObject serializeParty(PartyRecord party) throws Exception {
+        JSONObject po = new JSONObject();
+        po.put("partyId", party.partyId);
+        po.put("roomId", party.roomId);
+        po.put("leaderPlayerId", party.leaderPlayerId);
+        po.put("maxMembers", MAX_LAN_PLAYERS);
+        po.put("createdAt", party.createdAt);
+        po.put("activeObjective", party.activeObjective != null ? new JSONObject(party.activeObjective.toString()) : JSONObject.NULL);
+        JSONArray members = new JSONArray();
+        int idx = 0;
+        for (String pid : party.memberIds) {
+            PlayerRecord p = room != null ? room.players.get(pid) : null;
+            if (p == null) continue;
+            JSONObject mo = new JSONObject();
+            mo.put("playerId", p.playerId);
+            mo.put("displayName", p.displayName);
+            mo.put("avatarColor", p.avatarColor);
+            mo.put("level", p.level);
+            mo.put("health", p.health);
+            mo.put("maxHealth", p.maxHealth);
+            mo.put("isDead", p.isDead);
+            mo.put("online", true);
+            mo.put("isReady", p.partyReady);
+            mo.put("joinedAt", p.partyJoinedAt > 0 ? p.partyJoinedAt : p.joinedAt);
+            mo.put("markerIndex", idx);
+            mo.put("markerColor", PARTY_MARKER_COLORS[idx % PARTY_MARKER_COLORS.length]);
+            members.put(mo);
+            idx++;
+        }
+        po.put("members", members);
+        return po;
+    }
+
+    private JSONObject serializePartyInvite(PartyInviteRecord inv) throws Exception {
+        JSONObject o = new JSONObject();
+        o.put("inviteId", inv.inviteId);
+        o.put("partyId", inv.partyId);
+        o.put("roomId", inv.roomId);
+        o.put("fromPlayerId", inv.fromPlayerId);
+        o.put("fromPlayerName", inv.fromPlayerName);
+        o.put("toPlayerId", inv.toPlayerId);
+        o.put("toPlayerName", inv.toPlayerName);
+        o.put("createdAt", inv.createdAt);
+        o.put("status", inv.status);
+        return o;
+    }
+
+    private JSONObject buildPartySnapshotForPlayer(String playerId) throws Exception {
+        JSONObject snap = new JSONObject();
+        if (room == null) {
+            snap.put("party", JSONObject.NULL);
+            snap.put("pendingInvites", new JSONArray());
+            snap.put("outgoingInvites", new JSONArray());
+            return snap;
+        }
+        PlayerRecord p = room.players.get(playerId);
+        PartyRecord party = (p != null && p.partyId != null) ? room.parties.get(p.partyId) : null;
+        snap.put("party", party != null ? serializeParty(party) : JSONObject.NULL);
+        JSONArray pending = new JSONArray();
+        JSONArray outgoing = new JSONArray();
+        for (PartyInviteRecord inv : room.partyInvites.values()) {
+            if (!"pending".equals(inv.status)) continue;
+            if (playerId.equals(inv.toPlayerId)) pending.put(serializePartyInvite(inv));
+            if (playerId.equals(inv.fromPlayerId)) outgoing.put(serializePartyInvite(inv));
+        }
+        snap.put("pendingInvites", pending);
+        snap.put("outgoingInvites", outgoing);
+        return snap;
+    }
+
+    private void broadcastAllPartyStates() {
+        if (room == null) return;
+        for (String pid : room.players.keySet()) {
+            try {
+                sendTo(pid, "PARTY_STATE", buildPartySnapshotForPlayer(pid));
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private void removePlayerFromParty(String playerId) {
+        if (room == null) return;
+        List<String> toRemove = new ArrayList<>();
+        for (Map.Entry<String, PartyInviteRecord> e : room.partyInvites.entrySet()) {
+            if (playerId.equals(e.getValue().fromPlayerId) || playerId.equals(e.getValue().toPlayerId)) {
+                toRemove.add(e.getKey());
+            }
+        }
+        for (String invId : toRemove) {
+            room.partyInvites.remove(invId);
+        }
+        PlayerRecord p = room.players.get(playerId);
+        if (p == null || p.partyId == null) return;
+        PartyRecord party = room.parties.get(p.partyId);
+        p.partyId = null;
+        p.partyReady = false;
+        if (party == null) return;
+        party.memberIds.remove(playerId);
+        if (party.memberIds.isEmpty()) {
+            room.parties.remove(party.partyId);
+        } else if (playerId.equals(party.leaderPlayerId)) {
+            party.leaderPlayerId = party.memberIds.get(0);
+        }
+    }
+
+    private JSONObject buildWorldSnapshotForPlayer(String playerId, long now) throws Exception {
+        JSONObject ws = new JSONObject();
+        ws.put("worldSettingsPermission", room.worldSettingsPermission);
+        JSONObject worldSettings = new JSONObject();
+        worldSettings.put("worldType", room.worldType);
+        worldSettings.put("difficulty", room.difficulty);
+        worldSettings.put("pvpEnabled", false);
+        worldSettings.put("friendlyFire", room.friendlyFire);
+        worldSettings.put("staminaUnlimited", "creative".equals(room.worldType));
+        worldSettings.put("spawnX", 0);
+        worldSettings.put("spawnY", 0);
+        worldSettings.put("spawnZ", 4);
+        ws.put("worldSettings", worldSettings);
+        ws.put("worldTime", materializeWorldTime(now));
+        ws.put("worldWeather", new JSONObject(room.worldWeather.toString()));
+        ws.put("serverTimestamp", now);
+        ws.put("partyState", buildPartySnapshotForPlayer(playerId));
+        ws.put("coopQuests", new JSONArray());
+        ws.put("bossEncounters", new JSONArray());
+        return ws;
     }
 
     private void startDiscoveryResponder() {
@@ -665,22 +907,22 @@ public class LanMultiplayerServer {
             r.createdAt = System.currentTimeMillis();
 
             r.worldTime = new JSONObject();
-            r.worldTime.put("normalizedTime", 0.32);
+            r.worldTime.put("worldHours", 8.5);
             r.worldTime.put("dayCount", 1);
             r.worldTime.put("fullDayDurationSeconds", 360);
-            r.worldTime.put("timeScale", 1);
+            r.worldTime.put("timeScale", 1.0);
             r.worldTime.put("paused", false);
-            r.worldTime.put("serverTimestamp", r.createdAt);
+            r.worldTime.put("anchorServerMs", r.createdAt);
 
             r.worldWeather = new JSONObject();
             r.worldWeather.put("currentState", "clear");
             r.worldWeather.put("targetState", "clear");
-            r.worldWeather.put("transitionProgress", 1);
             r.worldWeather.put("intensity", 0);
             r.worldWeather.put("dynamicEnabled", true);
             r.worldWeather.put("transitionDurationSeconds", 14);
-            r.worldWeather.put("windSpeedKmh", 12);
-            r.worldWeather.put("serverTimestamp", r.createdAt);
+            r.worldWeather.put("startMs", r.createdAt);
+            r.worldWeather.put("durationMs", 240000);
+            r.worldWeather.put("endMs", r.createdAt + 240000);
 
             PlayerRecord host = new PlayerRecord();
             host.playerId = r.hostId;
@@ -689,8 +931,9 @@ public class LanMultiplayerServer {
             host.isHost = true;
             host.isReady = true;
             host.joinedAt = r.createdAt;
+            host.partyJoinedAt = r.createdAt;
             host.avatarColor = AVATAR_COLORS[0];
-            host.state = defaultPlayerState(0);
+            host.state = defaultPlayerState(0, host.networkEntityId, r.createdAt);
             r.players.put(host.playerId, host);
 
             String token = randomId("tok", 16);
@@ -742,8 +985,9 @@ public class LanMultiplayerServer {
             p.isHost = false;
             p.isReady = false;
             p.joinedAt = System.currentTimeMillis();
+            p.partyJoinedAt = p.joinedAt;
             p.avatarColor = AVATAR_COLORS[room.players.size() % AVATAR_COLORS.length];
-            p.state = defaultPlayerState((room.players.size() - 1) * 2.2);
+            p.state = defaultPlayerState((room.players.size() - 1) * 2.2, p.networkEntityId, p.joinedAt);
 
             String token = randomId("tok", 16);
             room.players.put(p.playerId, p);
@@ -766,6 +1010,7 @@ public class LanMultiplayerServer {
         synchronized (roomLock) {
             if (room == null || !room.players.containsKey(playerId)) return;
             boolean isHost = playerId.equals(room.hostId);
+            removePlayerFromParty(playerId);
             PlayerSession sess = sessions.remove(playerId);
             if (sess != null) sess.close(1000, reason);
             room.players.remove(playerId);
@@ -793,6 +1038,7 @@ public class LanMultiplayerServer {
                 leavePayload.put("room", snap);
                 broadcast("PLAYER_LEAVE", playerId, leavePayload, null);
                 broadcast("ROOM_STATE", "server", snap, null);
+                broadcastAllPartyStates();
             } catch (Exception ignored) {
             }
         }
@@ -814,13 +1060,18 @@ public class LanMultiplayerServer {
                     case "CONNECT": {
                         String name = sanitizeText(payload.optString("displayName", ""), 24, "");
                         if (!name.isEmpty()) player.displayName = name;
+                        long now = System.currentTimeMillis();
                         JSONObject snap = buildRoomSnapshot();
                         JSONObject connectRes = new JSONObject();
                         connectRes.put("playerId", playerId);
                         connectRes.put("room", snap);
-                        connectRes.put("chatHistory", new JSONArray(chatHistory));
                         sendTo(playerId, "CONNECT", connectRes);
                         broadcast("ROOM_STATE", "server", snap, null);
+                        sendTo(playerId, "WORLD_SNAPSHOT", buildWorldSnapshotForPlayer(playerId, now));
+                        JSONObject chatHist = new JSONObject();
+                        chatHist.put("messages", new JSONArray(chatHistory));
+                        sendTo(playerId, "CHAT_HISTORY", chatHist);
+                        sendTo(playerId, "PARTY_STATE", buildPartySnapshotForPlayer(playerId));
                         if ("in-game".equals(room.status)) {
                             sendTo(playerId, "START_GAME", buildGameStartPayload(snap));
                         }
@@ -840,19 +1091,68 @@ public class LanMultiplayerServer {
                     }
                     case "START_GAME": {
                         if (!playerId.equals(room.hostId)) return;
+                        long now = System.currentTimeMillis();
                         room.status = "in-game";
+                        materializeWorldTime(now);
                         JSONObject snap = buildRoomSnapshot();
                         broadcast("ROOM_STATE", "server", snap, null);
+                        for (String pid : room.players.keySet()) {
+                            sendTo(pid, "WORLD_SNAPSHOT", buildWorldSnapshotForPlayer(pid, now));
+                        }
                         broadcast("START_GAME", playerId, buildGameStartPayload(snap), null);
                         break;
                     }
                     case "PLAYER_STATE": {
-                        player.state = payload;
-                        JSONObject outPayload = new JSONObject();
-                        outPayload.put("playerId", playerId);
-                        outPayload.put("state", payload);
-                        outPayload.put("serverTimestamp", System.currentTimeMillis());
-                        broadcast("PLAYER_STATE", playerId, outPayload, playerId);
+                        double x = payload.optDouble("x", Double.NaN);
+                        double y = payload.optDouble("y", Double.NaN);
+                        double z = payload.optDouble("z", Double.NaN);
+                        if (Double.isNaN(x) || Double.isNaN(y) || Double.isNaN(z)) return;
+                        long now = System.currentTimeMillis();
+                        JSONObject flat = new JSONObject();
+                        flat.put("x", Math.round(x * 1000.0) / 1000.0);
+                        flat.put("y", Math.round(y * 1000.0) / 1000.0);
+                        flat.put("z", Math.round(z * 1000.0) / 1000.0);
+                        flat.put("yaw", Math.round(payload.optDouble("yaw", 0.0) * 1000.0) / 1000.0);
+                        if (payload.has("aimYaw") && !Double.isNaN(payload.optDouble("aimYaw", Double.NaN))) {
+                            flat.put("aimYaw", Math.round(payload.optDouble("aimYaw", 0.0) * 1000.0) / 1000.0);
+                        }
+                        if (payload.has("pitch") && !Double.isNaN(payload.optDouble("pitch", Double.NaN))) {
+                            flat.put("pitch", Math.round(payload.optDouble("pitch", 0.0) * 1000.0) / 1000.0);
+                        }
+                        flat.put("vx", Math.round(payload.optDouble("vx", 0.0) * 100.0) / 100.0);
+                        flat.put("vy", Math.round(payload.optDouble("vy", 0.0) * 100.0) / 100.0);
+                        flat.put("vz", Math.round(payload.optDouble("vz", 0.0) * 100.0) / 100.0);
+                        String ms = payload.optString("movementState", "idle");
+                        if (!"idle".equals(ms) && !"walking".equals(ms) && !"running".equals(ms) && !"jumping".equals(ms) && !"falling".equals(ms)) {
+                            ms = "idle";
+                        }
+                        flat.put("movementState", ms);
+                        if (payload.has("animState") && !payload.optString("animState", "").isEmpty()) {
+                            flat.put("animState", payload.optString("animState"));
+                        }
+                        flat.put("sprinting", payload.optBoolean("sprinting", false));
+                        flat.put("jumping", payload.optBoolean("jumping", false));
+                        flat.put("crouching", payload.optBoolean("crouching", false));
+                        flat.put("grounded", payload.optBoolean("grounded", true));
+                        if (payload.has("weaponId")) {
+                            if (payload.isNull("weaponId")) {
+                                flat.put("weaponId", JSONObject.NULL);
+                            } else {
+                                flat.put("weaponId", payload.optString("weaponId"));
+                            }
+                        }
+                        if (payload.has("bowCharging")) flat.put("bowCharging", payload.optBoolean("bowCharging", false));
+                        if (payload.has("bowCharge")) flat.put("bowCharge", Math.max(0.0, Math.min(1.0, payload.optDouble("bowCharge", 0.0))));
+                        if (payload.has("shooting")) flat.put("shooting", payload.optBoolean("shooting", false));
+                        if (payload.has("reloading")) flat.put("reloading", payload.optBoolean("reloading", false));
+                        if (payload.has("seq")) flat.put("seq", payload.optInt("seq", 0));
+                        flat.put("networkEntityId", player.networkEntityId);
+                        flat.put("health", player.health);
+                        flat.put("maxHealth", player.maxHealth);
+                        flat.put("isDead", player.isDead);
+                        flat.put("serverTime", now);
+                        player.state = flat;
+                        broadcast("PLAYER_STATE", playerId, flat, playerId);
                         break;
                     }
                     case "ENTITY_SYNC": {
@@ -861,24 +1161,112 @@ public class LanMultiplayerServer {
                         break;
                     }
                     case "WORLD_SETTINGS_UPDATE": {
-                        if (!playerId.equals(room.hostId)) return;
+                        boolean isHost = playerId.equals(room.hostId);
+                        if (payload.has("worldSettingsPermission") && isHost) {
+                            String perm = payload.optString("worldSettingsPermission", "HOST_ONLY");
+                            if ("HOST_ONLY".equals(perm) || "ALL_PLAYERS".equals(perm)) {
+                                room.worldSettingsPermission = perm;
+                            }
+                        }
+                        if (payload.has("friendlyFire") && isHost) {
+                            room.friendlyFire = payload.optBoolean("friendlyFire", false);
+                        }
+                        if (!isHost && !"ALL_PLAYERS".equals(room.worldSettingsPermission)) {
+                            JSONObject err = new JSONObject();
+                            err.put("code", "FORBIDDEN_WORLD_SETTINGS");
+                            err.put("message", "Host currently restricts world time and weather controls.");
+                            sendTo(playerId, "ERROR", err);
+                            return;
+                        }
                         long now = System.currentTimeMillis();
-                        if (payload.has("worldTime") && payload.optJSONObject("worldTime") != null) {
-                            room.worldTime = payload.optJSONObject("worldTime");
-                            room.worldTime.put("serverTimestamp", now);
+                        materializeWorldTime(now);
+                        boolean timeChanged = false;
+                        if (payload.has("preset")) {
+                            String preset = payload.optString("preset", "");
+                            if ("sunrise".equals(preset)) { room.worldTime.put("worldHours", 6.0); room.worldTime.put("anchorServerMs", now); timeChanged = true; }
+                            else if ("noon".equals(preset)) { room.worldTime.put("worldHours", 12.0); room.worldTime.put("anchorServerMs", now); timeChanged = true; }
+                            else if ("sunset".equals(preset)) { room.worldTime.put("worldHours", 18.0); room.worldTime.put("anchorServerMs", now); timeChanged = true; }
+                            else if ("midnight".equals(preset)) { room.worldTime.put("worldHours", 0.0); room.worldTime.put("anchorServerMs", now); timeChanged = true; }
                         }
-                        if (payload.has("worldWeather") && payload.optJSONObject("worldWeather") != null) {
-                            room.worldWeather = payload.optJSONObject("worldWeather");
-                            room.worldWeather.put("serverTimestamp", now);
+                        if (payload.has("worldHours")) {
+                            double wh = payload.optDouble("worldHours", Double.NaN);
+                            if (!Double.isNaN(wh) && !Double.isInfinite(wh)) {
+                                wh = ((wh % 24.0) + 24.0) % 24.0;
+                                room.worldTime.put("worldHours", Math.round(wh * 1000.0) / 1000.0);
+                                room.worldTime.put("anchorServerMs", now);
+                                timeChanged = true;
+                            }
                         }
+                        if (payload.has("dayCount")) {
+                            room.worldTime.put("dayCount", Math.max(1, payload.optInt("dayCount", 1)));
+                            room.worldTime.put("anchorServerMs", now);
+                            timeChanged = true;
+                        }
+                        if (payload.has("timeScale")) {
+                            double ts = payload.optDouble("timeScale", 1.0);
+                            if (!Double.isNaN(ts) && !Double.isInfinite(ts)) {
+                                room.worldTime.put("timeScale", Math.max(0.0, Math.min(10.0, ts)));
+                                room.worldTime.put("anchorServerMs", now);
+                                timeChanged = true;
+                            }
+                        }
+                        if (payload.has("paused")) {
+                            room.worldTime.put("paused", payload.optBoolean("paused", false));
+                            room.worldTime.put("anchorServerMs", now);
+                            timeChanged = true;
+                        }
+                        if (payload.has("fullDayDurationSeconds")) {
+                            double fd = payload.optDouble("fullDayDurationSeconds", 360.0);
+                            if (!Double.isNaN(fd) && !Double.isInfinite(fd)) {
+                                room.worldTime.put("fullDayDurationSeconds", Math.max(30.0, Math.min(1800.0, fd)));
+                                room.worldTime.put("anchorServerMs", now);
+                                timeChanged = true;
+                            }
+                        }
+                        if (payload.has("weatherState")) {
+                            String ws = payload.optString("weatherState", "clear");
+                            room.worldWeather.put("currentState", ws);
+                            room.worldWeather.put("targetState", ws);
+                            room.worldWeather.put("startMs", now);
+                            long dur = Math.max(30000L, Math.min(900000L, payload.optLong("durationMs", 240000L)));
+                            room.worldWeather.put("durationMs", dur);
+                            room.worldWeather.put("endMs", now + dur);
+                        }
+                        if (payload.has("targetWeatherState")) {
+                            String tws = payload.optString("targetWeatherState", "clear");
+                            room.worldWeather.put("targetState", tws);
+                            room.worldWeather.put("startMs", now);
+                            long dur = Math.max(30000L, Math.min(900000L, payload.optLong("durationMs", 240000L)));
+                            room.worldWeather.put("durationMs", dur);
+                            room.worldWeather.put("endMs", now + dur);
+                        }
+                        if (payload.has("weatherIntensity")) {
+                            room.worldWeather.put("intensity", Math.max(0.0, Math.min(1.0, payload.optDouble("weatherIntensity", 0.0))));
+                        }
+                        if (payload.has("dynamicEnabled")) {
+                            room.worldWeather.put("dynamicEnabled", payload.optBoolean("dynamicEnabled", true));
+                        }
+                        if (payload.has("transitionDurationSeconds")) {
+                            room.worldWeather.put("transitionDurationSeconds", Math.max(2.0, Math.min(120.0, payload.optDouble("transitionDurationSeconds", 14.0))));
+                        }
+                        JSONObject wtOut = new JSONObject(room.worldTime.toString());
+                        JSONObject wwOut = new JSONObject(room.worldWeather.toString());
                         JSONObject out = new JSONObject();
-                        out.put("worldSettingsPermission", "HOST_ONLY");
-                        out.put("worldTime", room.worldTime);
-                        out.put("worldWeather", room.worldWeather);
+                        out.put("worldSettingsPermission", room.worldSettingsPermission);
+                        out.put("friendlyFire", room.friendlyFire);
+                        out.put("worldTime", wtOut);
+                        out.put("worldWeather", wwOut);
                         out.put("triggerLightning", payload.optBoolean("triggerLightning", false));
                         out.put("serverTimestamp", now);
                         out.put("updatedBy", playerId);
-                        broadcast("WORLD_SETTINGS_UPDATE", playerId, out, null);
+                        broadcast("WORLD_SETTINGS_UPDATED", playerId, out, null);
+                        if (timeChanged) {
+                            JSONObject timeOut = new JSONObject();
+                            timeOut.put("worldTime", wtOut);
+                            timeOut.put("serverTimestamp", now);
+                            timeOut.put("updatedBy", playerId);
+                            broadcast("WORLD_TIME_CHANGED", playerId, timeOut, null);
+                        }
                         break;
                     }
                     case "GAME_EVENT": {
@@ -897,14 +1285,223 @@ public class LanMultiplayerServer {
                         if (text.isEmpty()) return;
                         JSONObject chatMsg = new JSONObject();
                         chatMsg.put("id", randomId("chat", 6));
-                        chatMsg.put("roomId", room.roomId);
-                        chatMsg.put("senderId", playerId);
-                        chatMsg.put("senderName", player.displayName);
+                        chatMsg.put("playerId", playerId);
+                        chatMsg.put("playerName", player.displayName);
                         chatMsg.put("message", text);
                         chatMsg.put("timestamp", System.currentTimeMillis());
                         chatHistory.add(chatMsg);
-                        if (chatHistory.size() > 60) chatHistory.remove(0);
+                        if (chatHistory.size() > 40) chatHistory.remove(0);
                         broadcast("ROOM_CHAT", playerId, chatMsg, null);
+                        break;
+                    }
+                    case "PARTY_CREATE": {
+                        if (player.partyId != null && room.parties.containsKey(player.partyId)) {
+                            sendTo(playerId, "PARTY_STATE", buildPartySnapshotForPlayer(playerId));
+                            break;
+                        }
+                        long now = System.currentTimeMillis();
+                        PartyRecord party = new PartyRecord();
+                        party.partyId = randomId("party", 6);
+                        party.roomId = room.roomId;
+                        party.leaderPlayerId = playerId;
+                        party.createdAt = now;
+                        party.memberIds.add(playerId);
+                        room.parties.put(party.partyId, party);
+                        player.partyId = party.partyId;
+                        player.partyReady = true;
+                        player.partyJoinedAt = now;
+                        broadcastAllPartyStates();
+                        broadcast("ROOM_STATE", "server", buildRoomSnapshot(), null);
+                        break;
+                    }
+                    case "PARTY_INVITE": {
+                        PlayerRecord target = null;
+                        String targetId = payload.optString("targetPlayerId", "");
+                        String targetName = payload.optString("targetPlayerName", "").trim();
+                        if (!targetId.isEmpty()) {
+                            target = room.players.get(targetId);
+                        } else if (!targetName.isEmpty()) {
+                            for (PlayerRecord pr : room.players.values()) {
+                                if (pr.displayName.equalsIgnoreCase(targetName)) {
+                                    target = pr;
+                                    break;
+                                }
+                            }
+                        }
+                        if (target == null || target.playerId.equals(playerId)) return;
+                        long now = System.currentTimeMillis();
+                        PartyRecord party = player.partyId != null ? room.parties.get(player.partyId) : null;
+                        if (party == null) {
+                            party = new PartyRecord();
+                            party.partyId = randomId("party", 6);
+                            party.roomId = room.roomId;
+                            party.leaderPlayerId = playerId;
+                            party.createdAt = now;
+                            party.memberIds.add(playerId);
+                            room.parties.put(party.partyId, party);
+                            player.partyId = party.partyId;
+                            player.partyReady = true;
+                            player.partyJoinedAt = now;
+                        }
+                        if (!playerId.equals(party.leaderPlayerId)) {
+                            JSONObject err = new JSONObject();
+                            err.put("code", "FORBIDDEN_PARTY_LEADER");
+                            err.put("message", "Only the party leader can invite players.");
+                            sendTo(playerId, "ERROR", err);
+                            return;
+                        }
+                        if (party.memberIds.size() >= MAX_LAN_PLAYERS) {
+                            JSONObject err = new JSONObject();
+                            err.put("code", "PARTY_FULL");
+                            err.put("message", "Party is full.");
+                            sendTo(playerId, "ERROR", err);
+                            return;
+                        }
+                        if (party.memberIds.contains(target.playerId)) return;
+                        for (PartyInviteRecord existing : room.partyInvites.values()) {
+                            if ("pending".equals(existing.status) && party.partyId.equals(existing.partyId) && target.playerId.equals(existing.toPlayerId)) {
+                                JSONObject err = new JSONObject();
+                                err.put("code", "DUPLICATE_PARTY_INVITE");
+                                err.put("message", "Invite already sent to this player.");
+                                sendTo(playerId, "ERROR", err);
+                                return;
+                            }
+                        }
+                        PartyInviteRecord inv = new PartyInviteRecord();
+                        inv.inviteId = randomId("pinv", 6);
+                        inv.partyId = party.partyId;
+                        inv.roomId = room.roomId;
+                        inv.fromPlayerId = playerId;
+                        inv.fromPlayerName = player.displayName;
+                        inv.toPlayerId = target.playerId;
+                        inv.toPlayerName = target.displayName;
+                        inv.createdAt = now;
+                        inv.status = "pending";
+                        room.partyInvites.put(inv.inviteId, inv);
+                        sendTo(target.playerId, "PARTY_INVITE_RECEIVED", serializePartyInvite(inv));
+                        broadcastAllPartyStates();
+                        broadcast("ROOM_STATE", "server", buildRoomSnapshot(), null);
+                        break;
+                    }
+                    case "PARTY_ACCEPT_INVITE": {
+                        String inviteId = payload.optString("inviteId", "");
+                        PartyInviteRecord inv = room.partyInvites.get(inviteId);
+                        if (inv == null || !"pending".equals(inv.status) || !playerId.equals(inv.toPlayerId)) return;
+                        PartyRecord party = room.parties.get(inv.partyId);
+                        if (party == null) {
+                            room.partyInvites.remove(inviteId);
+                            broadcastAllPartyStates();
+                            return;
+                        }
+                        if (party.memberIds.size() >= MAX_LAN_PLAYERS) {
+                            JSONObject err = new JSONObject();
+                            err.put("code", "PARTY_FULL");
+                            err.put("message", "Party is full.");
+                            sendTo(playerId, "ERROR", err);
+                            return;
+                        }
+                        if (player.partyId != null && !player.partyId.equals(party.partyId)) {
+                            removePlayerFromParty(playerId);
+                        }
+                        room.partyInvites.remove(inviteId);
+                        if (!party.memberIds.contains(playerId)) party.memberIds.add(playerId);
+                        player.partyId = party.partyId;
+                        player.partyReady = false;
+                        player.partyJoinedAt = System.currentTimeMillis();
+                        broadcastAllPartyStates();
+                        broadcast("ROOM_STATE", "server", buildRoomSnapshot(), null);
+                        break;
+                    }
+                    case "PARTY_DECLINE_INVITE": {
+                        String inviteId = payload.optString("inviteId", "");
+                        PartyInviteRecord inv = room.partyInvites.get(inviteId);
+                        if (inv == null || !playerId.equals(inv.toPlayerId)) return;
+                        room.partyInvites.remove(inviteId);
+                        broadcastAllPartyStates();
+                        break;
+                    }
+                    case "PARTY_LEAVE": {
+                        removePlayerFromParty(playerId);
+                        broadcastAllPartyStates();
+                        broadcast("ROOM_STATE", "server", buildRoomSnapshot(), null);
+                        break;
+                    }
+                    case "PARTY_KICK": {
+                        String targetId = payload.optString("targetPlayerId", "");
+                        if (targetId.isEmpty() || targetId.equals(playerId) || player.partyId == null) return;
+                        PartyRecord party = room.parties.get(player.partyId);
+                        if (party == null || !playerId.equals(party.leaderPlayerId) || !party.memberIds.contains(targetId)) return;
+                        removePlayerFromParty(targetId);
+                        broadcastAllPartyStates();
+                        broadcast("ROOM_STATE", "server", buildRoomSnapshot(), null);
+                        break;
+                    }
+                    case "PARTY_TRANSFER_LEADER": {
+                        String targetId = payload.optString("targetPlayerId", "");
+                        if (targetId.isEmpty() || player.partyId == null) return;
+                        PartyRecord party = room.parties.get(player.partyId);
+                        if (party == null || !playerId.equals(party.leaderPlayerId) || !party.memberIds.contains(targetId)) return;
+                        party.leaderPlayerId = targetId;
+                        broadcastAllPartyStates();
+                        break;
+                    }
+                    case "PARTY_SET_READY": {
+                        if (player.partyId == null) return;
+                        player.partyReady = payload.optBoolean("ready", false);
+                        broadcastAllPartyStates();
+                        break;
+                    }
+                    case "PARTY_START_OBJECTIVE": {
+                        if (player.partyId == null) return;
+                        PartyRecord party = room.parties.get(player.partyId);
+                        if (party == null || !playerId.equals(party.leaderPlayerId)) return;
+                        JSONObject obj = new JSONObject();
+                        obj.put("objectiveId", randomId("pobj", 6));
+                        obj.put("partyId", party.partyId);
+                        obj.put("type", payload.optString("type", "explore"));
+                        obj.put("title", sanitizeText(payload.optString("title", "Team Objective"), 64, "Team Objective"));
+                        if (payload.has("targetId")) obj.put("targetId", payload.optString("targetId"));
+                        if (payload.has("targetX")) obj.put("targetX", payload.optDouble("targetX", 0));
+                        if (payload.has("targetZ")) obj.put("targetZ", payload.optDouble("targetZ", 0));
+                        obj.put("targetCount", Math.max(1, payload.optInt("targetCount", 1)));
+                        obj.put("currentCount", 0);
+                        obj.put("status", "active");
+                        obj.put("startedAt", System.currentTimeMillis());
+                        obj.put("contributions", new JSONObject());
+                        obj.put("rewardsByPlayer", new JSONObject());
+                        party.activeObjective = obj;
+                        for (String memberId : party.memberIds) {
+                            sendTo(memberId, "PARTY_OBJECTIVE_UPDATED", obj);
+                        }
+                        broadcastAllPartyStates();
+                        break;
+                    }
+                    case "PARTY_CANCEL_OBJECTIVE": {
+                        if (player.partyId == null) return;
+                        PartyRecord party = room.parties.get(player.partyId);
+                        if (party == null || !playerId.equals(party.leaderPlayerId)) return;
+                        party.activeObjective = null;
+                        broadcastAllPartyStates();
+                        break;
+                    }
+                    case "COOP_OBJECTIVE_PROGRESS": {
+                        if (player.partyId == null) return;
+                        PartyRecord party = room.parties.get(player.partyId);
+                        if (party == null || party.activeObjective == null || !"active".equals(party.activeObjective.optString("status"))) return;
+                        int inc = Math.max(1, payload.optInt("amount", 1));
+                        int targetCount = Math.max(1, party.activeObjective.optInt("targetCount", 1));
+                        int nextCount = Math.min(targetCount, party.activeObjective.optInt("currentCount", 0) + inc);
+                        party.activeObjective.put("currentCount", nextCount);
+                        boolean completed = nextCount >= targetCount;
+                        if (completed) {
+                            party.activeObjective.put("status", "completed");
+                            party.activeObjective.put("completedAt", System.currentTimeMillis());
+                        }
+                        String evType = completed ? "PARTY_OBJECTIVE_COMPLETED" : "PARTY_OBJECTIVE_UPDATED";
+                        for (String memberId : party.memberIds) {
+                            sendTo(memberId, evType, party.activeObjective);
+                        }
+                        broadcastAllPartyStates();
                         break;
                     }
                     case "LEAVE_ROOM":
@@ -944,8 +1541,11 @@ public class LanMultiplayerServer {
         start.put("worldType", room.worldType);
         start.put("difficulty", room.difficulty);
         start.put("hostId", room.hostId);
-        start.put("worldTime", room.worldTime);
-        start.put("worldWeather", room.worldWeather);
+        start.put("worldSettingsPermission", room.worldSettingsPermission);
+        start.put("worldSettings", snap.optJSONObject("gameState") != null ? snap.optJSONObject("gameState").optJSONObject("worldSettings") : new JSONObject());
+        start.put("worldTime", snap.optJSONObject("worldTime"));
+        start.put("worldWeather", snap.optJSONObject("worldWeather"));
+        start.put("requireAllReady", false);
         start.put("room", snap);
         return start;
     }
@@ -963,8 +1563,8 @@ public class LanMultiplayerServer {
         snap.put("createdAt", room.createdAt);
         snap.put("lastActivityAt", now);
         snap.put("serverTimestamp", now);
-        snap.put("worldTime", room.worldTime);
-        snap.put("worldWeather", room.worldWeather);
+        snap.put("worldTime", materializeWorldTime(now));
+        snap.put("worldWeather", new JSONObject(room.worldWeather.toString()));
 
         JSONArray playersArr = new JSONArray();
         for (PlayerRecord p : room.players.values()) {
@@ -978,10 +1578,11 @@ public class LanMultiplayerServer {
             po.put("avatarColor", p.avatarColor);
             po.put("pingMs", 3);
             po.put("connectionQuality", "excellent");
-            po.put("level", 1);
-            po.put("health", 100);
-            po.put("maxHealth", 100);
-            po.put("isDead", false);
+            po.put("level", p.level);
+            po.put("partyId", p.partyId != null ? p.partyId : JSONObject.NULL);
+            po.put("health", p.health);
+            po.put("maxHealth", p.maxHealth);
+            po.put("isDead", p.isDead);
             po.put("state", p.state);
             playersArr.put(po);
         }
@@ -991,7 +1592,7 @@ public class LanMultiplayerServer {
         worldSettings.put("worldType", room.worldType);
         worldSettings.put("difficulty", room.difficulty);
         worldSettings.put("pvpEnabled", false);
-        worldSettings.put("friendlyFire", false);
+        worldSettings.put("friendlyFire", room.friendlyFire);
         worldSettings.put("staminaUnlimited", "creative".equals(room.worldType));
         worldSettings.put("spawnX", 0);
         worldSettings.put("spawnY", 0);
@@ -1006,7 +1607,7 @@ public class LanMultiplayerServer {
         gameState.put("isPrivate", false);
         gameState.put("allowFriends", true);
         gameState.put("requireAllReady", false);
-        gameState.put("worldSettingsPermission", "HOST_ONLY");
+        gameState.put("worldSettingsPermission", room.worldSettingsPermission);
         gameState.put("worldSettings", worldSettings);
         gameState.put("locked", false);
         gameState.put("hasPassword", false);
@@ -1014,7 +1615,7 @@ public class LanMultiplayerServer {
         return snap;
     }
 
-    private JSONObject defaultPlayerState(double xOffset) throws Exception {
+    private JSONObject defaultPlayerState(double xOffset, String networkEntityId, long now) throws Exception {
         JSONObject st = new JSONObject();
         st.put("x", xOffset);
         st.put("y", 0);
@@ -1023,9 +1624,14 @@ public class LanMultiplayerServer {
         st.put("vx", 0);
         st.put("vy", 0);
         st.put("vz", 0);
-        st.put("anim", "idle");
+        st.put("movementState", "idle");
         st.put("crouching", false);
         st.put("grounded", true);
+        st.put("networkEntityId", networkEntityId);
+        st.put("health", 100);
+        st.put("maxHealth", 100);
+        st.put("isDead", false);
+        st.put("serverTime", now);
         return st;
     }
 

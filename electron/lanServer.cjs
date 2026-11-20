@@ -14,6 +14,16 @@ const MAX_HTTP_BODY_BYTES = 16_384;
 const MAX_WS_PAYLOAD_BYTES = 65_536;
 
 const AVATAR_COLORS = ['#6ab06e', '#e5a93c', '#58b4d1', '#d96b6b'];
+const PARTY_MARKER_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ec4899'];
+const TIME_PRESET_HOURS = {
+  sunrise: 6.0,
+  noon: 12.0,
+  sunset: 18.0,
+  midnight: 0.0,
+};
+const VALID_WEATHER_STATES = new Set(['clear', 'cloudy', 'overcast', 'rain', 'storm', 'fog']);
+const VALID_MOVEMENT_STATES = new Set(['idle', 'walking', 'running', 'jumping', 'falling']);
+const TIME_SYNC_INTERVAL_MS = 5000;
 
 function getLocalIpv4Addresses() {
   const ifaces = os.networkInterfaces();
@@ -238,11 +248,199 @@ class OfflineLanServer {
   constructor() {
     this.httpServer = null;
     this.discoverySocket = null;
+    this.timeSyncTimer = null;
     this.port = DEFAULT_LAN_PORT;
     this.room = null;
     this.sessions = new Map(); // playerId -> { token, ws, player }
     this.chatHistory = [];
     this.seqCounter = 0;
+  }
+
+  materializeWorldTime(now = Date.now()) {
+    if (!this.room || !this.room.worldTime) {
+      return {
+        worldHours: 8.5,
+        dayCount: 1,
+        timeScale: 1,
+        paused: false,
+        fullDayDurationSeconds: 360,
+        anchorServerMs: now,
+      };
+    }
+    const wt = this.room.worldTime;
+    const fullDaySec =
+      typeof wt.fullDayDurationSeconds === 'number' && Number.isFinite(wt.fullDayDurationSeconds)
+        ? Math.max(30, Math.min(1800, wt.fullDayDurationSeconds))
+        : 360;
+    const timeScale =
+      typeof wt.timeScale === 'number' && Number.isFinite(wt.timeScale)
+        ? Math.max(0, Math.min(10, wt.timeScale))
+        : 1;
+    let worldHours =
+      typeof wt.worldHours === 'number' && Number.isFinite(wt.worldHours)
+        ? ((wt.worldHours % 24) + 24) % 24
+        : 8.5;
+    let dayCount =
+      typeof wt.dayCount === 'number' && Number.isFinite(wt.dayCount)
+        ? Math.max(1, Math.floor(wt.dayCount))
+        : 1;
+    const anchorMs =
+      typeof wt.anchorServerMs === 'number' && Number.isFinite(wt.anchorServerMs)
+        ? wt.anchorServerMs
+        : now;
+
+    if (!wt.paused && timeScale > 0 && fullDaySec > 0 && now > anchorMs) {
+      const elapsedSec = Math.max(0, (now - anchorMs) / 1000);
+      const total = worldHours + elapsedSec * (24 / fullDaySec) * timeScale;
+      if (total >= 24) {
+        dayCount += Math.floor(total / 24);
+      }
+      worldHours = ((total % 24) + 24) % 24;
+    }
+
+    wt.worldHours = Math.round(worldHours * 1000) / 1000;
+    wt.dayCount = dayCount;
+    wt.timeScale = timeScale;
+    wt.paused = Boolean(wt.paused);
+    wt.fullDayDurationSeconds = fullDaySec;
+    wt.anchorServerMs = now;
+    return { ...wt };
+  }
+
+  startTimeSyncLoop() {
+    this.stopTimeSyncLoop();
+    this.timeSyncTimer = setInterval(() => {
+      if (!this.room || this.room.status !== 'in-game') return;
+      let hasOpenSocket = false;
+      for (const sess of this.sessions.values()) {
+        if (sess.ws && sess.ws.isOpen()) {
+          hasOpenSocket = true;
+          break;
+        }
+      }
+      if (!hasOpenSocket) return;
+      const now = Date.now();
+      const worldTime = this.materializeWorldTime(now);
+      this.broadcast('WORLD_TIME_CHANGED', 'server', {
+        worldTime,
+        serverTimestamp: now,
+        updatedBy: this.room.hostId,
+      });
+    }, TIME_SYNC_INTERVAL_MS);
+    if (typeof this.timeSyncTimer.unref === 'function') {
+      this.timeSyncTimer.unref();
+    }
+  }
+
+  stopTimeSyncLoop() {
+    if (this.timeSyncTimer) {
+      clearInterval(this.timeSyncTimer);
+      this.timeSyncTimer = null;
+    }
+  }
+
+  buildPartySnapshotForPlayer(playerId) {
+    if (!this.room) {
+      return { party: null, pendingInvites: [], outgoingInvites: [] };
+    }
+    const player = this.room.players.get(playerId);
+    const party = player && player.partyId ? this.room.parties.get(player.partyId) || null : null;
+    const pendingInvites = [];
+    const outgoingInvites = [];
+    for (const inv of this.room.partyInvites.values()) {
+      if (inv.status !== 'pending') continue;
+      if (inv.toPlayerId === playerId) pendingInvites.push({ ...inv });
+      if (inv.fromPlayerId === playerId) outgoingInvites.push({ ...inv });
+    }
+    return {
+      party: party ? this.serializeParty(party) : null,
+      pendingInvites,
+      outgoingInvites,
+    };
+  }
+
+  serializeParty(party) {
+    return {
+      partyId: party.partyId,
+      roomId: party.roomId,
+      leaderPlayerId: party.leaderPlayerId,
+      maxMembers: MAX_LAN_PLAYERS,
+      createdAt: party.createdAt,
+      activeObjective: party.activeObjective ? { ...party.activeObjective } : null,
+      members: party.memberIds
+        .map((pid, idx) => {
+          const p = this.room ? this.room.players.get(pid) : null;
+          if (!p) return null;
+          return {
+            playerId: p.playerId,
+            displayName: p.displayName,
+            avatarColor: p.avatarColor,
+            level: p.level ?? 1,
+            health: p.health ?? 100,
+            maxHealth: p.maxHealth ?? 100,
+            isDead: Boolean(p.isDead),
+            online: true,
+            isReady: Boolean(p.partyReady),
+            joinedAt: p.partyJoinedAt ?? p.joinedAt,
+            markerIndex: idx,
+            markerColor: PARTY_MARKER_COLORS[idx % PARTY_MARKER_COLORS.length],
+          };
+        })
+        .filter(Boolean),
+    };
+  }
+
+  broadcastAllPartyStates() {
+    if (!this.room) return;
+    for (const pid of this.room.players.keys()) {
+      this.sendTo(pid, 'PARTY_STATE', this.buildPartySnapshotForPlayer(pid));
+    }
+  }
+
+  removePlayerFromParty(playerId) {
+    if (!this.room) return;
+    const player = this.room.players.get(playerId);
+    // Clean up any pending invites involving this player
+    for (const [invId, inv] of this.room.partyInvites.entries()) {
+      if (inv.fromPlayerId === playerId || inv.toPlayerId === playerId) {
+        this.room.partyInvites.delete(invId);
+      }
+    }
+    if (!player || !player.partyId) return;
+    const party = this.room.parties.get(player.partyId);
+    player.partyId = null;
+    player.partyReady = false;
+    if (!party) return;
+    party.memberIds = party.memberIds.filter((id) => id !== playerId);
+    if (party.memberIds.length === 0) {
+      this.room.parties.delete(party.partyId);
+    } else if (party.leaderPlayerId === playerId) {
+      party.leaderPlayerId = party.memberIds[0];
+    }
+  }
+
+  buildWorldSnapshotForPlayer(playerId, now = Date.now()) {
+    if (!this.room) return null;
+    const worldTime = this.materializeWorldTime(now);
+    return {
+      worldSettingsPermission: this.room.worldSettingsPermission || 'HOST_ONLY',
+      worldSettings: {
+        worldType: this.room.worldType,
+        difficulty: this.room.difficulty,
+        pvpEnabled: false,
+        friendlyFire: Boolean(this.room.friendlyFire),
+        staminaUnlimited: this.room.worldType === 'creative',
+        spawnX: 0,
+        spawnY: 0,
+        spawnZ: 4,
+      },
+      worldTime,
+      worldWeather: { ...this.room.worldWeather },
+      serverTimestamp: now,
+      partyState: this.buildPartySnapshotForPlayer(playerId),
+      coopQuests: [],
+      bossEncounters: [],
+    };
   }
 
   getStatus() {
@@ -261,6 +459,7 @@ class OfflineLanServer {
   buildRoomSnapshot() {
     if (!this.room) return null;
     const now = Date.now();
+    const worldTime = this.materializeWorldTime(now);
     return {
       roomId: this.room.roomId,
       roomCode: this.room.roomCode,
@@ -272,8 +471,8 @@ class OfflineLanServer {
       createdAt: this.room.createdAt,
       lastActivityAt: now,
       serverTimestamp: now,
-      worldTime: this.room.worldTime,
-      worldWeather: this.room.worldWeather,
+      worldTime,
+      worldWeather: { ...this.room.worldWeather },
       players: Array.from(this.room.players.values()).map((p) => ({
         playerId: p.playerId,
         networkEntityId: p.networkEntityId,
@@ -285,6 +484,7 @@ class OfflineLanServer {
         pingMs: p.pingMs ?? 2,
         connectionQuality: 'excellent',
         level: p.level ?? 1,
+        partyId: p.partyId ?? null,
         health: p.health ?? 100,
         maxHealth: p.maxHealth ?? 100,
         isDead: Boolean(p.isDead),
@@ -299,12 +499,12 @@ class OfflineLanServer {
         isPrivate: false,
         allowFriends: true,
         requireAllReady: false,
-        worldSettingsPermission: 'HOST_ONLY',
+        worldSettingsPermission: this.room.worldSettingsPermission || 'HOST_ONLY',
         worldSettings: {
           worldType: this.room.worldType,
           difficulty: this.room.difficulty,
           pvpEnabled: false,
-          friendlyFire: false,
+          friendlyFire: Boolean(this.room.friendlyFire),
           staminaUnlimited: this.room.worldType === 'creative',
           spawnX: 0,
           spawnY: 0,
@@ -374,6 +574,9 @@ class OfflineLanServer {
       avatarColor: AVATAR_COLORS[0],
       pingMs: 1,
       level: 1,
+      partyId: null,
+      partyReady: false,
+      partyJoinedAt: now,
       health: 100,
       maxHealth: 100,
       isDead: false,
@@ -385,9 +588,14 @@ class OfflineLanServer {
         vx: 0,
         vy: 0,
         vz: 0,
-        anim: 'idle',
+        movementState: 'idle',
         crouching: false,
         grounded: true,
+        networkEntityId: `net_${hostId}`,
+        health: 100,
+        maxHealth: 100,
+        isDead: false,
+        serverTime: now,
       },
     };
 
@@ -403,30 +611,35 @@ class OfflineLanServer {
       hostName,
       status: 'waiting',
       createdAt: now,
+      worldSettingsPermission: 'HOST_ONLY',
+      friendlyFire: false,
       players: new Map([[hostId, hostPlayer]]),
+      parties: new Map(),
+      partyInvites: new Map(),
       worldTime: {
-        normalizedTime: 0.32,
+        worldHours: 8.5,
         dayCount: 1,
         fullDayDurationSeconds: 360,
         timeScale: 1,
         paused: false,
-        serverTimestamp: now,
+        anchorServerMs: now,
       },
       worldWeather: {
         currentState: 'clear',
         targetState: 'clear',
-        transitionProgress: 1,
         intensity: 0,
         dynamicEnabled: true,
         transitionDurationSeconds: 14,
-        windSpeedKmh: 12,
-        serverTimestamp: now,
+        startMs: now,
+        durationMs: 240_000,
+        endMs: now + 240_000,
       },
     };
 
     this.sessions.clear();
     this.sessions.set(hostId, { token: hostToken, ws: null, player: hostPlayer });
     this.chatHistory = [];
+    this.startTimeSyncLoop();
 
     return {
       ok: true,
@@ -476,6 +689,9 @@ class OfflineLanServer {
       avatarColor: AVATAR_COLORS[colorIdx],
       pingMs: 4,
       level: 1,
+      partyId: null,
+      partyReady: false,
+      partyJoinedAt: now,
       health: 100,
       maxHealth: 100,
       isDead: false,
@@ -487,9 +703,14 @@ class OfflineLanServer {
         vx: 0,
         vy: 0,
         vz: 0,
-        anim: 'idle',
+        movementState: 'idle',
         crouching: false,
         grounded: true,
+        networkEntityId: `net_${playerId}`,
+        health: 100,
+        maxHealth: 100,
+        isDead: false,
+        serverTime: now,
       },
     };
 
@@ -518,6 +739,7 @@ class OfflineLanServer {
   removePlayer(playerId, reason = 'disconnected') {
     if (!this.room || !this.room.players.has(playerId)) return;
     const isHost = playerId === this.room.hostId;
+    this.removePlayerFromParty(playerId);
     const sess = this.sessions.get(playerId);
     if (sess && sess.ws && sess.ws.isOpen()) {
       sess.ws.close(1000, reason);
@@ -526,6 +748,7 @@ class OfflineLanServer {
     this.room.players.delete(playerId);
 
     if (isHost) {
+      this.stopTimeSyncLoop();
       // Gracefully close LAN session when host leaves so no client crashes or corrupts saves
       this.broadcast('ROOM_CLOSED', 'server', {
         reason: 'LAN host ended the session.',
@@ -543,6 +766,7 @@ class OfflineLanServer {
     const snap = this.buildRoomSnapshot();
     this.broadcast('PLAYER_LEAVE', playerId, { playerId, reason, room: snap });
     this.broadcast('ROOM_STATE', 'server', snap);
+    this.broadcastAllPartyStates();
   }
 
   handleWsMessage(playerId, rawText) {
@@ -562,13 +786,21 @@ class OfflineLanServer {
         if (typeof payload.displayName === 'string' && payload.displayName.trim()) {
           player.displayName = sanitizeText(payload.displayName, 24, player.displayName);
         }
+        const now = Date.now();
         const snap = this.buildRoomSnapshot();
         this.sendTo(playerId, 'CONNECT', {
           playerId,
           room: snap,
-          chatHistory: this.chatHistory,
         });
         this.broadcast('ROOM_STATE', 'server', snap);
+        const worldSnap = this.buildWorldSnapshotForPlayer(playerId, now);
+        if (worldSnap) {
+          this.sendTo(playerId, 'WORLD_SNAPSHOT', worldSnap);
+        }
+        this.sendTo(playerId, 'CHAT_HISTORY', {
+          messages: this.chatHistory.slice(),
+        });
+        this.sendTo(playerId, 'PARTY_STATE', this.buildPartySnapshotForPlayer(playerId));
         if (this.room.status === 'in-game') {
           this.sendTo(playerId, 'START_GAME', {
             roomId: this.room.roomId,
@@ -579,8 +811,11 @@ class OfflineLanServer {
             worldType: this.room.worldType,
             difficulty: this.room.difficulty,
             hostId: this.room.hostId,
-            worldTime: this.room.worldTime,
-            worldWeather: this.room.worldWeather,
+            worldSettingsPermission: this.room.worldSettingsPermission || 'HOST_ONLY',
+            worldSettings: snap.gameState.worldSettings,
+            worldTime: snap.worldTime,
+            worldWeather: snap.worldWeather,
+            requireAllReady: false,
             room: snap,
           });
         }
@@ -603,9 +838,16 @@ class OfflineLanServer {
 
       case 'START_GAME': {
         if (playerId !== this.room.hostId) return;
+        const now = Date.now();
         this.room.status = 'in-game';
+        // Anchor world time cleanly at game start
+        this.materializeWorldTime(now);
         const snap = this.buildRoomSnapshot();
         this.broadcast('ROOM_STATE', 'server', snap);
+        for (const pid of this.room.players.keys()) {
+          const wsSnap = this.buildWorldSnapshotForPlayer(pid, now);
+          if (wsSnap) this.sendTo(pid, 'WORLD_SNAPSHOT', wsSnap);
+        }
         this.broadcast('START_GAME', playerId, {
           roomId: this.room.roomId,
           roomCode: this.room.roomCode,
@@ -615,8 +857,11 @@ class OfflineLanServer {
           worldType: this.room.worldType,
           difficulty: this.room.difficulty,
           hostId: this.room.hostId,
-          worldTime: this.room.worldTime,
-          worldWeather: this.room.worldWeather,
+          worldSettingsPermission: this.room.worldSettingsPermission || 'HOST_ONLY',
+          worldSettings: snap.gameState.worldSettings,
+          worldTime: snap.worldTime,
+          worldWeather: snap.worldWeather,
+          requireAllReady: false,
           room: snap,
         });
         break;
@@ -627,30 +872,58 @@ class OfflineLanServer {
         const y = Number(payload.y);
         const z = Number(payload.z);
         if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
-        player.state = {
-          x,
-          y,
-          z,
-          yaw: Number.isFinite(Number(payload.yaw)) ? Number(payload.yaw) : 0,
-          vx: Number.isFinite(Number(payload.vx)) ? Number(payload.vx) : 0,
-          vy: Number.isFinite(Number(payload.vy)) ? Number(payload.vy) : 0,
-          vz: Number.isFinite(Number(payload.vz)) ? Number(payload.vz) : 0,
-          anim: typeof payload.anim === 'string' ? payload.anim.slice(0, 24) : 'idle',
+        const now = Date.now();
+        const flatState = {
+          x: Math.round(x * 1000) / 1000,
+          y: Math.round(y * 1000) / 1000,
+          z: Math.round(z * 1000) / 1000,
+          yaw: Number.isFinite(Number(payload.yaw)) ? Math.round(Number(payload.yaw) * 1000) / 1000 : 0,
+          vx: Number.isFinite(Number(payload.vx)) ? Math.round(Number(payload.vx) * 100) / 100 : 0,
+          vy: Number.isFinite(Number(payload.vy)) ? Math.round(Number(payload.vy) * 100) / 100 : 0,
+          vz: Number.isFinite(Number(payload.vz)) ? Math.round(Number(payload.vz) * 100) / 100 : 0,
+          movementState: VALID_MOVEMENT_STATES.has(payload.movementState) ? payload.movementState : 'idle',
+          sprinting: Boolean(payload.sprinting),
+          jumping: Boolean(payload.jumping),
           crouching: Boolean(payload.crouching),
           grounded: payload.grounded !== false,
-          equippedItem:
-            typeof payload.equippedItem === 'string' ? payload.equippedItem.slice(0, 48) : undefined,
-          aimPitch: Number.isFinite(Number(payload.aimPitch)) ? Number(payload.aimPitch) : undefined,
-          bowCharging: Boolean(payload.bowCharging),
-          bowChargeProgress: Number.isFinite(Number(payload.bowChargeProgress))
-            ? Math.max(0, Math.min(1, Number(payload.bowChargeProgress)))
-            : undefined,
+          networkEntityId: player.networkEntityId,
+          health: player.health ?? 100,
+          maxHealth: player.maxHealth ?? 100,
+          isDead: Boolean(player.isDead),
+          serverTime: now,
         };
-        this.broadcast('PLAYER_STATE', playerId, {
-          playerId,
-          state: player.state,
-          serverTimestamp: Date.now(),
-        }, playerId);
+        if (Number.isFinite(Number(payload.aimYaw))) {
+          flatState.aimYaw = Math.round(Number(payload.aimYaw) * 1000) / 1000;
+        }
+        if (Number.isFinite(Number(payload.pitch))) {
+          flatState.pitch = Math.round(Number(payload.pitch) * 1000) / 1000;
+        }
+        if (typeof payload.animState === 'string' && payload.animState.length > 0) {
+          flatState.animState = payload.animState.slice(0, 32);
+        }
+        if (payload.weaponId === null) {
+          flatState.weaponId = null;
+        } else if (typeof payload.weaponId === 'string' && payload.weaponId.length > 0) {
+          flatState.weaponId = payload.weaponId.slice(0, 48);
+        }
+        if (typeof payload.bowCharging === 'boolean') {
+          flatState.bowCharging = payload.bowCharging;
+        }
+        if (Number.isFinite(Number(payload.bowCharge))) {
+          flatState.bowCharge = Math.max(0, Math.min(1, Math.round(Number(payload.bowCharge) * 100) / 100));
+        }
+        if (typeof payload.shooting === 'boolean') {
+          flatState.shooting = payload.shooting;
+        }
+        if (typeof payload.reloading === 'boolean') {
+          flatState.reloading = payload.reloading;
+        }
+        if (typeof payload.seq === 'number' && Number.isInteger(payload.seq) && payload.seq >= 0) {
+          flatState.seq = payload.seq;
+        }
+        player.state = flatState;
+        // Relay flat PlayerNetworkState directly so parseRelayedPlayerStatePayload accepts it
+        this.broadcast('PLAYER_STATE', playerId, flatState, playerId);
         break;
       }
 
@@ -662,22 +935,115 @@ class OfflineLanServer {
       }
 
       case 'WORLD_SETTINGS_UPDATE': {
-        if (playerId !== this.room.hostId) return;
+        const isHost = playerId === this.room.hostId;
+        if (payload.worldSettingsPermission !== undefined && isHost) {
+          if (payload.worldSettingsPermission === 'HOST_ONLY' || payload.worldSettingsPermission === 'ALL_PLAYERS') {
+            this.room.worldSettingsPermission = payload.worldSettingsPermission;
+          }
+        }
+        if (typeof payload.friendlyFire === 'boolean' && isHost) {
+          this.room.friendlyFire = payload.friendlyFire;
+        }
+        if (!isHost && this.room.worldSettingsPermission !== 'ALL_PLAYERS') {
+          this.sendTo(playerId, 'ERROR', {
+            code: 'FORBIDDEN_WORLD_SETTINGS',
+            message: 'Host currently restricts world time and weather controls.',
+          });
+          return;
+        }
         const now = Date.now();
+        this.materializeWorldTime(now);
+        const wt = this.room.worldTime;
+        let timeChanged = false;
+
+        if (typeof payload.preset === 'string' && Object.prototype.hasOwnProperty.call(TIME_PRESET_HOURS, payload.preset)) {
+          wt.worldHours = TIME_PRESET_HOURS[payload.preset];
+          wt.anchorServerMs = now;
+          timeChanged = true;
+        }
+        if (typeof payload.worldHours === 'number' && Number.isFinite(payload.worldHours)) {
+          wt.worldHours = Math.round((((payload.worldHours % 24) + 24) % 24) * 1000) / 1000;
+          wt.anchorServerMs = now;
+          timeChanged = true;
+        }
+        if (typeof payload.dayCount === 'number' && Number.isFinite(payload.dayCount)) {
+          wt.dayCount = Math.max(1, Math.floor(payload.dayCount));
+          wt.anchorServerMs = now;
+          timeChanged = true;
+        }
+        if (typeof payload.timeScale === 'number' && Number.isFinite(payload.timeScale)) {
+          wt.timeScale = Math.max(0, Math.min(10, payload.timeScale));
+          wt.anchorServerMs = now;
+          timeChanged = true;
+        }
+        if (typeof payload.paused === 'boolean') {
+          wt.paused = payload.paused;
+          wt.anchorServerMs = now;
+          timeChanged = true;
+        }
+        if (typeof payload.fullDayDurationSeconds === 'number' && Number.isFinite(payload.fullDayDurationSeconds)) {
+          wt.fullDayDurationSeconds = Math.max(30, Math.min(1800, payload.fullDayDurationSeconds));
+          wt.anchorServerMs = now;
+          timeChanged = true;
+        }
         if (payload.worldTime && typeof payload.worldTime === 'object') {
-          this.room.worldTime = { ...this.room.worldTime, ...payload.worldTime, serverTimestamp: now };
+          if (typeof payload.worldTime.worldHours === 'number' && Number.isFinite(payload.worldTime.worldHours)) {
+            wt.worldHours = Math.round((((payload.worldTime.worldHours % 24) + 24) % 24) * 1000) / 1000;
+            wt.anchorServerMs = now;
+            timeChanged = true;
+          }
         }
-        if (payload.worldWeather && typeof payload.worldWeather === 'object') {
-          this.room.worldWeather = { ...this.room.worldWeather, ...payload.worldWeather, serverTimestamp: now };
+
+        const ww = this.room.worldWeather;
+        if (typeof payload.weatherState === 'string' && VALID_WEATHER_STATES.has(payload.weatherState)) {
+          ww.currentState = payload.weatherState;
+          ww.targetState = payload.weatherState;
+          ww.startMs = now;
+          const dur =
+            typeof payload.durationMs === 'number' && Number.isFinite(payload.durationMs)
+              ? Math.max(30_000, Math.min(900_000, payload.durationMs))
+              : ww.durationMs || 240_000;
+          ww.durationMs = dur;
+          ww.endMs = now + dur;
         }
-        this.broadcast('WORLD_SETTINGS_UPDATE', playerId, {
-          worldSettingsPermission: 'HOST_ONLY',
-          worldTime: this.room.worldTime,
-          worldWeather: this.room.worldWeather,
+        if (typeof payload.targetWeatherState === 'string' && VALID_WEATHER_STATES.has(payload.targetWeatherState)) {
+          ww.targetState = payload.targetWeatherState;
+          ww.startMs = now;
+          const dur =
+            typeof payload.durationMs === 'number' && Number.isFinite(payload.durationMs)
+              ? Math.max(30_000, Math.min(900_000, payload.durationMs))
+              : ww.durationMs || 240_000;
+          ww.durationMs = dur;
+          ww.endMs = now + dur;
+        }
+        if (typeof payload.weatherIntensity === 'number' && Number.isFinite(payload.weatherIntensity)) {
+          ww.intensity = Math.max(0, Math.min(1, payload.weatherIntensity));
+        }
+        if (typeof payload.dynamicEnabled === 'boolean') {
+          ww.dynamicEnabled = payload.dynamicEnabled;
+        }
+        if (typeof payload.transitionDurationSeconds === 'number' && Number.isFinite(payload.transitionDurationSeconds)) {
+          ww.transitionDurationSeconds = Math.max(2, Math.min(120, payload.transitionDurationSeconds));
+        }
+
+        const worldTimeOut = { ...wt };
+        const worldWeatherOut = { ...ww };
+        this.broadcast('WORLD_SETTINGS_UPDATED', playerId, {
+          worldSettingsPermission: this.room.worldSettingsPermission || 'HOST_ONLY',
+          friendlyFire: Boolean(this.room.friendlyFire),
+          worldTime: worldTimeOut,
+          worldWeather: worldWeatherOut,
           triggerLightning: Boolean(payload.triggerLightning),
           serverTimestamp: now,
           updatedBy: playerId,
         });
+        if (timeChanged) {
+          this.broadcast('WORLD_TIME_CHANGED', playerId, {
+            worldTime: worldTimeOut,
+            serverTimestamp: now,
+            updatedBy: playerId,
+          });
+        }
         break;
       }
 
@@ -698,17 +1064,255 @@ class OfflineLanServer {
         if (!text) return;
         const chatMsg = {
           id: randomId('chat', 6),
-          roomId: this.room.roomId,
-          senderId: playerId,
-          senderName: player.displayName,
+          playerId,
+          playerName: player.displayName,
           message: text,
           timestamp: Date.now(),
         };
         this.chatHistory.push(chatMsg);
-        if (this.chatHistory.length > 60) {
+        if (this.chatHistory.length > 40) {
           this.chatHistory.shift();
         }
         this.broadcast('ROOM_CHAT', playerId, chatMsg);
+        break;
+      }
+
+      case 'PARTY_CREATE': {
+        if (player.partyId && this.room.parties.has(player.partyId)) {
+          this.sendTo(playerId, 'PARTY_STATE', this.buildPartySnapshotForPlayer(playerId));
+          break;
+        }
+        const now = Date.now();
+        const partyId = randomId('party', 6);
+        const party = {
+          partyId,
+          roomId: this.room.roomId,
+          leaderPlayerId: playerId,
+          memberIds: [playerId],
+          createdAt: now,
+          activeObjective: null,
+        };
+        this.room.parties.set(partyId, party);
+        player.partyId = partyId;
+        player.partyReady = true;
+        player.partyJoinedAt = now;
+        this.broadcastAllPartyStates();
+        this.broadcast('ROOM_STATE', 'server', this.buildRoomSnapshot());
+        break;
+      }
+
+      case 'PARTY_INVITE': {
+        let targetPlayer = null;
+        if (typeof payload.targetPlayerId === 'string' && payload.targetPlayerId) {
+          targetPlayer = this.room.players.get(payload.targetPlayerId) || null;
+        } else if (typeof payload.targetPlayerName === 'string' && payload.targetPlayerName.trim()) {
+          const needle = payload.targetPlayerName.trim().toLowerCase();
+          for (const p of this.room.players.values()) {
+            if (p.displayName.toLowerCase() === needle) {
+              targetPlayer = p;
+              break;
+            }
+          }
+        }
+        if (!targetPlayer || targetPlayer.playerId === playerId) return;
+
+        // Auto-create party for inviter if not already in one
+        let party = player.partyId ? this.room.parties.get(player.partyId) : null;
+        const now = Date.now();
+        if (!party) {
+          const partyId = randomId('party', 6);
+          party = {
+            partyId,
+            roomId: this.room.roomId,
+            leaderPlayerId: playerId,
+            memberIds: [playerId],
+            createdAt: now,
+            activeObjective: null,
+          };
+          this.room.parties.set(partyId, party);
+          player.partyId = partyId;
+          player.partyReady = true;
+          player.partyJoinedAt = now;
+        }
+        if (party.leaderPlayerId !== playerId) {
+          this.sendTo(playerId, 'ERROR', {
+            code: 'FORBIDDEN_PARTY_LEADER',
+            message: 'Only the party leader can invite players.',
+          });
+          return;
+        }
+        if (party.memberIds.length >= MAX_LAN_PLAYERS) {
+          this.sendTo(playerId, 'ERROR', {
+            code: 'PARTY_FULL',
+            message: 'Party is full.',
+          });
+          return;
+        }
+        if (party.memberIds.includes(targetPlayer.playerId)) return;
+
+        // Avoid duplicate pending invite
+        for (const existing of this.room.partyInvites.values()) {
+          if (
+            existing.status === 'pending' &&
+            existing.partyId === party.partyId &&
+            existing.toPlayerId === targetPlayer.playerId
+          ) {
+            this.sendTo(playerId, 'ERROR', {
+              code: 'DUPLICATE_PARTY_INVITE',
+              message: 'Invite already sent to this player.',
+            });
+            return;
+          }
+        }
+
+        const invite = {
+          inviteId: randomId('pinv', 6),
+          partyId: party.partyId,
+          roomId: this.room.roomId,
+          fromPlayerId: playerId,
+          fromPlayerName: player.displayName,
+          toPlayerId: targetPlayer.playerId,
+          toPlayerName: targetPlayer.displayName,
+          createdAt: now,
+          status: 'pending',
+        };
+        this.room.partyInvites.set(invite.inviteId, invite);
+        this.sendTo(targetPlayer.playerId, 'PARTY_INVITE_RECEIVED', invite);
+        this.broadcastAllPartyStates();
+        this.broadcast('ROOM_STATE', 'server', this.buildRoomSnapshot());
+        break;
+      }
+
+      case 'PARTY_ACCEPT_INVITE': {
+        const inviteId = typeof payload.inviteId === 'string' ? payload.inviteId : '';
+        const invite = this.room.partyInvites.get(inviteId);
+        if (!invite || invite.status !== 'pending' || invite.toPlayerId !== playerId) return;
+        const party = this.room.parties.get(invite.partyId);
+        if (!party) {
+          this.room.partyInvites.delete(inviteId);
+          this.broadcastAllPartyStates();
+          return;
+        }
+        if (party.memberIds.length >= MAX_LAN_PLAYERS) {
+          this.sendTo(playerId, 'ERROR', { code: 'PARTY_FULL', message: 'Party is full.' });
+          return;
+        }
+        if (player.partyId && player.partyId !== party.partyId) {
+          this.removePlayerFromParty(playerId);
+        }
+        invite.status = 'accepted';
+        this.room.partyInvites.delete(inviteId);
+        if (!party.memberIds.includes(playerId)) {
+          party.memberIds.push(playerId);
+        }
+        player.partyId = party.partyId;
+        player.partyReady = false;
+        player.partyJoinedAt = Date.now();
+        this.broadcastAllPartyStates();
+        this.broadcast('ROOM_STATE', 'server', this.buildRoomSnapshot());
+        break;
+      }
+
+      case 'PARTY_DECLINE_INVITE': {
+        const inviteId = typeof payload.inviteId === 'string' ? payload.inviteId : '';
+        const invite = this.room.partyInvites.get(inviteId);
+        if (!invite || invite.toPlayerId !== playerId) return;
+        this.room.partyInvites.delete(inviteId);
+        this.broadcastAllPartyStates();
+        break;
+      }
+
+      case 'PARTY_LEAVE': {
+        this.removePlayerFromParty(playerId);
+        this.broadcastAllPartyStates();
+        this.broadcast('ROOM_STATE', 'server', this.buildRoomSnapshot());
+        break;
+      }
+
+      case 'PARTY_KICK': {
+        const targetId = typeof payload.targetPlayerId === 'string' ? payload.targetPlayerId : '';
+        if (!targetId || targetId === playerId || !player.partyId) return;
+        const party = this.room.parties.get(player.partyId);
+        if (!party || party.leaderPlayerId !== playerId) return;
+        if (!party.memberIds.includes(targetId)) return;
+        this.removePlayerFromParty(targetId);
+        this.broadcastAllPartyStates();
+        this.broadcast('ROOM_STATE', 'server', this.buildRoomSnapshot());
+        break;
+      }
+
+      case 'PARTY_TRANSFER_LEADER': {
+        const targetId = typeof payload.targetPlayerId === 'string' ? payload.targetPlayerId : '';
+        if (!targetId || !player.partyId) return;
+        const party = this.room.parties.get(player.partyId);
+        if (!party || party.leaderPlayerId !== playerId || !party.memberIds.includes(targetId)) return;
+        party.leaderPlayerId = targetId;
+        this.broadcastAllPartyStates();
+        break;
+      }
+
+      case 'PARTY_SET_READY': {
+        if (!player.partyId) return;
+        player.partyReady = Boolean(payload.ready);
+        this.broadcastAllPartyStates();
+        break;
+      }
+
+      case 'PARTY_START_OBJECTIVE': {
+        if (!player.partyId) return;
+        const party = this.room.parties.get(player.partyId);
+        if (!party || party.leaderPlayerId !== playerId) return;
+        const now = Date.now();
+        const obj = {
+          objectiveId: randomId('pobj', 6),
+          partyId: party.partyId,
+          type: typeof payload.type === 'string' ? payload.type : 'explore',
+          title: sanitizeText(payload.title, 64, 'Team Objective'),
+          targetId: typeof payload.targetId === 'string' ? payload.targetId : undefined,
+          targetX: Number.isFinite(Number(payload.targetX)) ? Number(payload.targetX) : undefined,
+          targetZ: Number.isFinite(Number(payload.targetZ)) ? Number(payload.targetZ) : undefined,
+          targetCount: Number.isFinite(Number(payload.targetCount)) ? Math.max(1, Math.floor(Number(payload.targetCount))) : 1,
+          currentCount: 0,
+          status: 'active',
+          startedAt: now,
+          contributions: {},
+          rewardsByPlayer: {},
+        };
+        party.activeObjective = obj;
+        for (const memberId of party.memberIds) {
+          this.sendTo(memberId, 'PARTY_OBJECTIVE_UPDATED', obj);
+        }
+        this.broadcastAllPartyStates();
+        break;
+      }
+
+      case 'PARTY_CANCEL_OBJECTIVE': {
+        if (!player.partyId) return;
+        const party = this.room.parties.get(player.partyId);
+        if (!party || party.leaderPlayerId !== playerId) return;
+        party.activeObjective = null;
+        this.broadcastAllPartyStates();
+        break;
+      }
+
+      case 'COOP_OBJECTIVE_PROGRESS': {
+        if (!player.partyId) return;
+        const party = this.room.parties.get(player.partyId);
+        if (!party || !party.activeObjective || party.activeObjective.status !== 'active') return;
+        const obj = party.activeObjective;
+        if (typeof payload.objectiveId === 'string' && payload.objectiveId && payload.objectiveId !== obj.objectiveId) return;
+        const inc = Number.isFinite(Number(payload.amount)) ? Math.max(1, Math.floor(Number(payload.amount))) : 1;
+        obj.currentCount = Math.min(obj.targetCount, obj.currentCount + inc);
+        const completed = obj.currentCount >= obj.targetCount;
+        if (completed) {
+          obj.status = 'completed';
+          obj.completedAt = Date.now();
+        }
+        const evType = completed ? 'PARTY_OBJECTIVE_COMPLETED' : 'PARTY_OBJECTIVE_UPDATED';
+        for (const memberId of party.memberIds) {
+          this.sendTo(memberId, evType, obj);
+        }
+        this.broadcastAllPartyStates();
         break;
       }
 
@@ -1017,6 +1621,7 @@ class OfflineLanServer {
   }
 
   async stop() {
+    this.stopTimeSyncLoop();
     if (this.room) {
       this.broadcast('ROOM_CLOSED', 'server', { reason: 'LAN server stopped.' });
     }

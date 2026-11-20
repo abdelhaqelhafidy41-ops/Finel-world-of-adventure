@@ -68,6 +68,7 @@ export const MIN_DAY_DURATION_SECONDS = 30;
 export const MAX_DAY_DURATION_SECONDS = 1800;
 
 function normalizeHours(hours: number): number {
+  if (!Number.isFinite(hours)) return 8.5;
   return ((hours % 24) + 24) % 24;
 }
 
@@ -258,19 +259,45 @@ export class TimeManager {
     state: AuthoritativeWorldTimeState,
     serverTimestamp?: number,
   ): void {
-    this.dayCount = Math.max(1, Math.floor(state.dayCount));
-    this.setFullDayDurationSeconds(state.fullDayDurationSeconds);
-    this.setTimeScale(state.timeScale);
-    this.paused = Boolean(state.paused);
+    if (!state || typeof state !== 'object') return;
+    if (typeof state.dayCount === 'number' && Number.isFinite(state.dayCount)) {
+      this.dayCount = Math.max(1, Math.floor(state.dayCount));
+    }
+    if (
+      typeof state.fullDayDurationSeconds === 'number' &&
+      Number.isFinite(state.fullDayDurationSeconds)
+    ) {
+      this.setFullDayDurationSeconds(state.fullDayDurationSeconds);
+    }
+    const prevScale = this.timeScale;
+    const prevPaused = this.paused;
+    if (typeof state.timeScale === 'number' && Number.isFinite(state.timeScale)) {
+      this.setTimeScale(state.timeScale);
+    }
+    if (typeof state.paused === 'boolean') {
+      this.paused = state.paused;
+    }
+
+    if (typeof state.worldHours !== 'number' || !Number.isFinite(state.worldHours)) {
+      // Reject invalid/NaN network time to prevent NN:NN clock or broken lighting
+      return;
+    }
 
     let nextHours = state.worldHours;
     if (!this.paused && this.timeScale > 0 && this.fullDayDurationSeconds > 0) {
-      const refMs = Math.max(state.anchorServerMs || 0, serverTimestamp || 0);
-      if (refMs > 0) {
+      const anchorMs =
+        typeof state.anchorServerMs === 'number' && Number.isFinite(state.anchorServerMs)
+          ? state.anchorServerMs
+          : 0;
+      const refMs = Math.max(anchorMs, serverTimestamp || 0);
+      if (refMs > 0 && anchorMs > 0) {
         // Account for minor transport latency relative to server timestamp if available
-        const baseNow = serverTimestamp ?? Date.now();
-        const elapsedSec = Math.max(0, Math.min(30, (baseNow - state.anchorServerMs) / 1000));
-        if (elapsedSec > 0 && serverTimestamp && state.anchorServerMs < serverTimestamp) {
+        const baseNow =
+          typeof serverTimestamp === 'number' && Number.isFinite(serverTimestamp)
+            ? serverTimestamp
+            : Date.now();
+        const elapsedSec = Math.max(0, Math.min(30, (baseNow - anchorMs) / 1000));
+        if (elapsedSec > 0 && serverTimestamp && anchorMs < serverTimestamp) {
           const hoursPerSec = 24 / this.fullDayDurationSeconds;
           const total = nextHours + elapsedSec * hoursPerSec * this.timeScale;
           if (total >= 24) {
@@ -280,6 +307,17 @@ export class TimeManager {
         }
       }
     }
-    this.worldHours = normalizeHours(nextHours);
+    const normalizedNext = normalizeHours(nextHours);
+    // Avoid micro-jitter on periodic syncs when already within ~30 game-seconds
+    const rawDiff = Math.abs(normalizedNext - this.worldHours);
+    const wrappedDiff = Math.min(rawDiff, 24 - rawDiff);
+    if (
+      prevScale === this.timeScale &&
+      prevPaused === this.paused &&
+      wrappedDiff < 0.008
+    ) {
+      return;
+    }
+    this.worldHours = normalizedNext;
   }
 }
