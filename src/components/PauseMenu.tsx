@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import {
   AlertTriangle,
+  Check,
   ChevronDown,
   Cloud,
   CloudFog,
   CloudLightning,
   CloudRain,
+  Copy,
   FolderOpen,
   Home,
   Languages,
@@ -25,6 +27,7 @@ import {
   Users,
   Volume2,
   VolumeX,
+  Wifi,
 } from 'lucide-react';
 import type { GameSettings } from '../game/types';
 import type { WorldSettingsPermission } from '../../shared/multiplayerProtocol';
@@ -39,6 +42,7 @@ import {
 import { UI_TEXT, type Language } from '../game/i18n/translations';
 import { useMenuNavigation } from '../hooks/useMenuNavigation';
 import { useScreenOrientation } from '../utils/screenOrientation';
+import { copyTextToClipboard } from '../game/multiplayer/inviteUtils';
 import { ExitConfirmationDialog } from './menu/ExitConfirmationDialog';
 
 interface PauseMenuProps {
@@ -77,6 +81,10 @@ interface PauseMenuProps {
   onOpenParty?: () => void;
   partyMemberCount?: number;
   pendingPartyInvitesCount?: number;
+  lanServerInfo?: {
+    address: string;
+    roomCode: string;
+  } | null;
 }
 
 export const PauseMenu: React.FC<PauseMenuProps> = ({
@@ -115,14 +123,33 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   onOpenParty,
   partyMemberCount = 0,
   pendingPartyInvitesCount = 0,
+  lanServerInfo = null,
 }) => {
   const t = UI_TEXT[lang];
   const isRtl = lang === 'ar';
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [unsavedPromptOpen, setUnsavedPromptOpen] = useState(false);
   const [exitPromptOpen, setExitPromptOpen] = useState(false);
+  const [copiedLanAddress, setCopiedLanAddress] = useState(false);
+  const [copiedLanCode, setCopiedLanCode] = useState(false);
   const { orientation, showOrientationToggle, toggleOrientation } =
     useScreenOrientation();
+
+  const handleCopyLanAddress = async () => {
+    if (!lanServerInfo?.address) return;
+    if (await copyTextToClipboard(lanServerInfo.address)) {
+      setCopiedLanAddress(true);
+      window.setTimeout(() => setCopiedLanAddress(false), 1800);
+    }
+  };
+
+  const handleCopyLanCode = async () => {
+    if (!lanServerInfo?.roomCode) return;
+    if (await copyTextToClipboard(lanServerInfo.roomCode)) {
+      setCopiedLanCode(true);
+      window.setTimeout(() => setCopiedLanCode(false), 1800);
+    }
+  };
 
   const dayDurationSec = timeSnapshot?.fullDayDurationSeconds ?? 360;
   const weatherTarget = weatherSnapshot?.targetState ?? 'clear';
@@ -242,6 +269,103 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Active Offline LAN Server Info (IP + LAN Code) */}
+        {lanServerInfo && (
+          <div
+            data-testid="pause-lan-server-info"
+            className="mb-4 p-3 rounded-xl bg-[#0b1611] border border-[#2d4c3b] space-y-2"
+          >
+            <div className="flex items-center gap-1.5 text-[11px] font-display font-bold uppercase tracking-wider text-[#9ef0b0]">
+              <Wifi className="w-3.5 h-3.5 text-[#7fe094] shrink-0" />
+              <span>
+                {lang === 'ar'
+                  ? 'معلومات خادم الشبكة المحلية (LAN)'
+                  : 'Offline LAN Server Info'}
+              </span>
+            </div>
+
+            <div className="space-y-1.5">
+              {lanServerInfo.address && (
+                <div className="px-2.5 py-2 rounded-lg bg-[#08100c] border border-white/10 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[10px] text-[#8fa594]">
+                      {lang === 'ar'
+                        ? 'عنوان خادم الشبكة المحلية'
+                        : 'LAN Server Address'}
+                    </div>
+                    <div
+                      dir="ltr"
+                      data-testid="pause-lan-address"
+                      className="font-mono-num text-xs font-bold text-[#e9f7ed] truncate"
+                    >
+                      {lanServerInfo.address}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="pause-copy-lan-address"
+                    onClick={() => void handleCopyLanAddress()}
+                    className="min-h-[32px] px-2.5 rounded-lg bg-[#16291f] hover:bg-[#1f392b] border border-[#345443] text-[11px] font-semibold text-[#dce5d8] inline-flex items-center gap-1 cursor-pointer shrink-0"
+                  >
+                    {copiedLanAddress ? (
+                      <Check className="w-3 h-3 text-[#7fe094]" />
+                    ) : (
+                      <Copy className="w-3 h-3" />
+                    )}
+                    <span>
+                      {copiedLanAddress
+                        ? lang === 'ar'
+                          ? 'تم النسخ'
+                          : 'Copied'
+                        : lang === 'ar'
+                          ? 'نسخ العنوان'
+                          : 'Copy Address'}
+                    </span>
+                  </button>
+                </div>
+              )}
+
+              {lanServerInfo.roomCode && (
+                <div className="px-2.5 py-2 rounded-lg bg-[#08100c] border border-white/10 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[10px] text-[#8fa594]">
+                      {lang === 'ar' ? 'رمز LAN' : 'LAN Code'}
+                    </div>
+                    <div
+                      dir="ltr"
+                      data-testid="pause-lan-code"
+                      className="font-mono-num text-xs font-bold tracking-widest text-[#e5a93c]"
+                    >
+                      {lanServerInfo.roomCode}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="pause-copy-lan-code"
+                    onClick={() => void handleCopyLanCode()}
+                    className="min-h-[32px] px-2.5 rounded-lg bg-[#16291f] hover:bg-[#1f392b] border border-[#345443] text-[11px] font-semibold text-[#dce5d8] inline-flex items-center gap-1 cursor-pointer shrink-0"
+                  >
+                    {copiedLanCode ? (
+                      <Check className="w-3 h-3 text-[#7fe094]" />
+                    ) : (
+                      <Copy className="w-3 h-3" />
+                    )}
+                    <span>
+                      {copiedLanCode
+                        ? lang === 'ar'
+                          ? 'تم النسخ'
+                          : 'Copied'
+                        : lang === 'ar'
+                          ? 'نسخ الرمز'
+                          : 'Copy Code'}
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Primary Pause Menu Buttons */}
         <div className="flex flex-col gap-2.5 mb-5">

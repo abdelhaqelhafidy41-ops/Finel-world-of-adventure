@@ -580,6 +580,9 @@ export interface BoxCollider {
   maxY: number;
   yaw: number;
   walkableTop?: boolean;
+  /** Optional continuous linear deck height along local Z (-halfD -> +halfD) for smooth arched bridges */
+  slopeStartY?: number;
+  slopeEndY?: number;
   tag?: 'wall' | 'roof' | 'floor' | 'door' | 'prop';
 }
 

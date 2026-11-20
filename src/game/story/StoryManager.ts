@@ -653,6 +653,14 @@ export class StoryManager {
     enemyType: string,
     entityId?: string,
     notify?: (msg: string) => void,
+    opts?: {
+      questBinding?: { questId: string; objectiveId: string };
+      killPos?: { x: number; z: number };
+      bridge?: Pick<
+        StoryWorldBridge,
+        'getNpcPosition' | 'getLocationCoords' | 'getVillageCoords' | 'getChestCoords' | 'resolveLandPoint'
+      >;
+    },
   ): boolean {
     let changed = false;
     for (const def of STORY_QUESTS) {
@@ -672,6 +680,28 @@ export class StoryManager {
         const expected =
           obj.type === 'defeat_bandit' ? 'bandit_scout' : (obj.enemyType ?? 'any');
         if (!enemyTypeMatches(expected, enemyType)) continue;
+
+        const matchesExactBinding =
+          opts?.questBinding?.questId === def.questId &&
+          opts?.questBinding?.objectiveId === obj.id;
+        if (!matchesExactBinding) {
+          // Do not credit an enemy explicitly bound to a different quest/objective
+          if (opts?.questBinding) continue;
+          // For location-bound objectives, ignore unrelated enemies killed far outside the quest area
+          if (
+            (obj.anchor || obj.locationId || obj.villageId) &&
+            opts?.killPos &&
+            opts?.bridge
+          ) {
+            const areaCoords = this.resolveObjectiveCoords(obj, opts.bridge);
+            if (
+              areaCoords &&
+              Math.hypot(opts.killPos.x - areaCoords.x, opts.killPos.z - areaCoords.z) > 95
+            ) {
+              continue;
+            }
+          }
+        }
 
         if (entityId) {
           const token = `${obj.id}:${entityId}`;

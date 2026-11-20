@@ -48,6 +48,7 @@ export class SwitchingMultiplayerTransport implements IMultiplayerService {
   private readonly onlineService: IMultiplayerService;
   private lanService: MultiplayerService | null = null;
   private lanBaseUrl: string | null = null;
+  private lanDisplayAddress: string | null = null;
   private activeMode: MultiplayerTransportMode = 'online';
   private activeUnsubscribe: (() => void) | null = null;
   private readonly listeners = new Set<(event: MultiplayerServiceEvent) => void>();
@@ -69,6 +70,16 @@ export class SwitchingMultiplayerTransport implements IMultiplayerService {
     return this.lanBaseUrl;
   }
 
+  public setLanDisplayAddress(address: string | null): void {
+    this.lanDisplayAddress = address ? address.trim() : null;
+  }
+
+  public getLanDisplayAddress(): string | null {
+    if (this.lanDisplayAddress) return this.lanDisplayAddress;
+    if (this.lanBaseUrl) return this.lanBaseUrl.replace(/^https?:\/\//i, '');
+    return null;
+  }
+
   public getOnlineService(): IMultiplayerService {
     return this.onlineService;
   }
@@ -87,6 +98,7 @@ export class SwitchingMultiplayerTransport implements IMultiplayerService {
       }
       this.lanService = null;
       this.lanBaseUrl = null;
+      this.lanDisplayAddress = null;
     }
     this.activeMode = 'online';
     this.bindActiveSubscription();
@@ -257,7 +269,12 @@ export class SwitchingMultiplayerTransport implements IMultiplayerService {
             this.getActiveService().getLocalPlayerId(),
       );
     await this.getActiveService().leaveRoom();
+    if (this.activeMode === 'lan') {
+      this.lanDisplayAddress = null;
+    }
     if (wasLanHost) {
+      // Allow ROOM_CLOSED WebSocket frame to flush to connected LAN guests before closing sockets
+      await new Promise((resolve) => setTimeout(resolve, 120));
       await stopLanHost();
     }
   }

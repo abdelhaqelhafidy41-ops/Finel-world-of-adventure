@@ -2275,20 +2275,6 @@ export class WorldManager {
     mesh.updateMatrix();
     this.worldGroup.add(mesh);
 
-    if (res.kind !== 'fiber' && res.kind !== 'medicinal-herb') {
-      this.registerCollider(
-        {
-          kind: 'cylinder',
-          x: res.x,
-          z: res.z,
-          radius: res.kind === 'wood' ? 0.65 : 0.85,
-          minY: res.y - 0.5,
-          maxY: res.y + 2.4,
-        },
-        `exp-res:${res.id}`,
-      );
-    }
-
     const depletedState = this.depletedNodes.get(res.id);
     const maxUses = 3;
     let usesRemaining = depletedState ? depletedState.usesRemaining : maxUses;
@@ -2305,6 +2291,20 @@ export class WorldManager {
     }
     const isDepleted = usesRemaining <= 0;
     mesh.visible = !isDepleted;
+
+    if (!isDepleted && res.kind !== 'fiber' && res.kind !== 'medicinal-herb') {
+      this.registerCollider(
+        {
+          kind: 'cylinder',
+          x: res.x,
+          z: res.z,
+          radius: res.kind === 'wood' ? 0.65 : 0.85,
+          minY: res.y - 0.5,
+          maxY: res.y + 2.4,
+        },
+        `exp-res:${res.id}`,
+      );
+    }
 
     this.interactables.push({
       id: res.id,
@@ -2656,15 +2656,16 @@ export class WorldManager {
       chunk.rootGroup.add(nodeMesh);
 
       if (
-        isTree ||
-        resKind === 'stone' ||
-        resKind === 'iron-ore' ||
-        resKind === 'copper-ore' ||
-        resKind === 'silver-ore' ||
-        resKind === 'gold-ore' ||
-        resKind === 'coal' ||
-        resKind === 'rare-mineral' ||
-        resKind === 'cactus'
+        !isDepleted &&
+        (isTree ||
+          resKind === 'stone' ||
+          resKind === 'iron-ore' ||
+          resKind === 'copper-ore' ||
+          resKind === 'silver-ore' ||
+          resKind === 'gold-ore' ||
+          resKind === 'coal' ||
+          resKind === 'rare-mineral' ||
+          resKind === 'cactus')
       ) {
         this.registerCollider(
           {

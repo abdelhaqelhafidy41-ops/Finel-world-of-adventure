@@ -91,14 +91,23 @@ export function sampleWalkableBridgeHeight(
     const sin = Math.sin(c.yaw);
     const lx = dx * cos - dz * sin;
     const lz = dx * sin + dz * cos;
-    if (
-      Math.abs(lx) <= c.halfW + 0.12 &&
-      Math.abs(lz) <= c.halfD + 0.12 &&
-      currentY >= c.maxY - stepTolerance &&
-      currentY <= c.maxY + 2.4 &&
-      c.maxY > bestY
-    ) {
-      bestY = c.maxY;
+    if (Math.abs(lx) <= c.halfW + 0.12 && Math.abs(lz) <= c.halfD + 0.12) {
+      let topY = c.maxY;
+      if (
+        c.slopeStartY !== undefined &&
+        c.slopeEndY !== undefined &&
+        c.halfD > 0.001
+      ) {
+        const t = Math.max(0, Math.min(1, (lz + c.halfD) / (2 * c.halfD)));
+        topY = c.slopeStartY + (c.slopeEndY - c.slopeStartY) * t;
+      }
+      if (
+        currentY >= topY - stepTolerance &&
+        currentY <= topY + 2.4 &&
+        topY > bestY
+      ) {
+        bestY = topY;
+      }
     }
   }
   return bestY > -Infinity ? bestY : null;
@@ -612,20 +621,28 @@ export class BridgeSystem {
       dummy.updateMatrix();
       stringerInst.setMatrixAt(s * 2 + 1, dummy.matrix);
 
-      // Register overlapping walkableTop deck collider in world space
+      // Register overlapping walkableTop sloped deck collider in world space
       const worldX = spec.midX + spec.dirX * localZ;
       const worldZ = spec.midZ + spec.dirZ * localZ;
+      const isOuterEnd = s === 0 || s === deckSegs - 1;
+      const colHalfD = segLen * 0.5 + (isOuterEnd ? 0.58 : 0.4);
+      const uColStart = Math.max(0, uMid - colHalfD / spec.length);
+      const uColEnd = Math.min(1, uMid + colHalfD / spec.length);
+      const slopeStartY = evaluateBridgeDeckY(spec, uColStart);
+      const slopeEndY = evaluateBridgeDeckY(spec, uColEnd);
       registerCollider({
         kind: 'box',
         x: worldX,
         z: worldZ,
-        halfW: halfW + 0.08,
-        halfD: segLen * 0.5 + 0.36,
-        minY: Math.min(y0, y1) - 0.55,
-        maxY: yMid,
+        halfW: halfW + 0.1,
+        halfD: colHalfD,
+        minY: Math.min(y0, y1, slopeStartY, slopeEndY) - 0.55,
+        maxY: Math.max(y0, y1, slopeStartY, slopeEndY),
         yaw: spec.yaw,
         tag: 'floor',
         walkableTop: true,
+        slopeStartY,
+        slopeEndY,
       });
     }
 

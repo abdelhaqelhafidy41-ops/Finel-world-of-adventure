@@ -220,6 +220,11 @@ export class NPCManager {
     return this.villageNpcs.size;
   }
 
+  public isNpcPersistedDead(npcId: string): boolean {
+    const saved = this.persistedNpcStates.get(npcId);
+    return Boolean(saved?.isDead);
+  }
+
   public ensureSideQuestNpc(def: SideQuestNpcDef, x: number, z: number): NPCBase {
     const existing = this.sideQuestNpcs.get(def.npcId) ?? this.npcs.find((n) => n.id === def.npcId);
     if (existing) {
@@ -1330,67 +1335,7 @@ export class NPCManager {
       this.positionCache.push({ id: npc.id, x: npc.position.x, z: npc.position.z });
     };
 
-    interface RegionalRosterEntry {
-      role: NpcRole;
-      name: string;
-      nameAr: string;
-      title: string;
-      titleAr: string;
-    }
-
-    const roleRosterByKind: Record<string, RegionalRosterEntry[]> = {
-      forest: [
-        { role: 'woodcutter', name: 'Bramwell', nameAr: 'برامويل', title: 'Master Woodcutter', titleAr: 'شيخ الحطّابين' },
-        { role: 'hunter', name: 'Kaelen', nameAr: 'كيلين', title: 'Pinehaven Hunter', titleAr: 'صيّاد ملاذ الصنوبر' },
-        { role: 'healer', name: 'Sylvia', nameAr: 'سيلفيا', title: 'Forest Healer', titleAr: 'معالجة الغابة' },
-        { role: 'guard', name: 'Orin', nameAr: 'أورين', title: 'Pinehaven Warden', titleAr: 'حارس ملاذ الصنوبر' },
-      ],
-      farming: [
-        { role: 'farmer', name: 'Harlan', nameAr: 'هارلان', title: 'Head Farmer', titleAr: 'كبير المزارعين' },
-        { role: 'farmer', name: 'Pippa', nameAr: 'بيبا', title: 'Field Tender', titleAr: 'راعية الحقول' },
-        { role: 'blacksmith', name: 'Gareth', nameAr: 'غاريث', title: 'Plowsmith', titleAr: 'حداد المحاريث' },
-        { role: 'carpenter', name: 'Lukas', nameAr: 'لوكاس', title: 'Barn Carpenter', titleAr: 'نجّار الحظائر' },
-        { role: 'guard', name: 'Talia', nameAr: 'تاليا', title: 'Greenfields Watch', titleAr: 'حارسة المروج الخضراء' },
-      ],
-      mountain: [
-        { role: 'miner', name: 'Dain', nameAr: 'داين', title: 'Ore Prospector', titleAr: 'منقّب المعادن' },
-        { role: 'blacksmith', name: 'Varek', nameAr: 'فاريك', title: 'Cragwatch Forger', titleAr: 'حدّاد مرصد الجرف' },
-        { role: 'guard', name: 'Helga', nameAr: 'هلغا', title: 'Ridge Sentinel', titleAr: 'حارسة القمم' },
-        { role: 'elder', name: 'Elder Bjorne', nameAr: 'الشيخ بيورن', title: 'Highland Elder', titleAr: 'شيخ المرتفعات' },
-      ],
-      river: [
-        { role: 'fisherman', name: 'Marlin', nameAr: 'مارلين', title: 'River Angler', titleAr: 'صيّاد النهر' },
-        { role: 'merchant', name: 'Soren', nameAr: 'سورين', title: 'Dockside Merchant', titleAr: 'تاجر الرصيف' },
-        { role: 'innkeeper', name: 'Nessa', nameAr: 'نيسا', title: 'Riverside Innkeeper', titleAr: 'صاحبة نزل النهر' },
-        { role: 'guard', name: 'Caleb', nameAr: 'كالب', title: 'Bridge Warden', titleAr: 'حارس الجسر' },
-      ],
-      plains: [
-        { role: 'farmer', name: 'Wren', nameAr: 'رين', title: 'Meadow Shepherd', titleAr: 'راعي المروج' },
-        { role: 'healer', name: 'Iris', nameAr: 'أيريس', title: 'Village Healer', titleAr: 'معالجة القرية' },
-        { role: 'merchant', name: 'Jorah', nameAr: 'جوراه', title: 'Windmere Peddler', titleAr: 'تاجر بحيرة الريح' },
-        { role: 'carpenter', name: 'Owen', nameAr: 'أوين', title: 'Windmere Carpenter', titleAr: 'نجّار بحيرة الريح' },
-      ],
-      trading: [
-        { role: 'merchant', name: 'Aurelia', nameAr: 'أوريليا', title: 'Grandcross Silk Merchant', titleAr: 'تاجرة حرير المفترق' },
-        { role: 'traveling_merchant', name: 'Rashid', nameAr: 'رشيد', title: 'Caravan Quartermaster', titleAr: 'قائد القوافل' },
-        { role: 'blacksmith', name: 'Borin', nameAr: 'بورين', title: 'Grandcross Master Smith', titleAr: 'كبير حدّادي المفترق' },
-        { role: 'innkeeper', name: 'Marta', nameAr: 'مارتا', title: 'Golden Cross Innkeeper', titleAr: 'صاحبة النزل الذهبي' },
-        { role: 'elder', name: 'Elder Alaric', nameAr: 'الشيخ ألاريك', title: 'Grandcross Magistrate', titleAr: 'حاكم المفترق الكبير' },
-        { role: 'guard', name: 'Vance', nameAr: 'فانس', title: 'Crossroads Captain', titleAr: 'قائد حرس المفترق' },
-      ],
-      desert: [
-        { role: 'merchant', name: 'Zahir', nameAr: 'زاهر', title: 'Oasis Spice Trader', titleAr: 'تاجر توابل الواحة' },
-        { role: 'traveling_merchant', name: 'Layla', nameAr: 'ليلى', title: 'Caravan Outfitter', titleAr: 'مجهّزة القوافل' },
-        { role: 'guard', name: 'Faris', nameAr: 'فارس', title: 'Dune Sentinel', titleAr: 'حارس الكثبان' },
-        { role: 'elder', name: 'Elder Hakim', nameAr: 'الشيخ حكيم', title: 'Oasis Keeper', titleAr: 'شيخ الواحة' },
-      ],
-      valley: [
-        { role: 'farmer', name: 'Rory', nameAr: 'روري', title: 'Glen Cultivator', titleAr: 'مزارع الوادي' },
-        { role: 'woodcutter', name: 'Halvor', nameAr: 'هالفور', title: 'Valley Forester', titleAr: 'حطّاب الوادي' },
-        { role: 'healer', name: 'Faye', nameAr: 'فاي', title: 'Valley Herbalist', titleAr: 'عشّابة الوادي' },
-        { role: 'guard', name: 'Kieran', nameAr: 'كيران', title: 'Glenwatch Patrol', titleAr: 'حارس مرصد الوادي' },
-      ],
-    };
+    const roleRosterByKind = REGIONAL_ROLE_ROSTER_BY_KIND;
 
     const villageNameAr = getLocalizedVillageName(village.id, village.name, 'ar');
     const safeWaypoints = village.guardWaypoints
@@ -1546,33 +1491,7 @@ export class NPCManager {
     }
     const rand = seededRandom((hash ^ Math.round(cx * 31) ^ Math.round(cz * 17)) >>> 0);
 
-    const firstNames: Array<{ en: string; ar: string }> = [
-      { en: 'Alden', ar: 'ألدن' },
-      { en: 'Bryn', ar: 'برين' },
-      { en: 'Cora', ar: 'كورا' },
-      { en: 'Dorian', ar: 'دوريان' },
-      { en: 'Elara', ar: 'إيلارا' },
-      { en: 'Fenn', ar: 'فين' },
-      { en: 'Gideon', ar: 'جيديون' },
-      { en: 'Hana', ar: 'هناء' },
-      { en: 'Idris', ar: 'إدريس' },
-      { en: 'Joss', ar: 'جوس' },
-      { en: 'Kael', ar: 'كايل' },
-      { en: 'Lina', ar: 'لينا' },
-      { en: 'Merek', ar: 'ميريك' },
-      { en: 'Nadia', ar: 'نادية' },
-      { en: 'Orson', ar: 'أورسون' },
-      { en: 'Petra', ar: 'بترا' },
-      { en: 'Quentin', ar: 'كوينتن' },
-      { en: 'Rhea', ar: 'ريا' },
-      { en: 'Sami', ar: 'سامي' },
-      { en: 'Tamsin', ar: 'تامسين' },
-      { en: 'Umar', ar: 'عمر' },
-      { en: 'Vera', ar: 'فيرا' },
-      { en: 'Wyatt', ar: 'وايت' },
-      { en: 'Yara', ar: 'يارا' },
-      { en: 'Zane', ar: 'زين' },
-    ];
+    const firstNames = PROCEDURAL_FIRST_NAMES;
 
     const roleTitles: Record<NpcRole, { en: string; ar: string }> = {
       elder: { en: 'Village Leader', ar: 'زعيم القرية' },
@@ -2841,3 +2760,210 @@ export class NPCManager {
     this.npcGroup.removeFromParent();
   }
 }
+
+export interface VillageNpcDescriptor {
+  id: string;
+  name: string;
+  nameAr: string;
+  role: NpcRole;
+}
+
+interface RegionalRosterEntry {
+  role: NpcRole;
+  name: string;
+  nameAr: string;
+  title: string;
+  titleAr: string;
+}
+
+const REGIONAL_ROLE_ROSTER_BY_KIND: Record<string, RegionalRosterEntry[]> = {
+  forest: [
+    { role: 'woodcutter', name: 'Bramwell', nameAr: 'برامويل', title: 'Master Woodcutter', titleAr: 'شيخ الحطّابين' },
+    { role: 'hunter', name: 'Kaelen', nameAr: 'كيلين', title: 'Pinehaven Hunter', titleAr: 'صيّاد ملاذ الصنوبر' },
+    { role: 'healer', name: 'Sylvia', nameAr: 'سيلفيا', title: 'Forest Healer', titleAr: 'معالجة الغابة' },
+    { role: 'guard', name: 'Orin', nameAr: 'أورين', title: 'Pinehaven Warden', titleAr: 'حارس ملاذ الصنوبر' },
+  ],
+  farming: [
+    { role: 'farmer', name: 'Harlan', nameAr: 'هارلان', title: 'Head Farmer', titleAr: 'كبير المزارعين' },
+    { role: 'farmer', name: 'Pippa', nameAr: 'بيبا', title: 'Field Tender', titleAr: 'راعية الحقول' },
+    { role: 'blacksmith', name: 'Gareth', nameAr: 'غاريث', title: 'Plowsmith', titleAr: 'حداد المحاريث' },
+    { role: 'carpenter', name: 'Lukas', nameAr: 'لوكاس', title: 'Barn Carpenter', titleAr: 'نجّار الحظائر' },
+    { role: 'guard', name: 'Talia', nameAr: 'تاليا', title: 'Greenfields Watch', titleAr: 'حارسة المروج الخضراء' },
+  ],
+  mountain: [
+    { role: 'miner', name: 'Dain', nameAr: 'داين', title: 'Ore Prospector', titleAr: 'منقّب المعادن' },
+    { role: 'blacksmith', name: 'Varek', nameAr: 'فاريك', title: 'Cragwatch Forger', titleAr: 'حدّاد مرصد الجرف' },
+    { role: 'guard', name: 'Helga', nameAr: 'هلغا', title: 'Ridge Sentinel', titleAr: 'حارسة القمم' },
+    { role: 'elder', name: 'Elder Bjorne', nameAr: 'الشيخ بيورن', title: 'Highland Elder', titleAr: 'شيخ المرتفعات' },
+  ],
+  river: [
+    { role: 'fisherman', name: 'Marlin', nameAr: 'مارلين', title: 'River Angler', titleAr: 'صيّاد النهر' },
+    { role: 'merchant', name: 'Soren', nameAr: 'سورين', title: 'Dockside Merchant', titleAr: 'تاجر الرصيف' },
+    { role: 'innkeeper', name: 'Nessa', nameAr: 'نيسا', title: 'Riverside Innkeeper', titleAr: 'صاحبة نزل النهر' },
+    { role: 'guard', name: 'Caleb', nameAr: 'كالب', title: 'Bridge Warden', titleAr: 'حارس الجسر' },
+  ],
+  plains: [
+    { role: 'farmer', name: 'Wren', nameAr: 'رين', title: 'Meadow Shepherd', titleAr: 'راعي المروج' },
+    { role: 'healer', name: 'Iris', nameAr: 'أيريس', title: 'Village Healer', titleAr: 'معالجة القرية' },
+    { role: 'merchant', name: 'Jorah', nameAr: 'جوراه', title: 'Windmere Peddler', titleAr: 'تاجر بحيرة الريح' },
+    { role: 'carpenter', name: 'Owen', nameAr: 'أوين', title: 'Windmere Carpenter', titleAr: 'نجّار بحيرة الريح' },
+  ],
+  trading: [
+    { role: 'merchant', name: 'Aurelia', nameAr: 'أوريليا', title: 'Grandcross Silk Merchant', titleAr: 'تاجرة حرير المفترق' },
+    { role: 'traveling_merchant', name: 'Rashid', nameAr: 'رشيد', title: 'Caravan Quartermaster', titleAr: 'قائد القوافل' },
+    { role: 'blacksmith', name: 'Borin', nameAr: 'بورين', title: 'Grandcross Master Smith', titleAr: 'كبير حدّادي المفترق' },
+    { role: 'innkeeper', name: 'Marta', nameAr: 'مارتا', title: 'Golden Cross Innkeeper', titleAr: 'صاحبة النزل الذهبي' },
+    { role: 'elder', name: 'Elder Alaric', nameAr: 'الشيخ ألاريك', title: 'Grandcross Magistrate', titleAr: 'حاكم المفترق الكبير' },
+    { role: 'guard', name: 'Vance', nameAr: 'فانس', title: 'Crossroads Captain', titleAr: 'قائد حرس المفترق' },
+  ],
+  desert: [
+    { role: 'merchant', name: 'Zahir', nameAr: 'زاهر', title: 'Oasis Spice Trader', titleAr: 'تاجر توابل الواحة' },
+    { role: 'traveling_merchant', name: 'Layla', nameAr: 'ليلى', title: 'Caravan Outfitter', titleAr: 'مجهّزة القوافل' },
+    { role: 'guard', name: 'Faris', nameAr: 'فارس', title: 'Dune Sentinel', titleAr: 'حارس الكثبان' },
+    { role: 'elder', name: 'Elder Hakim', nameAr: 'الشيخ حكيم', title: 'Oasis Keeper', titleAr: 'شيخ الواحة' },
+  ],
+  valley: [
+    { role: 'farmer', name: 'Rory', nameAr: 'روري', title: 'Glen Cultivator', titleAr: 'مزارع الوادي' },
+    { role: 'woodcutter', name: 'Halvor', nameAr: 'هالفور', title: 'Valley Forester', titleAr: 'حطّاب الوادي' },
+    { role: 'healer', name: 'Faye', nameAr: 'فاي', title: 'Valley Herbalist', titleAr: 'عشّابة الوادي' },
+    { role: 'guard', name: 'Kieran', nameAr: 'كيران', title: 'Glenwatch Patrol', titleAr: 'حارس مرصد الوادي' },
+  ],
+};
+
+const PROCEDURAL_FIRST_NAMES: Array<{ en: string; ar: string }> = [
+  { en: 'Alden', ar: 'ألدن' },
+  { en: 'Bryn', ar: 'برين' },
+  { en: 'Cora', ar: 'كورا' },
+  { en: 'Dorian', ar: 'دوريان' },
+  { en: 'Elara', ar: 'إيلارا' },
+  { en: 'Fenn', ar: 'فين' },
+  { en: 'Gideon', ar: 'جيديون' },
+  { en: 'Hana', ar: 'هناء' },
+  { en: 'Idris', ar: 'إدريس' },
+  { en: 'Joss', ar: 'جوس' },
+  { en: 'Kael', ar: 'كايل' },
+  { en: 'Lina', ar: 'لينا' },
+  { en: 'Merek', ar: 'ميريك' },
+  { en: 'Nadia', ar: 'نادية' },
+  { en: 'Orson', ar: 'أورسون' },
+  { en: 'Petra', ar: 'بترا' },
+  { en: 'Quentin', ar: 'كوينتن' },
+  { en: 'Rhea', ar: 'ريا' },
+  { en: 'Sami', ar: 'سامي' },
+  { en: 'Tamsin', ar: 'تامسين' },
+  { en: 'Umar', ar: 'عمر' },
+  { en: 'Vera', ar: 'فيرا' },
+  { en: 'Wyatt', ar: 'وايت' },
+  { en: 'Yara', ar: 'يارا' },
+  { en: 'Zane', ar: 'زين' },
+];
+
+/**
+ * Deterministically computes the exact villager roster (IDs, names, Arabic names, roles)
+ * for any non-Oakhollow regional or procedural village, matching loadVillageNpcs() 1:1.
+ * Used for lightweight quest generation and save/load restoration without loading 3D meshes.
+ */
+export function getVillageNpcRoster(village: VillageSiteRecord): VillageNpcDescriptor[] {
+  if (village.id === 'oakhollow') return [];
+
+  if (!village.isProcedural) {
+    const roster = REGIONAL_ROLE_ROSTER_BY_KIND[village.kind] ?? REGIONAL_ROLE_ROSTER_BY_KIND.plains;
+    return roster.map((entry, idx) => ({
+      id: `npc-${village.id}-${entry.role}-${idx}`,
+      name: entry.name,
+      nameAr: entry.nameAr,
+      role: entry.role,
+    }));
+  }
+
+  let hash = 2166136261;
+  for (let i = 0; i < village.id.length; i++) {
+    hash ^= village.id.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const rand = seededRandom(
+    (hash ^ Math.round(village.centerX * 31) ^ Math.round(village.centerZ * 17)) >>> 0,
+  );
+  const plan = village.populationPlan ?? {
+    guardCount: 2,
+    workerRoles: ['farmer', 'carpenter', 'woodcutter'] as NpcRole[],
+    hasTrader: true,
+    traderIsTraveling: false,
+    villagerCount: 6,
+    questCount: 4,
+  };
+
+  const nameCursorStart = Math.floor(rand() * PROCEDURAL_FIRST_NAMES.length);
+  let nameIdx = 0;
+  const nextName = () => {
+    const pair = PROCEDURAL_FIRST_NAMES[(nameCursorStart + nameIdx * 3) % PROCEDURAL_FIRST_NAMES.length];
+    nameIdx++;
+    return pair;
+  };
+
+  const out: VillageNpcDescriptor[] = [];
+
+  // 1. Elder
+  const leaderName = nextName();
+  out.push({
+    id: `npc-${village.id}-elder-0`,
+    name: `Elder ${leaderName.en}`,
+    nameAr: `الشيخ ${leaderName.ar}`,
+    role: 'elder',
+  });
+
+  // 2. Guards
+  const guardCount = Math.max(2, plan.guardCount);
+  for (let g = 0; g < guardCount; g++) {
+    const gName = nextName();
+    out.push({
+      id: `npc-${village.id}-guard-${g}`,
+      name: gName.en,
+      nameAr: gName.ar,
+      role: 'guard',
+    });
+  }
+
+  // 3. Workers
+  const workerRoles =
+    plan.workerRoles.length > 0
+      ? plan.workerRoles
+      : (['farmer', 'carpenter', 'woodcutter'] as NpcRole[]);
+  for (let w = 0; w < workerRoles.length; w++) {
+    const role = workerRoles[w];
+    const wName = nextName();
+    out.push({
+      id: `npc-${village.id}-worker-${role}-${w}`,
+      name: wName.en,
+      nameAr: wName.ar,
+      role,
+    });
+  }
+
+  // 4. Optional Trader
+  if (plan.hasTrader) {
+    const tRole: NpcRole = plan.traderIsTraveling ? 'traveling_merchant' : 'merchant';
+    const tName = nextName();
+    out.push({
+      id: `npc-${village.id}-trader-0`,
+      name: tName.en,
+      nameAr: tName.ar,
+      role: tRole,
+    });
+  }
+
+  // 5. Villagers
+  const villagerCount = Math.max(5, Math.min(10, plan.villagerCount));
+  for (let vIdx = 0; vIdx < villagerCount; vIdx++) {
+    const vName = nextName();
+    out.push({
+      id: `npc-${village.id}-villager-${vIdx}`,
+      name: vName.en,
+      nameAr: vName.ar,
+      role: 'villager',
+    });
+  }
+
+  return out;
+}
+

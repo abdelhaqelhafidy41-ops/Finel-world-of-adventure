@@ -102,10 +102,13 @@ const _moveDir = new THREE.Vector3();
 const _desiredVel = new THREE.Vector3();
 const _gradScratch = { gx: 0, gz: 0, mag: 0 };
 
-// Terrain collision & slope constants
-const MAX_WALKABLE_SLOPE_TAN = 0.88; // ~41.3 degrees
+// Terrain & walkable structure collision constants
+const MAX_WALKABLE_SLOPE_TAN = 1.12; // ~48.2 degrees (grassy hills & riverbanks pass; cliffs block)
 const MAX_TERRAIN_STEP_UP = 0.52;
+const MAX_WALKABLE_BOX_STEP_UP = 0.65;
 const TERRAIN_SUBSTEP_DIST = 0.22;
+const COLLIDER_SKIN_EPS = 0.004;
+const OBJECT_COLLISION_ITERATIONS = 3;
 
 // Swimming depth & buoyancy constants
 const SHALLOW_WATER_DEPTH = 0.14;
@@ -891,10 +894,11 @@ export class PlayerController {
       this.onSteepSlope = false;
     } else {
       const supportDelta = solidSupportY - this.position.y;
+      const maxStepDownSnap = this.grounded ? 0.28 : 0.04;
       const canSnapToSupport =
-        this.position.y <= solidSupportY + 0.04 &&
+        this.position.y <= solidSupportY + maxStepDownSnap &&
         this.velocity.y <= 0 &&
-        supportDelta <= MAX_TERRAIN_STEP_UP + 0.18;
+        supportDelta <= MAX_WALKABLE_BOX_STEP_UP + 0.05;
 
       if (canSnapToSupport) {
         const isShallowWater = postWaterDepth >= SHALLOW_WATER_DEPTH;
@@ -962,7 +966,7 @@ export class PlayerController {
           }
           this.coyoteTimer = 0;
         }
-      } else if (supportDelta > MAX_TERRAIN_STEP_UP + 0.18) {
+      } else if (supportDelta > MAX_WALKABLE_BOX_STEP_UP + 0.05) {
         // Safety net: never teleport vertically up onto a cliff top; push outward downhill
         this.pushOutOfTerrainPenetration(false);
         this.onSteepSlope = true;
@@ -1104,9 +1108,30 @@ export class PlayerController {
 
     const maxLeadH = Math.max(centerH, frontH, leftH, rightH);
 
-    // 0. If stepping onto or walking across a walkable bridge/floor deck, terrain underneath must not block movement
-    const deckSupportY = this.getRockTopSupportYAt(candX, candZ, currentY);
-    if (deckSupportY >= currentY - 0.65 && deckSupportY >= maxLeadH - 0.18) {
+    // 0. If standing on or stepping onto a walkable bridge/floor/porch deck, steep terrain
+    //    underneath (such as a carved riverbank or foundation slope) must never block traversal.
+    const candDeckY = this.getRockTopSupportYAt(candX, candZ, currentY);
+    const frontDeckY = this.getRockTopSupportYAt(
+      candX + dirX * probeR,
+      candZ + dirZ * probeR,
+      currentY,
+    );
+    const fromDeckY = this.getRockTopSupportYAt(fromX, fromZ, currentY);
+    const backDeckY = this.getRockTopSupportYAt(
+      fromX - dirX * 0.75,
+      fromZ - dirZ * 0.75,
+      currentY,
+    );
+    const bestDeckY = Math.max(candDeckY, frontDeckY);
+    const recentDeckY = Math.max(fromDeckY, backDeckY);
+    const onOrEnteringDeck =
+      (bestDeckY >= currentY - 0.75 &&
+        bestDeckY <= currentY + MAX_WALKABLE_BOX_STEP_UP) ||
+      (recentDeckY >= currentY - 0.55 &&
+        centerH <= currentY + MAX_TERRAIN_STEP_UP &&
+        maxLeadH <= currentY + MAX_TERRAIN_STEP_UP + 0.14);
+
+    if (onOrEnteringDeck && maxLeadH <= currentY + MAX_TERRAIN_STEP_UP + 0.14) {
       return false;
     }
 
@@ -1115,28 +1140,28 @@ export class PlayerController {
       ? currentY + 0.42
       : this.grounded
         ? currentY + MAX_TERRAIN_STEP_UP
-        : currentY + 0.28;
+        : currentY + 0.32;
     if (maxLeadH > maxAllowedH) {
-      // Allow stepping onto walkable rock/building tops if a collider supports this height
-      if (deckSupportY < maxLeadH - 0.15) {
+      // Allow stepping onto walkable rock/building/bridge tops if a collider supports this height
+      if (bestDeckY < maxLeadH - 0.15) {
         return true;
       }
     }
 
-    // 2. Steep slope climbing check when moving uphill
+    // 2. Steep slope climbing check when moving uphill (ignore tiny micro-bumps <= 0.14m)
     const prevGroundH = groundHeightAt(fromX, fromZ);
     const riseCenter = centerH - prevGroundH;
     const riseFront = frontH - groundHeightAt(fromX + dirX * probeR, fromZ + dirZ * probeR);
     const maxRisePerMeter = Math.max(riseCenter, riseFront) / stepDist;
 
-    if (maxRisePerMeter > MAX_WALKABLE_SLOPE_TAN && maxLeadH > currentY + 0.05) {
+    if (maxRisePerMeter > MAX_WALKABLE_SLOPE_TAN && maxLeadH > currentY + 0.14) {
       return true;
     }
 
     this.sampleTerrainGradient(candX, candZ, _gradScratch);
     if (_gradScratch.mag > MAX_WALKABLE_SLOPE_TAN) {
       const uphillDot = dirX * _gradScratch.gx + dirZ * _gradScratch.gz;
-      if (uphillDot > 0.08 && maxLeadH > currentY + 0.04) {
+      if (uphillDot > 0.1 && maxLeadH > currentY + 0.12) {
         return true;
       }
     }
@@ -1223,6 +1248,38 @@ export class PlayerController {
         }
       }
 
+      // Axis-separated fallback slide to avoid sticking on diagonal terrain corners
+      if (
+        Math.abs(subDx) > 0.0005 &&
+        !this.isTerrainMoveBlocked(
+          prevX,
+          prevZ,
+          prevX + subDx,
+          prevZ,
+          this.position.y,
+          isSwimming,
+        )
+      ) {
+        this.position.x = prevX + subDx;
+        this.velocity.z = 0;
+        continue;
+      }
+      if (
+        Math.abs(subDz) > 0.0005 &&
+        !this.isTerrainMoveBlocked(
+          prevX,
+          prevZ,
+          prevX,
+          prevZ + subDz,
+          this.position.y,
+          isSwimming,
+        )
+      ) {
+        this.position.z = prevZ + subDz;
+        this.velocity.x = 0;
+        continue;
+      }
+
       // Corner / narrow valley: stop cleanly without penetrating terrain
       this.velocity.x = 0;
       this.velocity.z = 0;
@@ -1239,9 +1296,12 @@ export class PlayerController {
     const maxAllowed = isSwimming
       ? this.position.y + 0.45
       : this.position.y + MAX_TERRAIN_STEP_UP + 0.12;
+    const deckY = this.getRockTopSupportY();
     for (let iter = 0; iter < 6; iter++) {
       const h = groundHeightAt(this.position.x, this.position.z);
       if (h <= maxAllowed) return;
+      // Do not push player sideways when standing on a walkable bridge/floor/foundation
+      if (deckY >= this.position.y - 0.65 && deckY >= h - 0.25) return;
       this.sampleTerrainGradient(this.position.x, this.position.z, _gradScratch);
       if (_gradScratch.mag < 0.001) return;
       const invMag = 1 / _gradScratch.mag;
@@ -1253,7 +1313,8 @@ export class PlayerController {
   private getRockTopSupportYAt(x: number, z: number, currentY: number): number {
     let highest = -Infinity;
     const nearbyColliders = this.callbacks.queryCollidersNear(x, z);
-    for (const c of nearbyColliders) {
+    for (let i = 0; i < nearbyColliders.length; i++) {
+      const c = nearbyColliders[i];
       if (c.kind === 'sphere') {
         const dx = x - c.x;
         const dz = z - c.z;
@@ -1271,14 +1332,20 @@ export class PlayerController {
         const sin = Math.sin(c.yaw);
         const lx = dx * cos - dz * sin;
         const lz = dx * sin + dz * cos;
-        const pad = 0.08;
-        if (
-          Math.abs(lx) <= c.halfW + pad &&
-          Math.abs(lz) <= c.halfD + pad &&
-          currentY >= c.maxY - 0.65 &&
-          c.maxY > highest
-        ) {
-          highest = c.maxY;
+        const pad = 0.16;
+        if (Math.abs(lx) <= c.halfW + pad && Math.abs(lz) <= c.halfD + pad) {
+          let topY = c.maxY;
+          if (
+            c.slopeStartY !== undefined &&
+            c.slopeEndY !== undefined &&
+            c.halfD > 0.001
+          ) {
+            const t = Math.max(0, Math.min(1, (lz + c.halfD) / (2 * c.halfD)));
+            topY = c.slopeStartY + (c.slopeEndY - c.slopeStartY) * t;
+          }
+          if (currentY >= topY - MAX_WALKABLE_BOX_STEP_UP && topY > highest) {
+            highest = topY;
+          }
         }
       }
     }
@@ -1286,129 +1353,175 @@ export class PlayerController {
   }
 
   private getRockTopSupportY(): number {
-    let highest = -Infinity;
-    const nearbyColliders = this.callbacks.queryCollidersNear(
+    return this.getRockTopSupportYAt(
       this.position.x,
       this.position.z,
+      this.position.y,
     );
-    for (const c of nearbyColliders) {
-      if (c.kind === 'sphere') {
-        const dx = this.position.x - c.x;
-        const dz = this.position.z - c.z;
-        const distSq = dx * dx + dz * dz;
-        if (distSq < c.radius * c.radius) {
-          const topY = c.y + Math.sqrt(Math.max(0, c.radius * c.radius - distSq));
-          if (this.position.y >= topY - 0.55 && topY > highest) {
-            highest = topY;
-          }
-        }
-      } else if (c.kind === 'box' && c.walkableTop) {
-        const dx = this.position.x - c.x;
-        const dz = this.position.z - c.z;
-        const cos = Math.cos(c.yaw);
-        const sin = Math.sin(c.yaw);
-        const lx = dx * cos - dz * sin;
-        const lz = dx * sin + dz * cos;
-        const pad = 0.08;
-        if (
-          Math.abs(lx) <= c.halfW + pad &&
-          Math.abs(lz) <= c.halfD + pad &&
-          this.position.y >= c.maxY - 0.65 &&
-          c.maxY > highest
-        ) {
-          highest = c.maxY;
-        }
-      }
+  }
+
+  private stripInwardVelocity(nx: number, nz: number): void {
+    const inward = this.velocity.x * (-nx) + this.velocity.z * (-nz);
+    if (inward > 0) {
+      this.velocity.x += nx * inward;
+      this.velocity.z += nz * inward;
     }
-    return highest;
   }
 
   private resolveObjectCollisions(): void {
-    const nearbyColliders = this.callbacks.queryCollidersNear(
-      this.position.x,
-      this.position.z,
-    );
-    for (const c of nearbyColliders) {
-      if (c.kind === 'cylinder') {
-        if (
-          this.position.y >= c.maxY - 0.05 ||
-          this.position.y + this.config.height <= c.minY + 0.05
-        ) {
-          continue;
-        }
-        const dx = this.position.x - c.x;
-        const dz = this.position.z - c.z;
-        const minSep = c.radius + this.config.radius;
-        const distSq = dx * dx + dz * dz;
-        if (distSq < minSep * minSep && distSq > 0.00001) {
-          const dist = Math.sqrt(distSq);
-          const push = minSep - dist;
-          this.position.x += (dx / dist) * push;
-          this.position.z += (dz / dist) * push;
-        }
-      } else if (c.kind === 'box') {
-        if (c.walkableTop && this.position.y >= c.maxY - 0.45) {
-          continue;
-        }
-        const dx = this.position.x - c.x;
-        const dz = this.position.z - c.z;
-        const cos = Math.cos(c.yaw);
-        const sin = Math.sin(c.yaw);
-        const lx = dx * cos - dz * sin;
-        const lz = dx * sin + dz * cos;
-        const extX = c.halfW + this.config.radius;
-        const extZ = c.halfD + this.config.radius;
-        if (Math.abs(lx) >= extX || Math.abs(lz) >= extZ) {
-          continue;
-        }
-        // Overhead roof / ceiling collider: block upward jump into ceiling without pushing horizontally
-        if (c.tag === 'roof') {
-          const headY = this.position.y + this.config.height;
-          if (this.position.y < c.minY && headY > c.minY && headY < c.maxY + 0.3) {
-            this.position.y = Math.max(0, c.minY - this.config.height);
-            if (this.velocity.y > 0) this.velocity.y = 0;
+    const radius = this.config.radius;
+    const radiusSq = radius * radius;
+
+    for (let iter = 0; iter < OBJECT_COLLISION_ITERATIONS; iter++) {
+      let hadCollision = false;
+      const nearbyColliders = this.callbacks.queryCollidersNear(
+        this.position.x,
+        this.position.z,
+      );
+
+      for (let i = 0; i < nearbyColliders.length; i++) {
+        const c = nearbyColliders[i];
+        if (c.kind === 'cylinder') {
+          if (
+            this.position.y >= c.maxY - 0.08 ||
+            this.position.y + this.config.height <= c.minY + 0.05
+          ) {
             continue;
           }
-        }
-        if (
-          this.position.y >= c.maxY - 0.08 ||
-          this.position.y + this.config.height <= c.minY + 0.05
-        ) {
-          continue;
-        }
-        const penX = extX - Math.abs(lx);
-        const penZ = extZ - Math.abs(lz);
-        let pushLocalX = 0;
-        let pushLocalZ = 0;
-        if (penX < penZ) {
-          pushLocalX = (lx >= 0 ? 1 : -1) * penX;
-        } else {
-          pushLocalZ = (lz >= 0 ? 1 : -1) * penZ;
-        }
-        this.position.x += pushLocalX * cos + pushLocalZ * sin;
-        this.position.z += -pushLocalX * sin + pushLocalZ * cos;
-      } else {
-        const dx = this.position.x - c.x;
-        const dz = this.position.z - c.z;
-        const horizDistSq = dx * dx + dz * dz;
-        const minSep = c.radius + this.config.radius * 0.85;
-        if (horizDistSq < minSep * minSep && horizDistSq > 0.00001) {
-          const topSurface =
-            c.y +
-            Math.sqrt(
-              Math.max(0, c.radius * c.radius - Math.min(horizDistSq, c.radius * c.radius)),
-            );
+          const dx = this.position.x - c.x;
+          const dz = this.position.z - c.z;
+          const minSep = c.radius + radius;
+          const distSq = dx * dx + dz * dz;
+          if (distSq < minSep * minSep && distSq > 0.00001) {
+            const dist = Math.sqrt(distSq);
+            const nx = dx / dist;
+            const nz = dz / dist;
+            const push = minSep - dist + COLLIDER_SKIN_EPS;
+            this.position.x += nx * push;
+            this.position.z += nz * push;
+            this.stripInwardVelocity(nx, nz);
+            hadCollision = true;
+          }
+        } else if (c.kind === 'box') {
+          const dx = this.position.x - c.x;
+          const dz = this.position.z - c.z;
+          const cos = Math.cos(c.yaw);
+          const sin = Math.sin(c.yaw);
+          const lx = dx * cos - dz * sin;
+          const lz = dx * sin + dz * cos;
+
+          // Quick bounding rejection
           if (
-            this.position.y < topSurface - 0.52 &&
-            this.position.y + this.config.height > c.y - c.radius
+            Math.abs(lx) >= c.halfW + radius ||
+            Math.abs(lz) >= c.halfD + radius
           ) {
-            const dist = Math.sqrt(horizDistSq);
-            const push = minSep - dist;
-            this.position.x += (dx / dist) * push;
-            this.position.z += (dz / dist) * push;
+            continue;
+          }
+
+          // Overhead roof / ceiling collider: block upward jump into ceiling without pushing horizontally
+          if (c.tag === 'roof') {
+            const headY = this.position.y + this.config.height;
+            if (this.position.y < c.minY && headY > c.minY && headY < c.maxY + 0.3) {
+              this.position.y = Math.max(0, c.minY - this.config.height);
+              if (this.velocity.y > 0) this.velocity.y = 0;
+              continue;
+            }
+          }
+
+          // True 2D Circle/Capsule-vs-OBB contact point (smoothly slides around corners & door jambs)
+          const closestX = Math.max(-c.halfW, Math.min(c.halfW, lx));
+          const closestZ = Math.max(-c.halfD, Math.min(c.halfD, lz));
+
+          // For sloped walkable decks (e.g., arched bridges), evaluate the actual surface height
+          // at the contact point rather than the far high end (c.maxY)
+          let effectiveTopY = c.maxY;
+          if (
+            c.slopeStartY !== undefined &&
+            c.slopeEndY !== undefined &&
+            c.halfD > 1e-4
+          ) {
+            const t = Math.max(0, Math.min(1, (closestZ + c.halfD) / (2 * c.halfD)));
+            effectiveTopY = c.slopeStartY + (c.slopeEndY - c.slopeStartY) * t;
+          }
+
+          // Walkable floors, bridges, porches, foundations & stairs never block horizontally
+          // when within walkable step-up height
+          if (c.walkableTop && this.position.y >= effectiveTopY - MAX_WALKABLE_BOX_STEP_UP) {
+            continue;
+          }
+
+          if (
+            this.position.y >= effectiveTopY - 0.1 ||
+            this.position.y + this.config.height <= c.minY + 0.05
+          ) {
+            continue;
+          }
+
+          const offX = lx - closestX;
+          const offZ = lz - closestZ;
+          const distSq = offX * offX + offZ * offZ;
+
+          let pushLocalX = 0;
+          let pushLocalZ = 0;
+          if (distSq >= radiusSq) {
+            continue;
+          }
+
+          if (distSq > 1e-8) {
+            const dist = Math.sqrt(distSq);
+            const push = radius - dist + COLLIDER_SKIN_EPS;
+            pushLocalX = (offX / dist) * push;
+            pushLocalZ = (offZ / dist) * push;
+          } else {
+            // Player center is inside the box: push out along nearest face
+            const penX = c.halfW - Math.abs(lx) + radius + COLLIDER_SKIN_EPS;
+            const penZ = c.halfD - Math.abs(lz) + radius + COLLIDER_SKIN_EPS;
+            if (penX < penZ) {
+              pushLocalX = (lx >= 0 ? 1 : -1) * penX;
+            } else {
+              pushLocalZ = (lz >= 0 ? 1 : -1) * penZ;
+            }
+          }
+
+          const pushWorldX = pushLocalX * cos + pushLocalZ * sin;
+          const pushWorldZ = -pushLocalX * sin + pushLocalZ * cos;
+          this.position.x += pushWorldX;
+          this.position.z += pushWorldZ;
+
+          const pushLen = Math.hypot(pushWorldX, pushWorldZ);
+          if (pushLen > 1e-6) {
+            this.stripInwardVelocity(pushWorldX / pushLen, pushWorldZ / pushLen);
+          }
+          hadCollision = true;
+        } else {
+          const dx = this.position.x - c.x;
+          const dz = this.position.z - c.z;
+          const horizDistSq = dx * dx + dz * dz;
+          const minSep = c.radius + radius * 0.85;
+          if (horizDistSq < minSep * minSep && horizDistSq > 0.00001) {
+            const topSurface =
+              c.y +
+              Math.sqrt(
+                Math.max(0, c.radius * c.radius - Math.min(horizDistSq, c.radius * c.radius)),
+              );
+            if (
+              this.position.y < topSurface - 0.52 &&
+              this.position.y + this.config.height > c.y - c.radius
+            ) {
+              const dist = Math.sqrt(horizDistSq);
+              const nx = dx / dist;
+              const nz = dz / dist;
+              const push = minSep - dist + COLLIDER_SKIN_EPS;
+              this.position.x += nx * push;
+              this.position.z += nz * push;
+              this.stripInwardVelocity(nx, nz);
+              hadCollision = true;
+            }
           }
         }
       }
+
+      if (!hadCollision) break;
     }
   }
 

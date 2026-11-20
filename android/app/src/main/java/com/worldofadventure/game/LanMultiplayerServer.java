@@ -502,6 +502,10 @@ public class LanMultiplayerServer {
                 res.put("maxPlayers", MAX_LAN_PLAYERS);
                 synchronized (roomLock) {
                     res.put("playerCount", room != null ? room.players.size() : 0);
+                    res.put("roomCode", room != null ? room.roomCode : JSONObject.NULL);
+                    res.put("roomName", room != null ? room.roomName : JSONObject.NULL);
+                    res.put("hostName", room != null ? room.hostName : JSONObject.NULL);
+                    res.put("status", room != null ? room.status : "idle");
                 }
                 sendHttp(out, 200, res.toString());
             } else if ("GET".equalsIgnoreCase(method) && "/api/multiplayer/rooms".equals(path)) {
@@ -746,9 +750,7 @@ public class LanMultiplayerServer {
             sessions.put(p.playerId, new PlayerSession(p.playerId, token));
 
             JSONObject snap = buildRoomSnapshot();
-            JSONObject roomPayload = new JSONObject();
-            roomPayload.put("room", snap);
-            broadcast("ROOM_STATE", "server", roomPayload, null);
+            broadcast("ROOM_STATE", "server", snap, null);
 
             res.put("_status", 200);
             res.put("ok", true);
@@ -790,9 +792,7 @@ public class LanMultiplayerServer {
                 leavePayload.put("reason", reason);
                 leavePayload.put("room", snap);
                 broadcast("PLAYER_LEAVE", playerId, leavePayload, null);
-                JSONObject statePayload = new JSONObject();
-                statePayload.put("room", snap);
-                broadcast("ROOM_STATE", "server", statePayload, null);
+                broadcast("ROOM_STATE", "server", snap, null);
             } catch (Exception ignored) {
             }
         }
@@ -820,11 +820,9 @@ public class LanMultiplayerServer {
                         connectRes.put("room", snap);
                         connectRes.put("chatHistory", new JSONArray(chatHistory));
                         sendTo(playerId, "CONNECT", connectRes);
-                        JSONObject roomState = new JSONObject();
-                        roomState.put("room", snap);
-                        broadcast("ROOM_STATE", "server", roomState, null);
-                        if ("playing".equals(room.status)) {
-                            sendTo(playerId, "GAME_START", buildGameStartPayload(snap));
+                        broadcast("ROOM_STATE", "server", snap, null);
+                        if ("in-game".equals(room.status)) {
+                            sendTo(playerId, "START_GAME", buildGameStartPayload(snap));
                         }
                         break;
                     }
@@ -837,19 +835,15 @@ public class LanMultiplayerServer {
                     }
                     case "READY": {
                         player.isReady = payload.optBoolean("ready", false);
-                        JSONObject roomState = new JSONObject();
-                        roomState.put("room", buildRoomSnapshot());
-                        broadcast("ROOM_STATE", "server", roomState, null);
+                        broadcast("ROOM_STATE", "server", buildRoomSnapshot(), null);
                         break;
                     }
                     case "START_GAME": {
                         if (!playerId.equals(room.hostId)) return;
-                        room.status = "playing";
+                        room.status = "in-game";
                         JSONObject snap = buildRoomSnapshot();
-                        JSONObject roomState = new JSONObject();
-                        roomState.put("room", snap);
-                        broadcast("ROOM_STATE", "server", roomState, null);
-                        broadcast("GAME_START", playerId, buildGameStartPayload(snap), null);
+                        broadcast("ROOM_STATE", "server", snap, null);
+                        broadcast("START_GAME", playerId, buildGameStartPayload(snap), null);
                         break;
                     }
                     case "PLAYER_STATE": {
@@ -917,6 +911,18 @@ public class LanMultiplayerServer {
                     case "DISCONNECT":
                         removePlayer(playerId, "left");
                         break;
+                    case "KICK_PLAYER": {
+                        if (!playerId.equals(room.hostId)) return;
+                        String targetId = payload.optString("targetPlayerId", "");
+                        if (!targetId.isEmpty() && !targetId.equals(room.hostId) && room.players.containsKey(targetId)) {
+                            JSONObject kickPayload = new JSONObject();
+                            kickPayload.put("targetPlayerId", targetId);
+                            kickPayload.put("reason", "Removed by LAN host.");
+                            sendTo(targetId, "PLAYER_KICKED", kickPayload);
+                            removePlayer(targetId, "kicked");
+                        }
+                        break;
+                    }
                     case "CLOSE_ROOM":
                         if (playerId.equals(room.hostId)) removePlayer(playerId, "closed");
                         break;
@@ -931,6 +937,8 @@ public class LanMultiplayerServer {
     private JSONObject buildGameStartPayload(JSONObject snap) throws Exception {
         JSONObject start = new JSONObject();
         start.put("roomId", room.roomId);
+        start.put("roomCode", room.roomCode);
+        start.put("roomName", room.roomName);
         start.put("seed", room.seed);
         start.put("worldName", room.worldName);
         start.put("worldType", room.worldType);

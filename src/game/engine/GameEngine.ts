@@ -40,6 +40,7 @@ import type {
 } from '../dialogue/dialogueTypes';
 import { getAllQuestDefinitions, getQuestDefinition } from '../quest/questRegistry';
 import { generateAndRegisterProceduralQuests } from '../quest/ProceduralQuestGenerator';
+import { getVillageNpcRoster } from '../npc/NPCManager';
 import type { QuestReward, QuestView } from '../quest/questTypes';
 import { StoryManager } from '../story/StoryManager';
 import type { StoryJournalSnapshot, StoryWorldBridge } from '../story/storyTypes';
@@ -961,10 +962,30 @@ export class GameEngine {
       },
       getNpcPosition: (npcId) => {
         const npc = this.world?.npcs.npcs.find((n) => n.id === npcId && !n.isDead);
-        return npc ? { x: npc.position.x, z: npc.position.z } : null;
+        if (npc) return { x: npc.position.x, z: npc.position.z };
+        if (!this.world || this.world.npcs.isNpcPersistedDead(npcId)) return null;
+        for (const v of this.world.village.villages) {
+          if (v.id === 'oakhollow' || v.isLoaded) continue;
+          if (!npcId.startsWith(`npc-${v.id}-`)) continue;
+          if (getVillageNpcRoster(v).some((entry) => entry.id === npcId)) {
+            return { x: v.centerX, z: v.centerZ };
+          }
+        }
+        return null;
       },
       hasNpc: (npcId) => {
-        return Boolean(this.world?.npcs.npcs.some((n) => n.id === npcId && !n.isDead));
+        if (this.world?.npcs.npcs.some((n) => n.id === npcId && !n.isDead)) {
+          return true;
+        }
+        if (!this.world || this.world.npcs.isNpcPersistedDead(npcId)) return false;
+        for (const v of this.world.village.villages) {
+          if (v.id === 'oakhollow' || v.isLoaded) continue;
+          if (!npcId.startsWith(`npc-${v.id}-`)) continue;
+          if (getVillageNpcRoster(v).some((entry) => entry.id === npcId)) {
+            return true;
+          }
+        }
+        return false;
       },
       validateKillTarget: (obj, giverNpcId) => {
         const giverNpc = giverNpcId
@@ -2676,6 +2697,52 @@ export class GameEngine {
         };
       });
 
+    const storyMarkers = this.storyManager.getMapMarkers(this.storyBridge, this.language);
+    const sideQuestMarkers = this.sideQuestManager.getMapMarkers(
+      this.sideQuestBridge,
+      this.language,
+    );
+    // Keep enemy quest area markers synchronized with live bound world quest targets
+    if (questTargets.length > 0) {
+      const syncMarkerToLiveTargets = (
+        marker: { id: string; questId?: string; sideQuestId?: string; x: number; z: number },
+        isEnemyMarker: boolean,
+        prefix: string,
+      ): void => {
+        if (!isEnemyMarker) return;
+        const qId = marker.questId ?? marker.sideQuestId;
+        if (!qId) return;
+        const objPrefix = `${prefix}${qId}-`;
+        const objId = marker.id.startsWith(objPrefix) ? marker.id.slice(objPrefix.length) : null;
+        let sumX = 0;
+        let sumZ = 0;
+        let count = 0;
+        for (let i = 0; i < questTargets.length; i++) {
+          const qt = questTargets[i];
+          if (qt.questId !== qId) continue;
+          if (objId && qt.objectiveId !== objId) continue;
+          if (qt.lifecycle === 'DEFEATED') continue;
+          sumX += qt.x;
+          sumZ += qt.z;
+          count++;
+        }
+        if (count > 0) {
+          marker.x = sumX / count;
+          marker.z = sumZ / count;
+        }
+      };
+      for (let i = 0; i < storyMarkers.length; i++) {
+        syncMarkerToLiveTargets(storyMarkers[i], storyMarkers[i].role === 'enemy', 'story-obj-');
+      }
+      for (let i = 0; i < sideQuestMarkers.length; i++) {
+        syncMarkerToLiveTargets(
+          sideQuestMarkers[i],
+          sideQuestMarkers[i].markerKind === 'side_quest_target',
+          'sq-obj-',
+        );
+      }
+    }
+
     return {
       seed: this.world.seed,
       villageSite: this.world.village.site,
@@ -2702,11 +2769,8 @@ export class GameEngine {
       questTargets,
       questTargetPlans: this.entityRegistry.getQuestTargetPlans(),
       coopObjective: activeParty?.activeObjective ?? null,
-      storyMarkers: this.storyManager.getMapMarkers(this.storyBridge, this.language),
-      sideQuestMarkers: this.sideQuestManager.getMapMarkers(
-        this.sideQuestBridge,
-        this.language,
-      ),
+      storyMarkers,
+      sideQuestMarkers,
       interactables: this.interactables.map((item) => ({
         id: item.id,
         label: item.label,
@@ -4444,7 +4508,10 @@ export class GameEngine {
             enemy.archetype.xpReward,
             enemy.archetype.coinReward,
           );
-          this.recordEnemyKill(enemy.archetype.id, enemy.id);
+          this.recordEnemyKill(enemy.archetype.id, enemy.id, {
+            x: enemy.position.x,
+            z: enemy.position.z,
+          });
           ProfileManager.recordGameplayDelta({
             enemiesDefeated: 1,
             xpGained: enemy.archetype.xpReward,
@@ -4642,7 +4709,10 @@ export class GameEngine {
             label: this.itemManager.getItem(d.itemId)?.name ?? d.itemId,
           })),
         );
-        this.recordEnemyKill(`animal:${species}`, animalId);
+        this.recordEnemyKill(`animal:${species}`, animalId, {
+          x: position.x,
+          z: position.z,
+        });
         this.awardXpAndCoins(12, 0);
         ProfileManager.recordGameplayDelta({
           animalsDefeated: 1,
@@ -6233,7 +6303,7 @@ export class GameEngine {
           this.spawnDustBurst(x, y, z, 6);
           this.sound.playEnemyDefeat({ x, y, z });
           if (killerId === this.localMultiplayerPlayerId) {
-            this.recordEnemyKill(res.enemy.archetype.id, targetId);
+            this.recordEnemyKill(res.enemy.archetype.id, targetId, { x, z });
             ProfileManager.recordGameplayDelta({ enemiesDefeated: 1 });
           }
           this.emitHud();
@@ -6293,7 +6363,7 @@ export class GameEngine {
           this.sound.playEnemyDefeat({ x, y, z });
           if (killerId === this.localMultiplayerPlayerId) {
             if (res.species) {
-              this.recordEnemyKill(`animal:${res.species}`, targetId);
+              this.recordEnemyKill(`animal:${res.species}`, targetId, { x, z });
             }
             ProfileManager.recordGameplayDelta({ animalsDefeated: 1 });
           }
@@ -8026,7 +8096,14 @@ export class GameEngine {
     return ok;
   }
 
-  public recordEnemyKill(enemyType: string, targetEntityId?: string): void {
+  public recordEnemyKill(
+    enemyType: string,
+    targetEntityId?: string,
+    killPos?: { x: number; z: number },
+  ): void {
+    const questBinding = targetEntityId
+      ? this.combat?.getQuestTargetBinding(targetEntityId)
+      : undefined;
     const sideChanged = this.dialogueEngine.quests.onEnemyKilled(
       enemyType,
       this.dialogueBridge,
@@ -8037,11 +8114,21 @@ export class GameEngine {
       enemyType,
       targetEntityId,
       (msg) => this.callbacks.onWorldNotice(msg),
+      {
+        questBinding,
+        killPos,
+        bridge: this.storyBridge,
+      },
     );
     const sideQuestChanged = this.sideQuestManager.onEnemyKilled(
       enemyType,
       targetEntityId,
       (msg) => this.callbacks.onWorldNotice(msg),
+      {
+        questBinding,
+        killPos,
+        bridge: this.sideQuestBridge,
+      },
     );
     if (sideQuestChanged) {
       this.sideQuestManager.update(
@@ -10277,7 +10364,7 @@ export class GameEngine {
         queryCollidersNear: this.queryCollidersCb,
         isChunkLoaded: this.isChunkLoadedCb,
       });
-      this.world.wildlife.ensureQuestAnimals(activeKillObjectives, {
+      this.world.wildlife.ensureQuestAnimals(combinedKillObjectives, {
         playerPos,
         isVillageClearance: this.isVillageClearanceCb,
         queryCollidersNear: this.queryCollidersCb,

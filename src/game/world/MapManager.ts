@@ -219,7 +219,7 @@ export interface MiniMapRenderParams {
 
 export const MAP_WORLD_HALF = WORLD_HALF; // 3600m half-span => 7200x7200 generated world
 export const MAP_MIN_ZOOM = 0.55;
-export const MAP_MAX_ZOOM = 16.0;
+export const MAP_MAX_ZOOM = 64.0;
 const TERRAIN_CACHE_RES = 640;
 const FOG_GRID_SIZE = 144; // 50m per cell across 7200m world
 
@@ -255,8 +255,8 @@ export class MapManager {
     if (nextZoom !== undefined) {
       this.zoom = clamp(nextZoom, MAP_MIN_ZOOM, MAP_MAX_ZOOM);
     }
-    this.centerX = clamp(x, -MAP_WORLD_HALF * 0.92, MAP_WORLD_HALF * 0.92);
-    this.centerZ = clamp(z, -MAP_WORLD_HALF * 0.92, MAP_WORLD_HALF * 0.92);
+    this.centerX = clamp(x, -MAP_WORLD_HALF, MAP_WORLD_HALF);
+    this.centerZ = clamp(z, -MAP_WORLD_HALF, MAP_WORLD_HALF);
   }
 
   public resetFog(): void {
@@ -452,27 +452,19 @@ export class MapManager {
     const ppm = this.getPixelsPerMeter(viewWidth, viewHeight) || 1;
     this.centerX = clamp(
       this.centerX - dx / ppm,
-      -MAP_WORLD_HALF * 0.94,
-      MAP_WORLD_HALF * 0.94,
+      -MAP_WORLD_HALF,
+      MAP_WORLD_HALF,
     );
     this.centerZ = clamp(
       this.centerZ - dy / ppm,
-      -MAP_WORLD_HALF * 0.94,
-      MAP_WORLD_HALF * 0.94,
+      -MAP_WORLD_HALF,
+      MAP_WORLD_HALF,
     );
   }
 
   public panByMeters(dx: number, dz: number): void {
-    this.centerX = clamp(
-      this.centerX + dx,
-      -MAP_WORLD_HALF * 0.94,
-      MAP_WORLD_HALF * 0.94,
-    );
-    this.centerZ = clamp(
-      this.centerZ + dz,
-      -MAP_WORLD_HALF * 0.94,
-      MAP_WORLD_HALF * 0.94,
-    );
+    this.centerX = clamp(this.centerX + dx, -MAP_WORLD_HALF, MAP_WORLD_HALF);
+    this.centerZ = clamp(this.centerZ + dz, -MAP_WORLD_HALF, MAP_WORLD_HALF);
   }
 
   public zoomAtScreenPoint(
@@ -488,13 +480,13 @@ export class MapManager {
     const ppm = this.getPixelsPerMeter(viewWidth, viewHeight) || 1;
     this.centerX = clamp(
       before.wx - (sx - viewWidth * 0.5) / ppm,
-      -MAP_WORLD_HALF * 0.94,
-      MAP_WORLD_HALF * 0.94,
+      -MAP_WORLD_HALF,
+      MAP_WORLD_HALF,
     );
     this.centerZ = clamp(
       before.wz - (sy - viewHeight * 0.5) / ppm,
-      -MAP_WORLD_HALF * 0.94,
-      MAP_WORLD_HALF * 0.94,
+      -MAP_WORLD_HALF,
+      MAP_WORLD_HALF,
     );
   }
 
@@ -1392,39 +1384,69 @@ export class MapManager {
     ctx.fillRect(0, 0, viewWidth, viewHeight);
 
     const ppm = this.getPixelsPerMeter(viewWidth, viewHeight);
-    const mapPixelSize = MAP_WORLD_HALF * 2 * ppm;
-    const topLeft = this.worldToScreen(
+    const fullMeters = MAP_WORLD_HALF * 2;
+    const visMinWx = Math.max(
       -MAP_WORLD_HALF,
+      this.centerX - (viewWidth * 0.5) / ppm,
+    );
+    const visMaxWx = Math.min(
+      MAP_WORLD_HALF,
+      this.centerX + (viewWidth * 0.5) / ppm,
+    );
+    const visMinWz = Math.max(
       -MAP_WORLD_HALF,
-      viewWidth,
-      viewHeight,
+      this.centerZ - (viewHeight * 0.5) / ppm,
+    );
+    const visMaxWz = Math.min(
+      MAP_WORLD_HALF,
+      this.centerZ + (viewHeight * 0.5) / ppm,
     );
 
-    if (this.terrainCanvas) {
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(
-        this.terrainCanvas,
-        topLeft.sx,
-        topLeft.sy,
-        mapPixelSize,
-        mapPixelSize,
-      );
-    }
+    if (visMaxWx > visMinWx && visMaxWz > visMinWz) {
+      const dstX = viewWidth * 0.5 + (visMinWx - this.centerX) * ppm;
+      const dstY = viewHeight * 0.5 + (visMinWz - this.centerZ) * ppm;
+      const dstW = (visMaxWx - visMinWx) * ppm;
+      const dstH = (visMaxWz - visMinWz) * ppm;
 
-    // Fog of War overlay over unexplored regions
-    if (fogCanvas) {
-      ctx.save();
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(
-        fogCanvas,
-        topLeft.sx,
-        topLeft.sy,
-        mapPixelSize,
-        mapPixelSize,
-      );
-      ctx.restore();
+      const u0 = (visMinWx + MAP_WORLD_HALF) / fullMeters;
+      const v0 = (visMinWz + MAP_WORLD_HALF) / fullMeters;
+      const uSpan = (visMaxWx - visMinWx) / fullMeters;
+      const vSpan = (visMaxWz - visMinWz) / fullMeters;
+
+      if (this.terrainCanvas) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(
+          this.terrainCanvas,
+          u0 * this.terrainCanvas.width,
+          v0 * this.terrainCanvas.height,
+          uSpan * this.terrainCanvas.width,
+          vSpan * this.terrainCanvas.height,
+          dstX,
+          dstY,
+          dstW,
+          dstH,
+        );
+      }
+
+      // Fog of War overlay over unexplored regions
+      if (fogCanvas) {
+        ctx.save();
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(
+          fogCanvas,
+          u0 * fogCanvas.width,
+          v0 * fogCanvas.height,
+          uSpan * fogCanvas.width,
+          vSpan * fogCanvas.height,
+          dstX,
+          dstY,
+          dstW,
+          dstH,
+        );
+        ctx.restore();
+      }
     }
 
     // Subtle cartographic grid
@@ -2085,19 +2107,45 @@ export class MapManager {
     viewHeight: number,
     ppm: number,
   ): void {
-    const step = this.zoom >= 5 ? 100 : this.zoom >= 2 ? 250 : 500;
+    const step =
+      this.zoom >= 24
+        ? 25
+        : this.zoom >= 10
+          ? 50
+          : this.zoom >= 5
+            ? 100
+            : this.zoom >= 2
+              ? 250
+              : 500;
+    const minWx = Math.max(
+      -MAP_WORLD_HALF,
+      Math.floor((this.centerX - (viewWidth * 0.5) / ppm) / step) * step,
+    );
+    const maxWx = Math.min(
+      MAP_WORLD_HALF,
+      Math.ceil((this.centerX + (viewWidth * 0.5) / ppm) / step) * step,
+    );
+    const minWz = Math.max(
+      -MAP_WORLD_HALF,
+      Math.floor((this.centerZ - (viewHeight * 0.5) / ppm) / step) * step,
+    );
+    const maxWz = Math.min(
+      MAP_WORLD_HALF,
+      Math.ceil((this.centerZ + (viewHeight * 0.5) / ppm) / step) * step,
+    );
+
     ctx.save();
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.065)';
     ctx.lineWidth = 1;
 
     ctx.beginPath();
-    for (let x = -MAP_WORLD_HALF; x <= MAP_WORLD_HALF; x += step) {
+    for (let x = minWx; x <= maxWx; x += step) {
       const sx = viewWidth * 0.5 + (x - this.centerX) * ppm;
       if (sx < 0 || sx > viewWidth) continue;
       ctx.moveTo(sx, 0);
       ctx.lineTo(sx, viewHeight);
     }
-    for (let z = -MAP_WORLD_HALF; z <= MAP_WORLD_HALF; z += step) {
+    for (let z = minWz; z <= maxWz; z += step) {
       const sy = viewHeight * 0.5 + (z - this.centerZ) * ppm;
       if (sy < 0 || sy > viewHeight) continue;
       ctx.moveTo(0, sy);
@@ -2588,11 +2636,14 @@ export class MapManager {
     ppm: number,
     lang: Language,
   ): void {
-    const candidates = [25, 50, 100, 250, 500, 1000, 1500];
-    let meters = 250;
+    const candidates = [5, 10, 15, 25, 50, 100, 250, 500, 1000, 1500];
+    let meters = candidates[0];
     for (const c of candidates) {
+      meters = c;
       if (c * ppm >= 60 && c * ppm <= 150) {
-        meters = c;
+        break;
+      }
+      if (c * ppm > 150) {
         break;
       }
     }

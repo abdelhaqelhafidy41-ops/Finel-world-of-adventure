@@ -501,7 +501,7 @@ class OfflineLanServer {
       player: snap.players.find((p) => p.playerId === playerId),
       room: snap,
     }, playerId);
-    this.broadcast('ROOM_STATE', 'server', { room: snap });
+    this.broadcast('ROOM_STATE', 'server', snap);
 
     return {
       status: 200,
@@ -542,7 +542,7 @@ class OfflineLanServer {
 
     const snap = this.buildRoomSnapshot();
     this.broadcast('PLAYER_LEAVE', playerId, { playerId, reason, room: snap });
-    this.broadcast('ROOM_STATE', 'server', { room: snap });
+    this.broadcast('ROOM_STATE', 'server', snap);
   }
 
   handleWsMessage(playerId, rawText) {
@@ -568,10 +568,12 @@ class OfflineLanServer {
           room: snap,
           chatHistory: this.chatHistory,
         });
-        this.broadcast('ROOM_STATE', 'server', { room: snap });
-        if (this.room.status === 'playing') {
-          this.sendTo(playerId, 'GAME_START', {
+        this.broadcast('ROOM_STATE', 'server', snap);
+        if (this.room.status === 'in-game') {
+          this.sendTo(playerId, 'START_GAME', {
             roomId: this.room.roomId,
+            roomCode: this.room.roomCode,
+            roomName: this.room.roomName,
             seed: this.room.seed,
             worldName: this.room.worldName,
             worldType: this.room.worldType,
@@ -595,17 +597,19 @@ class OfflineLanServer {
 
       case 'READY': {
         player.isReady = Boolean(payload.ready);
-        this.broadcast('ROOM_STATE', 'server', { room: this.buildRoomSnapshot() });
+        this.broadcast('ROOM_STATE', 'server', this.buildRoomSnapshot());
         break;
       }
 
       case 'START_GAME': {
         if (playerId !== this.room.hostId) return;
-        this.room.status = 'playing';
+        this.room.status = 'in-game';
         const snap = this.buildRoomSnapshot();
-        this.broadcast('ROOM_STATE', 'server', { room: snap });
-        this.broadcast('GAME_START', playerId, {
+        this.broadcast('ROOM_STATE', 'server', snap);
+        this.broadcast('START_GAME', playerId, {
           roomId: this.room.roomId,
+          roomCode: this.room.roomCode,
+          roomName: this.room.roomName,
           seed: this.room.seed,
           worldName: this.room.worldName,
           worldType: this.room.worldType,
@@ -711,6 +715,18 @@ class OfflineLanServer {
       case 'LEAVE_ROOM':
       case 'DISCONNECT': {
         this.removePlayer(playerId, 'left');
+        break;
+      }
+
+      case 'KICK_PLAYER': {
+        if (playerId !== this.room.hostId) return;
+        const targetId = typeof payload.targetPlayerId === 'string' ? payload.targetPlayerId : '';
+        if (!targetId || targetId === this.room.hostId || !this.room.players.has(targetId)) return;
+        this.sendTo(targetId, 'PLAYER_KICKED', {
+          targetPlayerId: targetId,
+          reason: 'Removed by LAN host.',
+        });
+        this.removePlayer(targetId, 'kicked');
         break;
       }
 

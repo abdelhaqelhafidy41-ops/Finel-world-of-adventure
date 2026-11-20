@@ -85,7 +85,10 @@ import {
   createMultiplayerService,
   loadSavedMultiplayerName,
 } from './game/multiplayer/MultiplayerService';
-import { SwitchingMultiplayerTransport } from './game/multiplayer/MultiplayerTransport';
+import {
+  isSwitchingMultiplayerTransport,
+  SwitchingMultiplayerTransport,
+} from './game/multiplayer/MultiplayerTransport';
 import { extractJoinTargetFromUrl } from './game/multiplayer/inviteUtils';
 import type {
   IMultiplayerService,
@@ -933,6 +936,8 @@ export default function App() {
         }
       } else if (ev.type === 'room-closed') {
         const wasInGame = Boolean(engineRef.current?.isMultiplayerSession());
+        const wasLan =
+          isSwitchingMultiplayerTransport(svc) && svc.getActiveMode() === 'lan';
         lastStartedMatchKeyRef.current = null;
         setActiveMpRoom(null);
         setUnreadChatCount(0);
@@ -943,7 +948,13 @@ export default function App() {
           setTitleSubScreen('multiplayer');
           engineRef.current?.returnToMainMenu();
           refreshSaveSlots();
-          showNotice(UI_TEXT[languageRef.current].mpRoomClosedReturnNotice);
+          showNotice(
+            wasLan
+              ? languageRef.current === 'ar'
+                ? 'تم إيقاف الخادم المحلي من صاحب الغرفة.'
+                : 'The host has stopped the local server.'
+              : UI_TEXT[languageRef.current].mpRoomClosedReturnNotice,
+          );
         }
       } else if (ev.type === 'player-kicked' && ev.isLocalTarget) {
         const wasInGame = Boolean(engineRef.current?.isMultiplayerSession());
@@ -2011,6 +2022,17 @@ export default function App() {
             }}
             partyMemberCount={partyState.party?.members.length ?? 0}
             pendingPartyInvitesCount={partyState.pendingInvites.length}
+            lanServerInfo={
+              isSwitchingMultiplayerTransport(multiplayerServiceRef.current) &&
+              multiplayerServiceRef.current.getActiveMode() === 'lan' &&
+              activeMpRoom
+                ? {
+                    address:
+                      multiplayerServiceRef.current.getLanDisplayAddress() || '',
+                    roomCode: activeMpRoom.roomCode,
+                  }
+                : null
+            }
           />
         )}
 

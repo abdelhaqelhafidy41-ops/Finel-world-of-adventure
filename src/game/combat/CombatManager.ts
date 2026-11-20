@@ -592,6 +592,10 @@ export class CombatManager {
     }
   }
 
+  public getQuestTargetBinding(id: string): QuestTargetBinding | undefined {
+    return this.getQuestTargetForEnemy(id);
+  }
+
   private getQuestTargetForEnemy(id: string): QuestTargetBinding | undefined {
     for (let i = 0; i < this.enemyBlueprints.length; i++) {
       if (this.enemyBlueprints[i].id === id) {
@@ -1275,11 +1279,22 @@ export class CombatManager {
       if (obj.enemyType.startsWith('animal:') || obj.remainingCount <= 0) continue;
 
       const canonicalArchetype = this.resolveValidArchetype(obj.enemyType);
-      const allowedBiomes = this.preferredBiomesForArchetype(canonicalArchetype, obj.targetBiome);
-      const anchorX = obj.targetX ?? opts.playerPos.x;
-      const anchorZ = obj.targetZ ?? opts.playerPos.z;
+      const hasExplicitAnchor =
+        typeof obj.targetX === 'number' &&
+        Number.isFinite(obj.targetX) &&
+        typeof obj.targetZ === 'number' &&
+        Number.isFinite(obj.targetZ);
+      // Only restrict by archetype biome when there is no explicit quest location;
+      // explicit quest locations (e.g. Abandoned Cabin, Desert Ruins, Camps) must spawn at that site.
+      const allowedBiomes = hasExplicitAnchor
+        ? undefined
+        : this.preferredBiomesForArchetype(canonicalArchetype, obj.targetBiome);
+      const anchorX = hasExplicitAnchor ? obj.targetX! : opts.playerPos.x;
+      const anchorZ = hasExplicitAnchor ? obj.targetZ! : opts.playerPos.z;
+      const QUEST_AREA_BIND_RADIUS = 55;
+      const QUEST_AREA_RECOVER_RADIUS = 85;
 
-      // Count already bound alive blueprints and recover any invalid unloaded positions
+      // Count already bound alive blueprints and recover any invalid or far-out-of-zone unloaded positions
       const bound: EnemyBlueprintRecord[] = [];
       for (let b = 0; b < this.enemyBlueprints.length; b++) {
         const bp = this.enemyBlueprints[b];
@@ -1292,29 +1307,40 @@ export class CombatManager {
             bp.questTarget.lifecycle = 'DEFEATED';
             continue;
           }
-          // Recovery: verify unloaded or non-aggro bound targets sit on valid land clear of village/colliders
+          // Recovery: verify unloaded bound targets sit on valid land and inside the explicit quest area
           if (!bp.controller) {
-            const ok = validateQuestTargetLocation(bp.x, bp.z, {
-              radius: 0.85,
-              minHeightAboveWater: 0.65,
-              waterBuffer: 3.0,
-              maxSlope: 0.30,
-              outsideVillage: true,
-              isVillageClearance: opts.isVillageClearance,
-              queryCollidersNear: opts.queryCollidersNear,
-            });
+            const distFromAnchor = Math.hypot(bp.x - anchorX, bp.z - anchorZ);
+            const tooFarFromExplicitAnchor =
+              hasExplicitAnchor && distFromAnchor > QUEST_AREA_RECOVER_RADIUS;
+            const ok =
+              !tooFarFromExplicitAnchor &&
+              validateQuestTargetLocation(bp.x, bp.z, {
+                radius: 0.85,
+                minHeightAboveWater: 0.65,
+                waterBuffer: 2.5,
+                maxSlope: 0.38,
+                outsideVillage: true,
+                isVillageClearance: opts.isVillageClearance,
+                queryCollidersNear: opts.queryCollidersNear,
+              });
             if (!ok) {
+              // If this was an ambient world enemy that is far from the quest zone, unbind it
+              // so we can spawn a proper quest target inside the quest zone instead of teleporting ambient mobs
+              if (tooFarFromExplicitAnchor && !bp.isDynamicQuestSpawn) {
+                bp.questTarget = undefined;
+                continue;
+              }
               const recovered = findValidQuestTargetPoint(anchorX, anchorZ, {
                 radius: 0.85,
                 minHeightAboveWater: 0.65,
-                waterBuffer: 3.0,
-                maxSlope: 0.30,
+                waterBuffer: 2.5,
+                maxSlope: hasExplicitAnchor ? 0.38 : 0.32,
                 outsideVillage: true,
                 isVillageClearance: opts.isVillageClearance,
                 queryCollidersNear: opts.queryCollidersNear,
                 allowedBiomes,
-                minRadius: 34,
-                maxRadius: 165,
+                minRadius: hasExplicitAnchor ? 4 : 34,
+                maxRadius: hasExplicitAnchor ? 52 : 165,
               });
               bp.x = recovered.x;
               bp.z = recovered.z;
@@ -1371,16 +1397,29 @@ export class CombatManager {
 
       if (bound.length >= obj.remainingCount) continue;
 
-      // Bind existing alive unbound world blueprints closest to anchor first
+      // Bind existing alive unbound world blueprints inside the quest area first.
+      // CRITICAL: When an explicit quest anchor (e.g. Abandoned Cabin) is set, NEVER bind
+      // distant ambient enemies hundreds of meters away across the map.
       const candidates = this.enemyBlueprints
-        .filter(
-          (bp) =>
-            !bp.defeated &&
-            bp.controller?.state !== 'dead' &&
-            !bp.questTarget &&
-            !bp.id.startsWith('qtarget:') &&
-            enemyTypeMatches(obj.enemyType, bp.archetypeId),
-        )
+        .filter((bp) => {
+          if (
+            bp.defeated ||
+            bp.controller?.state === 'dead' ||
+            bp.questTarget ||
+            bp.id.startsWith('qtarget:') ||
+            !enemyTypeMatches(obj.enemyType, bp.archetypeId)
+          ) {
+            return false;
+          }
+          if (hasExplicitAnchor) {
+            const ex = bp.controller ? bp.controller.position.x : bp.x;
+            const ez = bp.controller ? bp.controller.position.z : bp.z;
+            if (Math.hypot(ex - anchorX, ez - anchorZ) > QUEST_AREA_BIND_RADIUS) {
+              return false;
+            }
+          }
+          return true;
+        })
         .sort((a, b) => {
           const ax = a.controller ? a.controller.position.x : a.x;
           const az = a.controller ? a.controller.position.z : a.z;
@@ -1416,23 +1455,59 @@ export class CombatManager {
           existingSlotIds.add(slotId);
           nextSlot++;
 
-          const spreadAngle = s * 2.39996;
-          const spreadR = s === 0 ? 0 : 14 + s * 6;
+          const spreadAngle = s * 2.39996 + 0.4;
+          const spreadR = hasExplicitAnchor
+            ? s === 0
+              ? 4
+              : 9 + s * 4.5
+            : s === 0
+              ? 0
+              : 14 + s * 6;
           const searchX = anchorX + Math.cos(spreadAngle) * spreadR;
           const searchZ = anchorZ + Math.sin(spreadAngle) * spreadR;
 
-          const picked = findValidQuestTargetPoint(searchX, searchZ, {
+          let picked = findValidQuestTargetPoint(searchX, searchZ, {
             radius: 0.85,
             minHeightAboveWater: 0.65,
-            waterBuffer: 3.0,
-            maxSlope: 0.30,
+            waterBuffer: 2.5,
+            maxSlope: hasExplicitAnchor ? 0.38 : 0.32,
             outsideVillage: true,
             isVillageClearance: opts.isVillageClearance,
             queryCollidersNear: opts.queryCollidersNear,
             allowedBiomes,
-            minRadius: s === 0 && !opts.isVillageClearance(searchX, searchZ) ? 0 : 28,
-            maxRadius: 170,
+            minRadius: hasExplicitAnchor
+              ? 0
+              : s === 0 && !opts.isVillageClearance(searchX, searchZ)
+                ? 0
+                : 28,
+            maxRadius: hasExplicitAnchor ? 42 : 170,
           });
+
+          // Secondary wider fallback inside the quest area if local terrain around the cabin/camp is steep
+          if (
+            hasExplicitAnchor &&
+            !validateQuestTargetLocation(picked.x, picked.z, {
+              radius: 0.85,
+              minHeightAboveWater: 0.65,
+              waterBuffer: 2.0,
+              maxSlope: 0.46,
+              outsideVillage: true,
+              isVillageClearance: opts.isVillageClearance,
+              queryCollidersNear: opts.queryCollidersNear,
+            })
+          ) {
+            picked = findValidQuestTargetPoint(anchorX, anchorZ, {
+              radius: 0.85,
+              minHeightAboveWater: 0.65,
+              waterBuffer: 2.0,
+              maxSlope: 0.46,
+              outsideVillage: true,
+              isVillageClearance: opts.isVillageClearance,
+              queryCollidersNear: opts.queryCollidersNear,
+              minRadius: 6,
+              maxRadius: 72,
+            });
+          }
 
           let spawnX = picked.x;
           let spawnZ = picked.z;
@@ -1442,18 +1517,22 @@ export class CombatManager {
             const bx = bc ? bc.position.x : bound[b].x;
             const bz = bc ? bc.position.z : bound[b].z;
             if (Math.hypot(spawnX - bx, spawnZ - bz) < 4.5) {
-              const alt = findValidQuestTargetPoint(spawnX + Math.cos(s + 1.2) * 14, spawnZ + Math.sin(s + 1.2) * 14, {
-                radius: 0.85,
-                minHeightAboveWater: 0.65,
-                waterBuffer: 3.0,
-                maxSlope: 0.30,
-                outsideVillage: true,
-                isVillageClearance: opts.isVillageClearance,
-                queryCollidersNear: opts.queryCollidersNear,
-                allowedBiomes,
-                minRadius: 8,
-                maxRadius: 80,
-              });
+              const alt = findValidQuestTargetPoint(
+                spawnX + Math.cos(s + 1.2) * (hasExplicitAnchor ? 8 : 14),
+                spawnZ + Math.sin(s + 1.2) * (hasExplicitAnchor ? 8 : 14),
+                {
+                  radius: 0.85,
+                  minHeightAboveWater: 0.65,
+                  waterBuffer: 2.5,
+                  maxSlope: hasExplicitAnchor ? 0.38 : 0.32,
+                  outsideVillage: true,
+                  isVillageClearance: opts.isVillageClearance,
+                  queryCollidersNear: opts.queryCollidersNear,
+                  allowedBiomes,
+                  minRadius: hasExplicitAnchor ? 5 : 8,
+                  maxRadius: hasExplicitAnchor ? 36 : 80,
+                },
+              );
               spawnX = alt.x;
               spawnZ = alt.z;
               break;
@@ -1712,12 +1791,13 @@ export class CombatManager {
       }
       const chunkReady = nearestCenterIdx > 0 ? true : chunkLoaded;
 
+      const closeQuestTarget = Boolean(bp.questTarget) && minDistSq <= 55 * 55;
       if (bp.controller) {
-        if (minDistSq > unloadDistSq || (!chunkReady && minDistSq > loadDistSq)) {
+        if (minDistSq > unloadDistSq || (!chunkReady && !closeQuestTarget && minDistSq > loadDistSq)) {
           this.unloadEnemy(bp);
         }
       } else if (
-        chunkReady &&
+        (chunkReady || closeQuestTarget) &&
         minDistSq <= loadDistSq &&
         (spawnedThisFrame < maxSpawnsPerFrame || Boolean(bp.questTarget))
       ) {

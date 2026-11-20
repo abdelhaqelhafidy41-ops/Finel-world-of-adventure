@@ -16,6 +16,7 @@ import type { BiomeType } from '../game/types';
 import {
   MAP_MAX_ZOOM,
   MAP_MIN_ZOOM,
+  MAP_WORLD_HALF,
   MapManager,
   type MapMarker,
   type MapMarkerCategory,
@@ -492,8 +493,14 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
         setSelectedMarker(hit);
       } else if (onSetWaypoint) {
         const pt = mapManager.screenToWorld(sx, sy, width, height);
-        const clampedX = Math.max(-1800, Math.min(1800, Math.round(pt.wx)));
-        const clampedZ = Math.max(-1800, Math.min(1800, Math.round(pt.wz)));
+        const clampedX = Math.max(
+          -MAP_WORLD_HALF,
+          Math.min(MAP_WORLD_HALF, Math.round(pt.wx)),
+        );
+        const clampedZ = Math.max(
+          -MAP_WORLD_HALF,
+          Math.min(MAP_WORLD_HALF, Math.round(pt.wz)),
+        );
         setSelectedMarker(null);
         setPendingWaypoint({ x: clampedX, z: clampedZ, sx, sy });
       } else {

@@ -1007,10 +1007,21 @@ export class EnemyController implements CombatTarget {
     // Clamp to ground & resolve nearby obstacle colliders only if position changed
     if (moved) {
       const pushed = this.resolveColliders(ctx.queryCollidersNear);
-      const rawH =
-        !pushed && !hasKnockback && knownSteerH !== null
-          ? knownSteerH
-          : groundHeightAt(this.position.x, this.position.z);
+      let rawH: number;
+      if (!pushed && !hasKnockback && knownSteerH !== null) {
+        rawH = knownSteerH;
+      } else {
+        const postBridgeY = sampleWalkableBridgeHeight(
+          this.position.x,
+          this.position.z,
+          this.position.y,
+          ctx.queryCollidersNear(this.position.x, this.position.z),
+        );
+        rawH =
+          postBridgeY !== null
+            ? postBridgeY
+            : groundHeightAt(this.position.x, this.position.z);
+      }
       this.position.y = Math.max(WATER_LEVEL + 0.05, rawH);
     }
 
@@ -1079,7 +1090,8 @@ export class EnemyController implements CombatTarget {
       if (bridgeY === null) {
         if (nextH < WATER_LEVEL + 0.25) continue;
         const nextSlope = groundSlopeAt(nextX, nextZ, nextH);
-        if (nextSlope > 0.44) continue;
+        // Only block steep UPHILL climbs so enemies/bandits can always walk downhill or traverse hills
+        if (nextSlope > 0.48 && nextH > this.position.y + 0.08) continue;
       }
 
       // Also check a slight lookahead so enemy routes smoothly before hugging a shoreline
@@ -1134,21 +1146,34 @@ export class EnemyController implements CombatTarget {
         const sin = Math.sin(c.yaw);
         const lx = dx * cos - dz * sin;
         const lz = dx * sin + dz * cos;
-        const extX = c.halfW + this.hitRadius;
-        const extZ = c.halfD + this.hitRadius;
-        if (Math.abs(lx) < extX && Math.abs(lz) < extZ) {
-          const penX = extX - Math.abs(lx);
-          const penZ = extZ - Math.abs(lz);
-          let pushLX = 0;
-          let pushLZ = 0;
-          if (penX < penZ) {
-            pushLX = (lx >= 0 ? 1 : -1) * penX;
-          } else {
-            pushLZ = (lz >= 0 ? 1 : -1) * penZ;
+        const r = this.hitRadius;
+        if (Math.abs(lx) < c.halfW + r && Math.abs(lz) < c.halfD + r) {
+          const closestX = Math.max(-c.halfW, Math.min(c.halfW, lx));
+          const closestZ = Math.max(-c.halfD, Math.min(c.halfD, lz));
+          const offX = lx - closestX;
+          const offZ = lz - closestZ;
+          const distSq = offX * offX + offZ * offZ;
+          if (distSq < r * r) {
+            let pushLX = 0;
+            let pushLZ = 0;
+            if (distSq > 1e-8) {
+              const dist = Math.sqrt(distSq);
+              const push = r - dist + 0.004;
+              pushLX = (offX / dist) * push;
+              pushLZ = (offZ / dist) * push;
+            } else {
+              const penX = c.halfW - Math.abs(lx) + r + 0.004;
+              const penZ = c.halfD - Math.abs(lz) + r + 0.004;
+              if (penX < penZ) {
+                pushLX = (lx >= 0 ? 1 : -1) * penX;
+              } else {
+                pushLZ = (lz >= 0 ? 1 : -1) * penZ;
+              }
+            }
+            this.position.x += pushLX * cos + pushLZ * sin;
+            this.position.z += -pushLX * sin + pushLZ * cos;
+            pushed = true;
           }
-          this.position.x += pushLX * cos + pushLZ * sin;
-          this.position.z += -pushLX * sin + pushLZ * cos;
-          pushed = true;
         }
       } else {
         const minR = c.radius + this.hitRadius;

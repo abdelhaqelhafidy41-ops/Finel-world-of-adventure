@@ -159,11 +159,12 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
       } else if (ev.type === 'room-closed') {
         setActiveRoom(null);
         setHostLanAddress(null);
+        transport?.setLanDisplayAddress(null);
         setSubView('lanHub');
         setStatusNotice(
           isAr
-            ? 'أغلق المضيف لعبة الشبكة المحلية.'
-            : ev.reason || 'LAN host ended the game.',
+            ? 'تم إيقاف الخادم المحلي من صاحب الغرفة.'
+            : 'The host has stopped the local server.',
         );
       } else if (ev.type === 'player-kicked') {
         if (ev.isLocalTarget) {
@@ -279,6 +280,7 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
         ? `${hostRes.ip}:${hostRes.port}`
         : hostRes.baseUrl.replace(/^https?:\/\//i, '');
       setHostLanAddress(displayAddr);
+      transport?.setLanDisplayAddress(displayAddr);
       setActiveRoom(createdRoom);
       setStatusNotice(
         isAr
@@ -353,7 +355,9 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
           playerName: cleanedPlayer.slice(0, 24),
         });
 
-        setHostLanAddress(baseUrl.replace(/^https?:\/\//i, ''));
+        const joinedAddr = baseUrl.replace(/^https?:\/\//i, '');
+        setHostLanAddress(joinedAddr);
+        transport?.setLanDisplayAddress(joinedAddr);
         setActiveRoom(joined);
         setSubView('lanLobby');
       } catch (err) {
@@ -1053,6 +1057,21 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
             </div>
           </div>
 
+          {/* Guest Waiting-for-Host Banner */}
+          {!isLocalHost && activeRoom.status === 'waiting' && (
+            <div
+              data-testid="lan-guest-waiting-banner"
+              className="px-3.5 py-2.5 rounded-xl bg-[#241f10] border border-[#e5a93c]/45 text-xs text-[#f7d488] flex items-center gap-2"
+            >
+              <RefreshCw className="w-3.5 h-3.5 shrink-0 animate-spin" />
+              <span>
+                {isAr
+                  ? 'بانتظار فتح الخادم المحلي من صاحب الغرفة...'
+                  : 'Waiting for the host to open the local server...'}
+              </span>
+            </div>
+          )}
+
           {/* Connected LAN Players (Max 4) */}
           <div className="p-3.5 rounded-xl bg-[#0b1611] border border-[#274033] space-y-2">
             <div className="flex items-center justify-between">
@@ -1062,7 +1081,13 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
               </span>
               {activeRoom.players.length < MAX_LAN_PLAYERS && (
                 <span className="text-[11px] text-[#9db1a1]">
-                  {isAr ? 'بانتظار لاعبين...' : 'Waiting for players...'}
+                  {isLocalHost
+                    ? isAr
+                      ? 'يمكنك البدء الآن أو انتظار لاعبين'
+                      : 'You can start now or wait for players'
+                    : isAr
+                      ? 'بانتظار لاعبين...'
+                      : 'Waiting for players...'}
                 </span>
               )}
             </div>

@@ -11,6 +11,7 @@ files:
   - dist/**/*
   - electron/main.cjs
   - electron/preload.cjs
+  - electron/lanServer.cjs
   - package.json
   - "!**/*.map"
   - "!electron/dev.mjs"

@@ -1067,6 +1067,14 @@ export class SideQuestManager {
     enemyType: string,
     entityId?: string,
     notify?: (msg: string) => void,
+    opts?: {
+      questBinding?: { questId: string; objectiveId: string };
+      killPos?: { x: number; z: number };
+      bridge?: Pick<
+        SideQuestWorldBridge,
+        'getNpcPosition' | 'getLocationCoords' | 'getVillageCoords' | 'resolveLandPoint'
+      >;
+    },
   ): boolean {
     let changed = false;
 
@@ -1090,6 +1098,26 @@ export class SideQuestManager {
             ? 'bandit_scout'
             : (obj.enemyType ?? 'any');
         if (!enemyTypeMatches(expected, enemyType)) continue;
+
+        const matchesExactBinding =
+          opts?.questBinding?.questId === def.sideQuestId &&
+          opts?.questBinding?.objectiveId === obj.id;
+        if (!matchesExactBinding) {
+          if (opts?.questBinding) continue;
+          if (
+            (obj.anchor || obj.locationId || obj.villageId) &&
+            opts?.killPos &&
+            opts?.bridge
+          ) {
+            const areaCoords = this.resolveObjectiveCoords(obj, opts.bridge);
+            if (
+              areaCoords &&
+              Math.hypot(opts.killPos.x - areaCoords.x, opts.killPos.z - areaCoords.z) > 95
+            ) {
+              continue;
+            }
+          }
+        }
 
         if (entityId) {
           const token = `${obj.id}:${entityId}`;
@@ -1263,8 +1291,6 @@ export class SideQuestManager {
           obj.type === 'defeat_bandit'
             ? 'bandit_scout'
             : (obj.enemyType ?? 'bandit_scout');
-        // Wildlife kills (e.g. animal:wolf) roam naturally in plains/woods; only combat enemies use combat quest targets
-        if (expected.startsWith('animal:')) continue;
 
         const anchor = this.resolveObjectiveCoords(obj, bridge);
         out.push({
