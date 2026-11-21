@@ -1131,6 +1131,14 @@ export class PlayerController {
         centerH <= currentY + MAX_TERRAIN_STEP_UP &&
         maxLeadH <= currentY + MAX_TERRAIN_STEP_UP + 0.14);
 
+    if (
+      candDeckY >= currentY - 0.75 &&
+      candDeckY <= currentY + MAX_WALKABLE_BOX_STEP_UP &&
+      centerH <= candDeckY + MAX_TERRAIN_STEP_UP
+    ) {
+      return false;
+    }
+
     if (onOrEnteringDeck && maxLeadH <= currentY + MAX_TERRAIN_STEP_UP + 0.14) {
       return false;
     }
@@ -1161,7 +1169,11 @@ export class PlayerController {
     this.sampleTerrainGradient(candX, candZ, _gradScratch);
     if (_gradScratch.mag > MAX_WALKABLE_SLOPE_TAN) {
       const uphillDot = dirX * _gradScratch.gx + dirZ * _gradScratch.gz;
-      if (uphillDot > 0.1 && maxLeadH > currentY + 0.12) {
+      const leadCenterMax = Math.max(centerH, frontH);
+      if (
+        uphillDot > MAX_WALKABLE_SLOPE_TAN * 0.72 &&
+        leadCenterMax > currentY + 0.12
+      ) {
         return true;
       }
     }

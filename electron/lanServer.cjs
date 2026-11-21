@@ -423,6 +423,18 @@ class OfflineLanServer {
     if (!this.room) return null;
     const worldTime = this.materializeWorldTime(now);
     return {
+      openedChests: [],
+      collectedPickups: [],
+      depletedResources: [],
+      doors: [],
+      placedBeds: [],
+      placedStations: [],
+      playerBuildings: [],
+      villagesDev: [],
+      droppedItems: [],
+      quests: [],
+      discoveredLandmarks: ['spawn-glade'],
+      deadEntities: [],
       worldSettingsPermission: this.room.worldSettingsPermission || 'HOST_ONLY',
       worldSettings: {
         worldType: this.room.worldType,

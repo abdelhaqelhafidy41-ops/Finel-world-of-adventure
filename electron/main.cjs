@@ -106,8 +106,13 @@ function configureSessionPermissions() {
 }
 
 function createMainWindow() {
+  const windowIconPath = path.join(
+    __dirname,
+    process.platform === 'win32' ? 'icon.ico' : 'icon.png',
+  );
   mainWindow = new BrowserWindow({
     title: APP_NAME,
+    icon: windowIconPath,
     width: 1280,
     height: 800,
     minWidth: 800,

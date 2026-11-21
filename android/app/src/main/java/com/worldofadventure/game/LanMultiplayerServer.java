@@ -609,6 +609,20 @@ public class LanMultiplayerServer {
 
     private JSONObject buildWorldSnapshotForPlayer(String playerId, long now) throws Exception {
         JSONObject ws = new JSONObject();
+        ws.put("openedChests", new JSONArray());
+        ws.put("collectedPickups", new JSONArray());
+        ws.put("depletedResources", new JSONArray());
+        ws.put("doors", new JSONArray());
+        ws.put("placedBeds", new JSONArray());
+        ws.put("placedStations", new JSONArray());
+        ws.put("playerBuildings", new JSONArray());
+        ws.put("villagesDev", new JSONArray());
+        ws.put("droppedItems", new JSONArray());
+        ws.put("quests", new JSONArray());
+        JSONArray landmarks = new JSONArray();
+        landmarks.put("spawn-glade");
+        ws.put("discoveredLandmarks", landmarks);
+        ws.put("deadEntities", new JSONArray());
         ws.put("worldSettingsPermission", room.worldSettingsPermission);
         JSONObject worldSettings = new JSONObject();
         worldSettings.put("worldType", room.worldType);

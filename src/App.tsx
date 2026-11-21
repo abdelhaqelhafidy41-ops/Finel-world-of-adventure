@@ -852,42 +852,49 @@ export default function App() {
       setLoadLabel(UI_TEXT[languageRef.current].loadingDefault);
 
       void (async () => {
-        const engine = await ensureEngine();
-        if (!engine) {
+        try {
+          const engine = await ensureEngine();
+          if (!engine) {
+            lastStartedMatchKeyRef.current = null;
+            setPhase('title');
+            showNotice(UI_TEXT[languageRef.current].loadFailedNotice);
+            return;
+          }
+          engine.setModalOpen(false);
+          engine.setMultiplayerService(multiplayerServiceRef.current);
+          const started = await engine.startMultiplayerWorld({
+            worldName: info.worldName || info.roomName,
+            seed: info.seed,
+            worldType: authType,
+            difficulty: authDifficulty,
+            worldSettingsPermission: info.worldSettingsPermission,
+            worldTime: info.worldTime,
+            worldWeather: info.worldWeather,
+            localPlayerId: info.localPlayerId,
+            players: info.players,
+          });
+          if (!started) {
+            lastStartedMatchKeyRef.current = null;
+            setPhase('title');
+            return;
+          }
+          setWaypoint(engine.getWaypoint());
+          const t = UI_TEXT[language];
+          const modeLabel =
+            authType === 'survival'
+              ? t.worldTypeSurvival
+              : authType === 'adventure'
+                ? t.worldTypeAdventure
+                : authType === 'creative'
+                  ? t.worldTypeCreative
+                  : t.worldTypeNormal;
+          showNotice(t.mpStartingWorldNotice(info.roomCode || info.roomId, modeLabel));
+        } catch (err) {
+          console.error('[Multiplayer] Failed to start world:', err);
           lastStartedMatchKeyRef.current = null;
           setPhase('title');
           showNotice(UI_TEXT[languageRef.current].loadFailedNotice);
-          return;
         }
-        engine.setModalOpen(false);
-        engine.setMultiplayerService(multiplayerServiceRef.current);
-        const started = await engine.startMultiplayerWorld({
-          worldName: info.worldName || info.roomName,
-          seed: info.seed,
-          worldType: authType,
-          difficulty: authDifficulty,
-          worldSettingsPermission: info.worldSettingsPermission,
-          worldTime: info.worldTime,
-          worldWeather: info.worldWeather,
-          localPlayerId: info.localPlayerId,
-          players: info.players,
-        });
-        if (!started) {
-          lastStartedMatchKeyRef.current = null;
-          setPhase('title');
-          return;
-        }
-        setWaypoint(engine.getWaypoint());
-        const t = UI_TEXT[language];
-        const modeLabel =
-          authType === 'survival'
-            ? t.worldTypeSurvival
-            : authType === 'adventure'
-              ? t.worldTypeAdventure
-              : authType === 'creative'
-                ? t.worldTypeCreative
-                : t.worldTypeNormal;
-        showNotice(t.mpStartingWorldNotice(info.roomCode || info.roomId, modeLabel));
       })();
     },
     [ensureEngine, language, showNotice],

@@ -5827,14 +5827,14 @@ export class GameEngine {
     this.isApplyingRemoteWorldEvent = true;
     this.isApplyingRemoteTimeWeather = true;
     try {
-      for (const chestId of snap.openedChests) {
+      for (const chestId of snap.openedChests ?? []) {
         this.world.markChestOpenedRemote(chestId);
       }
-      for (const pickupId of snap.collectedPickups) {
+      for (const pickupId of snap.collectedPickups ?? []) {
         this.world.markPickupCollectedRemote(pickupId);
       }
       const nowMs = Date.now();
-      for (const r of snap.depletedResources) {
+      for (const r of snap.depletedResources ?? []) {
         const remainSec = Math.max(0, (r.regenAtMs - nowMs) / 1000);
         this.world.applyResourceNodeState(
           r.id,
@@ -5843,10 +5843,10 @@ export class GameEngine {
           this.elapsed + remainSec,
         );
       }
-      for (const door of snap.doors) {
+      for (const door of snap.doors ?? []) {
         this.world.setDoorOpen(door.id, door.isOpen);
       }
-      for (const bed of snap.placedBeds) {
+      for (const bed of snap.placedBeds ?? []) {
         if (!this.world.interactables.some((it) => it.id === bed.id)) {
           this.world.placeBedAt(bed.x, bed.z, bed.yaw, bed.id);
         }
@@ -5909,7 +5909,7 @@ export class GameEngine {
         }
         this.callbacks.onFarmOrVillageStateChange?.();
       }
-      for (const drop of snap.droppedItems) {
+      for (const drop of snap.droppedItems ?? []) {
         if (!this.world.interactables.some((it) => it.id === drop.id)) {
           this.world.spawnWorldPickup(
             drop.x,
@@ -5922,14 +5922,14 @@ export class GameEngine {
           );
         }
       }
-      for (const lmId of snap.discoveredLandmarks) {
+      for (const lmId of snap.discoveredLandmarks ?? []) {
         const lm = this.landmarks.find((l) => l.id === lmId);
         if (lm && !lm.discovered) {
           lm.discovered = true;
           this.mapManager.revealAround(lm.x, lm.z, 95);
         }
       }
-      for (const q of snap.quests) {
+      for (const q of snap.quests ?? []) {
         if (getQuestDefinition(q.questId)?.scope === 'cooperative') continue;
         if (q.questId.startsWith('sq-')) {
           this.sideQuestManager.applyRemoteSideQuestUpdate(
@@ -5984,7 +5984,7 @@ export class GameEngine {
           ]);
         }
       }
-      for (const dead of snap.deadEntities) {
+      for (const dead of snap.deadEntities ?? []) {
         if (dead.kind === 'enemy') {
           this.combat.applyAuthoritativeEnemyDamage(dead.id, 0, 100, true);
         } else if (dead.kind === 'animal') {

@@ -567,6 +567,12 @@ export const MobileControlsOverlay: React.FC<MobileControlsOverlayProps> = ({
 
   const handleJoystickPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (customizeMode || !mobileInput || !joystickZoneRef.current) return;
+    if (
+      activeJoystickPointerRef.current !== null &&
+      activeJoystickPointerRef.current !== e.pointerId
+    ) {
+      return;
+    }
     e.stopPropagation();
     e.preventDefault();
     try {

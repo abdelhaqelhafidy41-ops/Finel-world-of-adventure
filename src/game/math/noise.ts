@@ -258,9 +258,9 @@ function computeRawBiomeFactors(
   const regionalPeakNoise =
     fbm2D(x * 0.0014 + 64, z * 0.0014 - 41, 3) * 0.5 + 0.5;
   const regionalPeaks =
-    distCenter > 420
-      ? smoothstepRange(regionalPeakNoise, 0.59, 0.82) * 0.85
-      : 0;
+    smoothstepRange(distCenter, 420, 500) *
+    smoothstepRange(regionalPeakNoise, 0.59, 0.82) *
+    0.85;
   const mountainNoise =
     0.7 + 0.6 * (fbm2D(x * 0.004 + 30, z * 0.004 - 15, 2) * 0.5 + 0.5);
   const mountains = clampVal(
@@ -420,20 +420,22 @@ export function rawGroundHeightAt(x: number, z: number): number {
 
   // Desert sand dunes (smooth sweeping wind ripples)
   if (wDesert > 0.02) {
+    const desertRamp = smoothstepRange(wDesert, 0.02, 0.05);
     const duneWave =
       Math.sin(x * 0.045 + z * 0.028 + fbm2D(x * 0.01, z * 0.01, 2) * 3.0) * 4.4;
     const mesaNoise = fbm2D(x * 0.008 + 70, z * 0.008 - 40, 3);
     const mesa = mesaNoise > 0.28 ? smoothstepRange(mesaNoise, 0.28, 0.44) * 13.5 : 0;
     const desertHeight = 4.2 + duneWave + mesa + micro * 0.6;
-    height = lerpVal(height, desertHeight, wDesert);
+    height = lerpVal(height, desertHeight, wDesert * desertRamp);
   }
 
   // Mountains with varying heights (foothills, ridged crests, and alpine peaks)
   if (wMountains > 0.01) {
+    const mountainRamp = smoothstepRange(wMountains, 0.01, 0.04);
     const ridge1 = ridgedFbm2D(x * 0.0062 + 41.2, z * 0.0062 - 18.6, 4);
     const ridge2 = fbm2D(x * 0.014 - 9.4, z * 0.014 + 27.1, 3) * 0.5 + 0.5;
     const peakVariation = 22 + ridge1 * 56 + ridge2 * 14;
-    height += wMountains * peakVariation;
+    height += wMountains * mountainRamp * peakVariation;
   }
 
   // Keep spawn glade (0, 4) gently flat and dry (~3.8m)

@@ -12,6 +12,8 @@ files:
   - electron/main.cjs
   - electron/preload.cjs
   - electron/lanServer.cjs
+  - electron/icon.ico
+  - electron/icon.png
   - package.json
   - "!**/*.map"
   - "!electron/dev.mjs"
@@ -23,6 +25,7 @@ files:
   - "!server.ts"
 
 win:
+  icon: electron/icon.ico
   target:
     - target: nsis
       arch:
