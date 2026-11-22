@@ -6,6 +6,7 @@ import {
   Play,
   PlusCircle,
   Trash2,
+  Wifi,
 } from 'lucide-react';
 import { UI_TEXT, type Language } from '../../game/i18n/translations';
 import type { SaveGameMeta, SaveSlotId } from '../../game/save/saveTypes';
@@ -14,7 +15,9 @@ import { WorldCard } from './WorldCard';
 interface WorldSelectionScreenProps {
   lang: Language;
   worlds: SaveGameMeta[];
+  canHostLan?: boolean;
   onPlayWorld: (slotId: SaveSlotId) => void;
+  onHostWorldLan?: (slotId: SaveSlotId) => void;
   onDeleteWorld: (slotId: SaveSlotId) => void;
   onCreateNewWorld: () => void;
   onBack: () => void;
@@ -23,7 +26,9 @@ interface WorldSelectionScreenProps {
 export const WorldSelectionScreen: React.FC<WorldSelectionScreenProps> = ({
   lang,
   worlds,
+  canHostLan = false,
   onPlayWorld,
+  onHostWorldLan,
   onDeleteWorld,
   onCreateNewWorld,
   onBack,
@@ -151,6 +156,18 @@ export const WorldSelectionScreen: React.FC<WorldSelectionScreenProps> = ({
                 <Play className="w-4 h-4 fill-current" />
                 <span>{t.playWorldBtn}</span>
               </button>
+
+              {canHostLan && onHostWorldLan && (
+                <button
+                  type="button"
+                  data-testid="host-world-lan-btn"
+                  onClick={() => onHostWorldLan(selectedWorld.slotId)}
+                  className="min-h-[48px] px-4 py-3 rounded-xl bg-[#1a3c2a] hover:bg-[#224f37] border border-[#7fe094]/55 text-[#e9f7ed] font-display font-bold text-sm inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <Wifi className="w-4 h-4 text-[#7fe094]" />
+                  <span>{t.hostLanBtn}</span>
+                </button>
+              )}
 
               <button
                 type="button"

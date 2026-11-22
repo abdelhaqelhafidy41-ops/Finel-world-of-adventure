@@ -152,6 +152,10 @@ export async function startLanHost(
     worldName?: string;
     worldType?: WorldType;
     difficulty?: DifficultyLevel;
+    seed?: number;
+    worldTime?: Record<string, unknown>;
+    worldWeather?: Record<string, unknown>;
+    savedWorldState?: Record<string, unknown>;
   } = {},
   port = DEFAULT_LAN_PORT,
 ): Promise<LanHostStartResult> {

@@ -24,6 +24,158 @@ const TIME_PRESET_HOURS = {
 const VALID_WEATHER_STATES = new Set(['clear', 'cloudy', 'overcast', 'rain', 'storm', 'fog']);
 const VALID_MOVEMENT_STATES = new Set(['idle', 'walking', 'running', 'jumping', 'falling']);
 const TIME_SYNC_INTERVAL_MS = 5000;
+const MAX_PLAYER_COINS = 99999;
+const MAX_PLAYER_LEVEL = 50;
+
+const LAN_WEAPON_SPECS = {
+  unarmed: { id: 'unarmed', baseDamage: 9, range: 2.1, cooldownMs: 300, isRanged: false, critMult: 1.0, critChance: 0 },
+  'ranger-sword': { id: 'ranger-sword', baseDamage: 26, range: 2.85, cooldownMs: 340, isRanged: false, critMult: 1.5, critChance: 0.18 },
+  'wooden-sword': { id: 'wooden-sword', baseDamage: 16, range: 2.6, cooldownMs: 320, isRanged: false, critMult: 1.5, critChance: 0.12 },
+  'iron-sword': { id: 'iron-sword', baseDamage: 34, range: 2.95, cooldownMs: 360, isRanged: false, critMult: 1.5, critChance: 0.2 },
+  'steel-sword': { id: 'steel-sword', baseDamage: 44, range: 3.05, cooldownMs: 320, isRanged: false, critMult: 1.5, critChance: 0.26 },
+  'woodland-axe': { id: 'woodland-axe', baseDamage: 42, range: 2.95, cooldownMs: 580, isRanged: false, critMult: 1.75, critChance: 0.15 },
+  'battle-axe': { id: 'battle-axe', baseDamage: 52, range: 3.1, cooldownMs: 620, isRanged: false, critMult: 1.75, critChance: 0.18 },
+  'hunter-knife': { id: 'hunter-knife', baseDamage: 22, range: 2.25, cooldownMs: 210, isRanged: false, critMult: 1.75, critChance: 0.34 },
+  spear: { id: 'spear', baseDamage: 36, range: 3.85, cooldownMs: 440, isRanged: false, critMult: 1.6, critChance: 0.22 },
+  'stone-club': { id: 'stone-club', baseDamage: 22, range: 2.65, cooldownMs: 620, isRanged: false, critMult: 1.5, critChance: 0.12 },
+  'copper-sword': { id: 'copper-sword', baseDamage: 24, range: 2.8, cooldownMs: 410, isRanged: false, critMult: 1.5, critChance: 0.17 },
+  'bronze-spear': { id: 'bronze-spear', baseDamage: 30, range: 3.7, cooldownMs: 520, isRanged: false, critMult: 1.6, critChance: 0.2 },
+  'silver-sword': { id: 'silver-sword', baseDamage: 40, range: 3.0, cooldownMs: 390, isRanged: false, critMult: 1.5, critChance: 0.24 },
+  'hunter-bow': {
+    id: 'hunter-bow',
+    baseDamage: 32,
+    minDamage: 10,
+    maxDamage: 50,
+    range: 52,
+    cooldownMs: 360,
+    isRanged: true,
+    critMult: 1.65,
+    critChance: 0.24,
+    headshotMult: 2.0,
+    minSpeed: 15,
+    maxSpeed: 45,
+    gravity: 9.8,
+  },
+  crossbow: {
+    id: 'crossbow',
+    baseDamage: 46,
+    minDamage: 16,
+    maxDamage: 66,
+    range: 58,
+    cooldownMs: 560,
+    isRanged: true,
+    critMult: 1.65,
+    critChance: 0.28,
+    headshotMult: 2.0,
+    minSpeed: 22,
+    maxSpeed: 56,
+    gravity: 6.2,
+  },
+};
+
+const LAN_ENEMY_MAX_HP = {
+  bandit_scout: 65,
+  thorn_stalker: 50,
+  stone_sentinel: 120,
+  ancient_monster: 95,
+  ancient_guardian: 420,
+};
+
+const LAN_ANIMAL_MAX_HP = {
+  deer: 55,
+  rabbit: 22,
+  wolf: 68,
+  bear: 135,
+  bird: 14,
+  cow: 80,
+  sheep: 45,
+  chicken: 16,
+};
+
+const LAN_NPC_MAX_HP = {
+  guard: 140,
+  default: 100,
+};
+
+const LAN_ENEMY_ATTACK_MAX_DAMAGE = {
+  bandit_scout: 18,
+  thorn_stalker: 16,
+  stone_sentinel: 32,
+  ancient_monster: 30,
+  ancient_guardian: 58,
+  wolf: 15,
+  bear: 28,
+  default: 30,
+};
+
+const LAN_ENEMY_REWARDS = {
+  bandit_scout: { xp: 28, coins: 14 },
+  thorn_stalker: { xp: 24, coins: 10 },
+  stone_sentinel: { xp: 48, coins: 28 },
+  ancient_monster: { xp: 42, coins: 22 },
+  ancient_guardian: { xp: 180, coins: 95 },
+};
+
+const LAN_ENEMY_LOOT_TABLES = {
+  bandit_scout: {
+    archetype: 'bandit_scout',
+    isBoss: false,
+    personal: { xp: 28, coins: 14, items: [{ itemId: 'arrow', count: 3, chance: 0.7 }] },
+    shared: null,
+    worldDrops: [{ itemId: 'hearth-loaf', count: 1, label: 'Sunstone Hearth Loaf', chance: 0.45 }],
+  },
+  thorn_stalker: {
+    archetype: 'thorn_stalker',
+    isBoss: false,
+    personal: { xp: 24, coins: 10, items: [{ itemId: 'meadow-herb', count: 1, chance: 0.65 }] },
+    shared: null,
+    worldDrops: [{ itemId: 'mushroom', count: 1, label: 'Forest Mushroom', chance: 0.5 }],
+  },
+  stone_sentinel: {
+    archetype: 'stone_sentinel',
+    isBoss: false,
+    personal: { xp: 48, coins: 28, items: [{ itemId: 'iron-ore', count: 2, chance: 0.85 }] },
+    shared: { xpPool: 24, coinsPool: 16, items: [{ itemId: 'coal', count: 2 }] },
+    worldDrops: [{ itemId: 'rare-mineral', count: 1, label: 'Sunstone Crystal', chance: 0.65 }],
+  },
+  ancient_monster: {
+    archetype: 'ancient_monster',
+    isBoss: false,
+    personal: { xp: 42, coins: 22, items: [{ itemId: 'iron-ore', count: 1, chance: 0.75 }] },
+    shared: { xpPool: 20, coinsPool: 14, items: [] },
+    worldDrops: [{ itemId: 'apothecary-tonic', count: 1, label: 'Apothecary Vitality Tonic', chance: 0.4 }],
+  },
+  ancient_guardian: {
+    archetype: 'ancient_guardian',
+    isBoss: true,
+    personal: { xp: 180, coins: 95, items: [{ itemId: 'apothecary-tonic', count: 1, chance: 1 }] },
+    shared: { xpPool: 120, coinsPool: 80, items: [{ itemId: 'rare-mineral', count: 2 }] },
+    worldDrops: [
+      { itemId: 'gold-ore', count: 3, label: 'Gold Ore Cache', chance: 1 },
+      { itemId: 'steel-sword', count: 1, label: 'Tempered Steel Blade', chance: 0.5 },
+    ],
+  },
+};
+
+function resolveEntityMaxHp(kind, archetype) {
+  if (kind === 'enemy') {
+    return LAN_ENEMY_MAX_HP[archetype] || 80;
+  }
+  if (kind === 'animal') {
+    return LAN_ANIMAL_MAX_HP[archetype] || 50;
+  }
+  return LAN_NPC_MAX_HP[archetype] || LAN_NPC_MAX_HP.default;
+}
+
+function isBossArchetypeOrFlag(kind, archetype, isBossFlag) {
+  return Boolean(isBossFlag || (kind === 'enemy' && archetype === 'ancient_guardian'));
+}
+
+function deterministicLootRoll(seedKey) {
+  const digest = crypto.createHash('sha256').update(String(seedKey)).digest();
+  const val = digest.readUInt32BE(0);
+  return val / 4294967296;
+}
 
 function getLocalIpv4Addresses() {
   const ifaces = os.networkInterfaces();
@@ -422,19 +574,61 @@ class OfflineLanServer {
   buildWorldSnapshotForPlayer(playerId, now = Date.now()) {
     if (!this.room) return null;
     const worldTime = this.materializeWorldTime(now);
+    const player = this.room.players.get(playerId);
+    const deadEntities = [];
+    const entityStates = [];
+    for (const ent of this.room.entities.values()) {
+      if (ent.isDead) {
+        deadEntities.push({ id: ent.id, kind: ent.kind });
+      }
+      entityStates.push({
+        id: ent.id,
+        kind: ent.kind,
+        archetype: ent.archetype,
+        x: ent.x,
+        y: ent.y,
+        z: ent.z,
+        yaw: ent.yaw,
+        state: ent.state,
+        hp: ent.hp,
+        maxHp: ent.maxHp,
+        isDead: ent.isDead,
+        alive: !ent.isDead,
+        ...(ent.targetPlayerId ? { targetPlayerId: ent.targetPlayerId } : {}),
+        ...(ent.isBoss ? { isBoss: true, bossPhase: ent.bossPhase ?? 1 } : {}),
+        ...(ent.attackState ? { attackState: ent.attackState } : {}),
+      });
+    }
+    const bossEncounters = Array.from(this.room.bossEncounters.values()).map((b) => ({
+      ...b,
+      damageByPlayer: { ...(b.damageByPlayer || {}) },
+    }));
+    const droppedItems = Array.from(this.room.droppedItems.values()).map((d) => ({ ...d }));
+
     return {
-      openedChests: [],
-      collectedPickups: [],
-      depletedResources: [],
-      doors: [],
-      placedBeds: [],
-      placedStations: [],
-      playerBuildings: [],
-      villagesDev: [],
-      droppedItems: [],
+      openedChests: Array.from(this.room.openedChests || []),
+      collectedPickups: Array.from(this.room.collectedPickups || []),
+      depletedResources: Array.from((this.room.depletedResources || new Map()).values()).map((r) => ({ ...r })),
+      doors: Array.from((this.room.doors || new Map()).entries()).map(([id, isOpen]) => ({
+        id,
+        isOpen: Boolean(isOpen),
+      })),
+      placedBeds: Array.from((this.room.placedBeds || new Map()).values()).map((b) => ({ ...b })),
+      placedStations: Array.from((this.room.placedStations || new Map()).values()).map((s) => ({ ...s })),
+      playerBuildings: Array.from((this.room.playerBuildings || new Map()).values()).map((b) => ({ ...b })),
+      villagesDev: Array.from((this.room.villagesDev || new Map()).values()).map((v) => ({
+        ...v,
+        completedRepairIds: Array.isArray(v.completedRepairIds) ? [...v.completedRepairIds] : [],
+        completedProjectIds: Array.isArray(v.completedProjectIds) ? [...v.completedProjectIds] : [],
+      })),
+      droppedItems,
       quests: [],
-      discoveredLandmarks: ['spawn-glade'],
-      deadEntities: [],
+      discoveredLandmarks:
+        this.room.discoveredLandmarks && this.room.discoveredLandmarks.size > 0
+          ? Array.from(this.room.discoveredLandmarks)
+          : ['spawn-glade'],
+      deadEntities,
+      entityStates,
       worldSettingsPermission: this.room.worldSettingsPermission || 'HOST_ONLY',
       worldSettings: {
         worldType: this.room.worldType,
@@ -451,8 +645,227 @@ class OfflineLanServer {
       serverTimestamp: now,
       partyState: this.buildPartySnapshotForPlayer(playerId),
       coopQuests: [],
-      bossEncounters: [],
+      bossEncounters,
+      ...(player
+        ? {
+            coins: player.coins ?? 0,
+            xp: player.xp ?? 0,
+            level: player.level ?? 1,
+            playerPosition: { ...(player.position || { x: 0, y: 0, z: 4, yaw: 0 }) },
+            playerVitals: {
+              playerId: player.playerId,
+              networkEntityId: player.networkEntityId,
+              health: player.health ?? 100,
+              maxHealth: player.maxHealth ?? 100,
+              isDead: Boolean(player.isDead),
+              reviveAtMs: player.reviveAtMs ?? null,
+            },
+          }
+        : {}),
     };
+  }
+
+  recordWorldStateGameEvent(eventName, data, playerId, now) {
+    if (!this.room || !data || typeof data !== 'object') return;
+    switch (eventName) {
+      case 'CHEST_OPENED': {
+        if (typeof data.chestId === 'string' && data.chestId) {
+          this.room.openedChests.add(data.chestId);
+        }
+        break;
+      }
+      case 'PLAYER_COLLECTED_RESOURCE': {
+        if (typeof data.nodeId === 'string' && data.nodeId) {
+          this.room.depletedResources.set(data.nodeId, {
+            id: data.nodeId,
+            usesRemaining: typeof data.usesRemaining === 'number' ? data.usesRemaining : 0,
+            regenAtMs: now + 90_000,
+          });
+        }
+        break;
+      }
+      case 'ITEM_DROPPED': {
+        if (typeof data.dropId === 'string' && typeof data.itemId === 'string') {
+          this.room.droppedItems.set(data.dropId, {
+            id: data.dropId,
+            itemId: data.itemId,
+            count: typeof data.count === 'number' ? Math.max(1, Math.round(data.count)) : 1,
+            label: typeof data.label === 'string' ? data.label : data.itemId,
+            x: Number(data.x) || 0,
+            y: Number(data.y) || 0,
+            z: Number(data.z) || 0,
+            droppedBy: playerId,
+          });
+        }
+        break;
+      }
+      case 'ITEM_PICKED_UP': {
+        const pickupId = typeof data.pickupId === 'string' ? data.pickupId : '';
+        if (pickupId) {
+          if (data.isPlayerDrop) {
+            this.room.droppedItems.delete(pickupId);
+          } else {
+            this.room.collectedPickups.add(pickupId);
+          }
+        }
+        break;
+      }
+      case 'DOOR_OPENED':
+      case 'DOOR_CLOSED': {
+        if (typeof data.doorId === 'string' && data.doorId) {
+          this.room.doors.set(data.doorId, eventName === 'DOOR_OPENED');
+        }
+        break;
+      }
+      case 'BED_PLACED': {
+        if (typeof data.bedId === 'string' && data.bedId) {
+          this.room.placedBeds.set(data.bedId, {
+            id: data.bedId,
+            x: Number(data.x) || 0,
+            y: Number(data.y) || 0,
+            z: Number(data.z) || 0,
+            yaw: Number(data.yaw) || 0,
+            ownerId: typeof data.ownerId === 'string' ? data.ownerId : playerId,
+          });
+        }
+        break;
+      }
+      case 'STATION_PLACED': {
+        if (typeof data.stationId === 'string' && data.stationId) {
+          this.room.placedStations.set(data.stationId, {
+            id: data.stationId,
+            stationType: data.stationType === 'furnace' ? 'furnace' : 'crafting_table',
+            x: Number(data.x) || 0,
+            y: Number(data.y) || 0,
+            z: Number(data.z) || 0,
+            yaw: Number(data.yaw) || 0,
+            ownerId: typeof data.ownerId === 'string' ? data.ownerId : playerId,
+          });
+        }
+        break;
+      }
+      case 'WORLD_EVENT': {
+        if (data.kind === 'landmark_discovered' && typeof data.landmarkId === 'string') {
+          this.room.discoveredLandmarks.add(data.landmarkId);
+        }
+        break;
+      }
+      case 'PLAYER_BUILD_PLACE': {
+        if (typeof data.structureId === 'string' && typeof data.blueprintId === 'string') {
+          this.room.playerBuildings.set(data.structureId, {
+            id: data.structureId,
+            blueprintId: data.blueprintId,
+            x: Number(data.x) || 0,
+            y: Number(data.y) || 0,
+            z: Number(data.z) || 0,
+            yaw: Number(data.yaw) || 0,
+            structureHp: typeof data.structureHp === 'number' ? data.structureHp : 100,
+            maxStructureHp: typeof data.maxStructureHp === 'number' ? data.maxStructureHp : 100,
+            ownerId: typeof data.ownerId === 'string' ? data.ownerId : playerId,
+            ownerName: typeof data.ownerName === 'string' ? data.ownerName : 'Explorer',
+            permissionScope: typeof data.permissionScope === 'string' ? data.permissionScope : 'owner',
+            createdAtMs: typeof data.createdAtMs === 'number' ? data.createdAtMs : now,
+          });
+        }
+        break;
+      }
+      case 'PLAYER_BUILD_REPAIR': {
+        const st = typeof data.structureId === 'string' ? this.room.playerBuildings.get(data.structureId) : null;
+        if (st && typeof data.structureHp === 'number') {
+          st.structureHp = data.structureHp;
+        }
+        break;
+      }
+      case 'PLAYER_BUILD_UPGRADE': {
+        const st = typeof data.structureId === 'string' ? this.room.playerBuildings.get(data.structureId) : null;
+        if (st && typeof data.blueprintId === 'string') {
+          st.blueprintId = data.blueprintId;
+        }
+        break;
+      }
+      case 'PLAYER_BUILD_PERMS': {
+        const st = typeof data.structureId === 'string' ? this.room.playerBuildings.get(data.structureId) : null;
+        if (st && typeof data.permissionScope === 'string') {
+          st.permissionScope = data.permissionScope;
+        }
+        break;
+      }
+      case 'PLAYER_BUILD_DEMOLISH': {
+        if (typeof data.structureId === 'string') {
+          this.room.playerBuildings.delete(data.structureId);
+        }
+        break;
+      }
+      case 'PLAYER_FARM_TILL': {
+        const st = typeof data.structureId === 'string' ? this.room.playerBuildings.get(data.structureId) : null;
+        if (st) {
+          st.farmSoilPrepared = true;
+          st.farmStage = 1;
+        }
+        break;
+      }
+      case 'PLAYER_FARM_PLANT': {
+        const st = typeof data.structureId === 'string' ? this.room.playerBuildings.get(data.structureId) : null;
+        if (st && typeof data.cropId === 'string') {
+          st.farmCropId = data.cropId;
+          st.farmStage = 2;
+        }
+        break;
+      }
+      case 'PLAYER_FARM_WATER': {
+        const st = typeof data.structureId === 'string' ? this.room.playerBuildings.get(data.structureId) : null;
+        if (st) {
+          st.farmWaterLevel = 1;
+        }
+        break;
+      }
+      case 'PLAYER_FARM_HARVEST': {
+        const st = typeof data.structureId === 'string' ? this.room.playerBuildings.get(data.structureId) : null;
+        if (st) {
+          st.farmStage = 1;
+          st.farmProgress = 0;
+          st.farmCropId = null;
+        }
+        break;
+      }
+      case 'VILLAGE_REPAIR':
+      case 'VILLAGE_PROJECT':
+      case 'VILLAGE_DEFENSE_WON':
+      case 'MERCHANT_BUY':
+      case 'MERCHANT_SELL': {
+        const villageId = typeof data.villageId === 'string' ? data.villageId : '';
+        if (!villageId) break;
+        let rec = this.room.villagesDev.get(villageId);
+        if (!rec) {
+          rec = {
+            villageId,
+            level: 1,
+            progressXp: 0,
+            reputationPoints: 0,
+            completedRepairIds: [],
+            completedProjectIds: [],
+            cropsHarvestedCount: 0,
+            tradesCompletedCount: 0,
+            defensesWonCount: 0,
+          };
+          this.room.villagesDev.set(villageId, rec);
+        }
+        if (typeof data.villageXp === 'number') rec.progressXp = Math.max(rec.progressXp, data.villageXp);
+        if (typeof data.villageRep === 'number') rec.reputationPoints = Math.max(rec.reputationPoints, data.villageRep);
+        if (eventName === 'VILLAGE_REPAIR' && typeof data.repairId === 'string' && !rec.completedRepairIds.includes(data.repairId)) {
+          rec.completedRepairIds.push(data.repairId);
+        }
+        if (eventName === 'VILLAGE_PROJECT' && typeof data.projectId === 'string' && !rec.completedProjectIds.includes(data.projectId)) {
+          rec.completedProjectIds.push(data.projectId);
+        }
+        if (eventName === 'VILLAGE_DEFENSE_WON' && typeof data.defensesWonCount === 'number') {
+          rec.defensesWonCount = Math.max(rec.defensesWonCount, data.defensesWonCount);
+        }
+        break;
+      }
+      default:
+        break;
+    }
   }
 
   getStatus() {
@@ -560,14 +973,17 @@ class OfflineLanServer {
     const hostName = sanitizeText(options.playerName, 24, 'Host');
     const roomName = sanitizeText(options.roomName, 36, 'World of Adventure LAN');
     const worldName = sanitizeText(options.worldName, 36, roomName);
-    const worldType = options.worldType === 'creative' ? 'creative' : 'normal';
+    const allowedWorldTypes = ['normal', 'survival', 'adventure', 'creative'];
+    const worldType = allowedWorldTypes.includes(options.worldType)
+      ? options.worldType
+      : 'normal';
     const difficulty =
       options.difficulty === 'easy' || options.difficulty === 'hard'
         ? options.difficulty
         : 'normal';
     const seed =
-      typeof options.seed === 'number' && Number.isFinite(options.seed)
-        ? Math.floor(options.seed)
+      typeof options.seed === 'number' && Number.isFinite(options.seed) && options.seed > 0
+        ? Math.floor(Math.abs(options.seed))
         : Math.floor(100000 + Math.random() * 899999);
 
     const roomId = randomId('lan', 9);
@@ -576,6 +992,37 @@ class OfflineLanServer {
     const hostToken = randomId('tok', 16);
     const now = Date.now();
 
+    const optTime = options.worldTime && typeof options.worldTime === 'object' ? options.worldTime : null;
+    let initHours = optTime && typeof optTime.worldHours === 'number' && Number.isFinite(optTime.worldHours)
+      ? optTime.worldHours
+      : 8.5;
+    initHours = ((initHours % 24) + 24) % 24;
+    const initDayCount =
+      optTime && typeof optTime.dayCount === 'number' && Number.isFinite(optTime.dayCount)
+        ? Math.max(1, Math.round(optTime.dayCount))
+        : 1;
+    const initFullDaySec =
+      optTime && typeof optTime.fullDayDurationSeconds === 'number' && Number.isFinite(optTime.fullDayDurationSeconds) && optTime.fullDayDurationSeconds > 0
+        ? optTime.fullDayDurationSeconds
+        : 360;
+    const initTimeScale =
+      optTime && typeof optTime.timeScale === 'number' && Number.isFinite(optTime.timeScale)
+        ? Math.max(0, Math.min(10, optTime.timeScale))
+        : 1;
+    const initPaused = Boolean(optTime && optTime.paused);
+
+    const optWeather = options.worldWeather && typeof options.worldWeather === 'object' ? options.worldWeather : null;
+    const validWeathers = ['clear', 'cloudy', 'overcast', 'rain', 'storm', 'fog'];
+    const initCurrentWeather =
+      optWeather && validWeathers.includes(optWeather.currentState)
+        ? optWeather.currentState
+        : 'clear';
+    const initTargetWeather =
+      optWeather && validWeathers.includes(optWeather.targetState)
+        ? optWeather.targetState
+        : initCurrentWeather;
+
+    const initialCoins = worldType === 'creative' ? 500 : 0;
     const hostPlayer = {
       playerId: hostId,
       networkEntityId: `net_${hostId}`,
@@ -586,12 +1033,24 @@ class OfflineLanServer {
       avatarColor: AVATAR_COLORS[0],
       pingMs: 1,
       level: 1,
+      xp: 0,
+      coins: initialCoins,
       partyId: null,
       partyReady: false,
       partyJoinedAt: now,
       health: 100,
       maxHealth: 100,
       isDead: false,
+      reviveAtMs: null,
+      lastDamageAtMs: 0,
+      lastAttackAtMs: 0,
+      lastSwingId: null,
+      lastSwingWeaponId: null,
+      lastSwingAtMs: 0,
+      lastSwingTargetIds: [],
+      lastEnemyAttackAtBySource: new Map(),
+      claimedRewardIds: [],
+      position: { x: 0, y: 0, z: 4, yaw: 0 },
       state: {
         x: 0,
         y: 0,
@@ -611,6 +1070,114 @@ class OfflineLanServer {
       },
     };
 
+    const openedChests = new Set();
+    const collectedPickups = new Set();
+    const depletedResources = new Map();
+    const doors = new Map();
+    const placedBeds = new Map();
+    const placedStations = new Map();
+    const playerBuildings = new Map();
+    const villagesDev = new Map();
+    const discoveredLandmarks = new Set(['spawn-glade']);
+    const droppedItems = new Map();
+    const entities = new Map();
+
+    const savedState =
+      options.savedWorldState && typeof options.savedWorldState === 'object'
+        ? options.savedWorldState
+        : null;
+    if (savedState) {
+      if (Array.isArray(savedState.openedChests)) {
+        for (const id of savedState.openedChests) {
+          if (typeof id === 'string' && id) openedChests.add(id);
+        }
+      }
+      if (Array.isArray(savedState.collectedPickups)) {
+        for (const id of savedState.collectedPickups) {
+          if (typeof id === 'string' && id) collectedPickups.add(id);
+        }
+      }
+      if (Array.isArray(savedState.depletedResources)) {
+        for (const r of savedState.depletedResources) {
+          if (r && typeof r.id === 'string' && r.id) {
+            depletedResources.set(r.id, { ...r });
+          }
+        }
+      }
+      if (Array.isArray(savedState.doors)) {
+        for (const d of savedState.doors) {
+          if (d && typeof d.id === 'string' && d.id) {
+            doors.set(d.id, Boolean(d.isOpen));
+          }
+        }
+      }
+      if (Array.isArray(savedState.placedBeds)) {
+        for (const b of savedState.placedBeds) {
+          if (b && typeof b.id === 'string' && b.id) {
+            placedBeds.set(b.id, { ...b });
+          }
+        }
+      }
+      if (Array.isArray(savedState.placedStations)) {
+        for (const s of savedState.placedStations) {
+          if (s && typeof s.id === 'string' && s.id) {
+            placedStations.set(s.id, { ...s });
+          }
+        }
+      }
+      if (Array.isArray(savedState.playerBuildings)) {
+        for (const pb of savedState.playerBuildings) {
+          if (pb && typeof pb.id === 'string' && pb.id) {
+            playerBuildings.set(pb.id, { ...pb });
+          }
+        }
+      }
+      if (Array.isArray(savedState.villagesDev)) {
+        for (const vd of savedState.villagesDev) {
+          if (vd && typeof vd.villageId === 'string' && vd.villageId) {
+            villagesDev.set(vd.villageId, {
+              ...vd,
+              completedRepairIds: Array.isArray(vd.completedRepairIds) ? [...vd.completedRepairIds] : [],
+              completedProjectIds: Array.isArray(vd.completedProjectIds) ? [...vd.completedProjectIds] : [],
+            });
+          }
+        }
+      }
+      if (Array.isArray(savedState.discoveredLandmarks)) {
+        for (const lm of savedState.discoveredLandmarks) {
+          if (typeof lm === 'string' && lm) discoveredLandmarks.add(lm);
+        }
+      }
+      if (Array.isArray(savedState.droppedItems)) {
+        for (const di of savedState.droppedItems) {
+          if (di && typeof di.id === 'string' && di.id) {
+            droppedItems.set(di.id, { ...di });
+          }
+        }
+      }
+      if (Array.isArray(savedState.deadEntities)) {
+        for (const de of savedState.deadEntities) {
+          if (de && typeof de.id === 'string' && de.id) {
+            entities.set(de.id, {
+              id: de.id,
+              kind: de.kind === 'animal' ? 'animal' : 'enemy',
+              archetype: 'default',
+              maxHp: 100,
+              hp: 0,
+              isDead: true,
+              diedAtMs: now,
+              x: 0,
+              y: 0,
+              z: 0,
+              yaw: 0,
+              state: 'dead',
+              lastUpdatedAtMs: now,
+            });
+          }
+        }
+      }
+    }
+
     this.room = {
       roomId,
       roomCode,
@@ -628,20 +1195,39 @@ class OfflineLanServer {
       players: new Map([[hostId, hostPlayer]]),
       parties: new Map(),
       partyInvites: new Map(),
+      entities,
+      activeArrows: new Map(),
+      bossEncounters: new Map(),
+      droppedItems,
+      openedChests,
+      collectedPickups,
+      depletedResources,
+      doors,
+      placedBeds,
+      placedStations,
+      playerBuildings,
+      villagesDev,
+      discoveredLandmarks,
       worldTime: {
-        worldHours: 8.5,
-        dayCount: 1,
-        fullDayDurationSeconds: 360,
-        timeScale: 1,
-        paused: false,
+        worldHours: initHours,
+        dayCount: initDayCount,
+        fullDayDurationSeconds: initFullDaySec,
+        timeScale: initTimeScale,
+        paused: initPaused,
         anchorServerMs: now,
       },
       worldWeather: {
-        currentState: 'clear',
-        targetState: 'clear',
-        intensity: 0,
-        dynamicEnabled: true,
-        transitionDurationSeconds: 14,
+        currentState: initCurrentWeather,
+        targetState: initTargetWeather,
+        intensity:
+          optWeather && typeof optWeather.intensity === 'number' && Number.isFinite(optWeather.intensity)
+            ? Math.max(0, Math.min(1, optWeather.intensity))
+            : 0,
+        dynamicEnabled: optWeather ? optWeather.dynamicEnabled !== false : true,
+        transitionDurationSeconds:
+          optWeather && typeof optWeather.transitionDurationSeconds === 'number' && Number.isFinite(optWeather.transitionDurationSeconds)
+            ? Math.max(2, Math.min(120, optWeather.transitionDurationSeconds))
+            : 14,
         startMs: now,
         durationMs: 240_000,
         endMs: now + 240_000,
@@ -691,6 +1277,7 @@ class OfflineLanServer {
     const colorIdx = this.room.players.size % AVATAR_COLORS.length;
     const spawnOffset = (this.room.players.size - 1) * 2.2;
 
+    const initialCoins = this.room.worldType === 'creative' ? 500 : 0;
     const player = {
       playerId,
       networkEntityId: `net_${playerId}`,
@@ -701,12 +1288,24 @@ class OfflineLanServer {
       avatarColor: AVATAR_COLORS[colorIdx],
       pingMs: 4,
       level: 1,
+      xp: 0,
+      coins: initialCoins,
       partyId: null,
       partyReady: false,
       partyJoinedAt: now,
       health: 100,
       maxHealth: 100,
       isDead: false,
+      reviveAtMs: null,
+      lastDamageAtMs: 0,
+      lastAttackAtMs: 0,
+      lastSwingId: null,
+      lastSwingWeaponId: null,
+      lastSwingAtMs: 0,
+      lastSwingTargetIds: [],
+      lastEnemyAttackAtBySource: new Map(),
+      claimedRewardIds: [],
+      position: { x: spawnOffset, y: 0, z: 4, yaw: 0 },
       state: {
         x: spawnOffset,
         y: 0,
@@ -781,6 +1380,477 @@ class OfflineLanServer {
     this.broadcastAllPartyStates();
   }
 
+  grantProgression(playerId, deltaXp, deltaCoins, reason) {
+    if (!this.room) return null;
+    const player = this.room.players.get(playerId);
+    if (!player) return null;
+    if (deltaCoins !== 0) {
+      player.coins = Math.max(0, Math.min(MAX_PLAYER_COINS, Math.round((player.coins || 0) + deltaCoins)));
+    }
+    if (deltaXp > 0 && (player.level || 1) < MAX_PLAYER_LEVEL) {
+      player.xp = (player.xp || 0) + Math.round(deltaXp);
+      while (player.level < MAX_PLAYER_LEVEL && player.xp >= player.level * 100) {
+        player.xp -= player.level * 100;
+        player.level += 1;
+      }
+      if (player.level >= MAX_PLAYER_LEVEL) {
+        player.level = MAX_PLAYER_LEVEL;
+        player.xp = 0;
+      }
+    }
+    const payload = {
+      playerId,
+      coins: player.coins,
+      xp: player.xp,
+      level: player.level,
+      xpToNextLevel: player.level * 100,
+      reason,
+    };
+    this.sendTo(playerId, 'PROGRESSION_UPDATED', payload);
+    return payload;
+  }
+
+  grantIdempotentReward(playerId, grantId, opts) {
+    if (!this.room) return false;
+    const player = this.room.players.get(playerId);
+    if (!player) return false;
+    if (!Array.isArray(player.claimedRewardIds)) {
+      player.claimedRewardIds = [];
+    }
+    if (player.claimedRewardIds.includes(grantId)) {
+      return false;
+    }
+    player.claimedRewardIds.push(grantId);
+    if (player.claimedRewardIds.length > 256) {
+      player.claimedRewardIds = player.claimedRewardIds.slice(-256);
+    }
+
+    const grantedItems = [];
+    for (const item of opts.items || []) {
+      if (!item || !item.itemId || !(item.count > 0)) continue;
+      grantedItems.push({ itemId: item.itemId, count: Math.round(item.count) });
+    }
+    const xpAmt = Math.max(0, Math.round(opts.xp || 0));
+    const coinsAmt = Math.max(0, Math.round(opts.coins || 0));
+    this.grantProgression(playerId, xpAmt, coinsAmt, opts.reason || 'reward');
+
+    this.sendTo(playerId, 'LOOT_GRANTED', {
+      grantId,
+      playerId,
+      mode: opts.mode || 'personal',
+      sourceKind: opts.sourceKind || 'enemy',
+      sourceId: opts.sourceId || '',
+      ...(opts.archetype ? { archetype: opts.archetype } : {}),
+      xp: xpAmt,
+      coins: coinsAmt,
+      items: grantedItems,
+      reason: opts.reason || 'reward',
+      timestamp: opts.now || Date.now(),
+    });
+    return true;
+  }
+
+  syncBossEncounterFromEntity(entity, fallbackTargetId, broadcastIfChanged, now) {
+    if (!this.room || !isBossArchetypeOrFlag(entity.kind, entity.archetype, entity.isBoss)) {
+      return null;
+    }
+    entity.isBoss = true;
+    const phase = entity.hp <= Math.floor(entity.maxHp * 0.5) ? 2 : 1;
+    entity.bossPhase = phase;
+    const prev = this.room.bossEncounters.get(entity.id) || null;
+    const nextAttackState = entity.attackState || (prev && prev.attackState) || 'idle';
+    const nextTargetId =
+      entity.targetPlayerId !== undefined
+        ? entity.targetPlayerId
+        : (prev && prev.targetPlayerId !== undefined ? prev.targetPlayerId : fallbackTargetId);
+
+    const next = {
+      bossId: entity.id,
+      archetype: entity.archetype,
+      hp: entity.hp,
+      maxHp: entity.maxHp,
+      isDead: entity.isDead,
+      state: entity.state,
+      attackState: nextAttackState,
+      phase,
+      targetPlayerId: entity.isDead ? null : nextTargetId,
+      damageByPlayer: { ...(entity.damageByPlayer || (prev && prev.damageByPlayer) || {}) },
+      x: entity.x,
+      y: entity.y,
+      z: entity.z,
+      yaw: entity.yaw,
+      killSeq: entity.killSeq || (prev && prev.killSeq) || 0,
+      updatedAtMs: now,
+    };
+
+    const significantChange =
+      !prev ||
+      prev.hp !== next.hp ||
+      prev.maxHp !== next.maxHp ||
+      prev.isDead !== next.isDead ||
+      prev.phase !== next.phase ||
+      prev.attackState !== next.attackState ||
+      prev.targetPlayerId !== next.targetPlayerId ||
+      prev.state !== next.state;
+
+    this.room.bossEncounters.set(entity.id, next);
+    if (broadcastIfChanged && significantChange) {
+      this.broadcast('BOSS_STATE_UPDATED', this.room.hostId || 'server', {
+        ...next,
+        damageByPlayer: { ...next.damageByPlayer },
+      });
+    }
+    return next;
+  }
+
+  resolveEnemyOrBossLoot(entity, killerId, now) {
+    if (!this.room) return;
+    entity.killSeq = (entity.killSeq || 0) + 1;
+    const killSeq = entity.killSeq;
+    const table = LAN_ENEMY_LOOT_TABLES[entity.archetype] || LAN_ENEMY_LOOT_TABLES.bandit_scout;
+    const isBoss = isBossArchetypeOrFlag(entity.kind, entity.archetype, entity.isBoss || table.isBoss);
+
+    const killerPersonalItems = [];
+    for (const drop of table.personal.items || []) {
+      const chance = drop.chance !== undefined ? drop.chance : 1;
+      const roll = deterministicLootRoll(`${entity.id}:k${killSeq}:${drop.itemId}:personal`);
+      if (roll <= chance) {
+        killerPersonalItems.push({ itemId: drop.itemId, count: drop.count });
+      }
+    }
+
+    this.grantIdempotentReward(killerId, `loot:${entity.id}:k${killSeq}:${killerId}:personal`, {
+      mode: 'personal',
+      sourceKind: isBoss ? 'boss' : 'enemy',
+      sourceId: entity.id,
+      archetype: entity.archetype,
+      xp: table.personal.xp,
+      coins: table.personal.coins,
+      items: killerPersonalItems,
+      reason: isBoss ? `boss_killed:${entity.archetype}` : 'enemy_killed',
+      now,
+    });
+
+    const dmgMap = entity.damageByPlayer || {};
+    const contributors = Object.keys(dmgMap).filter(
+      (pid) => dmgMap[pid] > 0 && this.room.players.has(pid),
+    );
+    if (!contributors.includes(killerId)) {
+      contributors.push(killerId);
+    }
+
+    if (isBoss) {
+      for (const pid of contributors) {
+        if (pid === killerId) continue;
+        this.grantIdempotentReward(pid, `loot:${entity.id}:k${killSeq}:${pid}:personal`, {
+          mode: 'personal',
+          sourceKind: 'boss',
+          sourceId: entity.id,
+          archetype: entity.archetype,
+          xp: Math.max(10, Math.round(table.personal.xp * 0.5)),
+          coins: Math.max(5, Math.round(table.personal.coins * 0.5)),
+          items: killerPersonalItems,
+          reason: `boss_assist:${entity.archetype}`,
+          now,
+        });
+      }
+    }
+
+    if (table.shared && contributors.length > 0) {
+      const killer = this.room.players.get(killerId);
+      const killerParty = killer && killer.partyId ? this.room.parties.get(killer.partyId) : null;
+      const partyRecipients = killerParty
+        ? killerParty.memberIds.filter((pid) => this.room.players.has(pid))
+        : [];
+      const sharedRecipients = Array.from(new Set([...contributors, ...partyRecipients]));
+      const divisor = Math.max(1, sharedRecipients.length);
+      const sharedXpEach = Math.max(5, Math.round(table.shared.xpPool / divisor));
+      const sharedCoinsEach = Math.max(3, Math.round(table.shared.coinsPool / divisor));
+      const sharedItems = (table.shared.items || []).map((it) => ({
+        itemId: it.itemId,
+        count: it.count,
+      }));
+
+      for (const pid of sharedRecipients) {
+        this.grantIdempotentReward(pid, `loot:${entity.id}:k${killSeq}:${pid}:shared`, {
+          mode: 'shared',
+          sourceKind: isBoss ? 'boss' : 'enemy',
+          sourceId: entity.id,
+          archetype: entity.archetype,
+          xp: sharedXpEach,
+          coins: sharedCoinsEach,
+          items: sharedItems,
+          reason: `shared_loot:${entity.archetype}`,
+          now,
+        });
+      }
+    }
+
+    if (table.worldDrops && table.worldDrops.length > 0) {
+      for (let i = 0; i < table.worldDrops.length; i++) {
+        const wd = table.worldDrops[i];
+        const chance = wd.chance !== undefined ? wd.chance : 1;
+        const roll = deterministicLootRoll(`${entity.id}:k${killSeq}:${wd.itemId}:world:${i}`);
+        if (roll > chance) continue;
+        const dropId = `drop_loot_${entity.id}_k${killSeq}_${i}`.slice(0, 64);
+        if (this.room.droppedItems.has(dropId)) continue;
+        const offsetX = (i - (table.worldDrops.length - 1) * 0.5) * 0.65;
+        const dropRecord = {
+          id: dropId,
+          itemId: wd.itemId,
+          count: wd.count,
+          label: wd.label || wd.itemId,
+          x: Math.round((entity.x + offsetX) * 100) / 100,
+          y: Math.round(entity.y * 100) / 100,
+          z: Math.round((entity.z + 0.35) * 100) / 100,
+          droppedBy: entity.id,
+        };
+        this.room.droppedItems.set(dropId, dropRecord);
+        if (this.room.droppedItems.size > 200) {
+          const oldestKey = this.room.droppedItems.keys().next().value;
+          if (oldestKey) this.room.droppedItems.delete(oldestKey);
+        }
+        this.broadcast('GAME_EVENT', killerId, {
+          event: 'ITEM_DROPPED',
+          data: {
+            dropId,
+            itemId: wd.itemId,
+            count: wd.count,
+            label: dropRecord.label,
+            x: dropRecord.x,
+            y: dropRecord.y,
+            z: dropRecord.z,
+            droppedBy: entity.id,
+            mode: 'world_drop',
+          },
+          actorId: killerId,
+          serverTimestamp: now,
+        });
+      }
+    }
+  }
+
+  applyAuthoritativeDamage(
+    attackerId,
+    targetKind,
+    targetId,
+    archetype,
+    damage,
+    isCritOrHeadshot,
+    hitX,
+    hitY,
+    hitZ,
+    now,
+  ) {
+    if (!this.room) return false;
+    const attacker = this.room.players.get(attackerId);
+    if (!attacker) return false;
+
+    if (targetKind === 'player') {
+      if (targetId === attackerId) return false;
+      const targetPlayer = this.room.players.get(targetId);
+      if (!targetPlayer || targetPlayer.isDead) return false;
+      const sameParty = Boolean(
+        attacker.partyId && targetPlayer.partyId && attacker.partyId === targetPlayer.partyId,
+      );
+      if (sameParty) {
+        if (!this.room.friendlyFire) {
+          this.sendTo(attackerId, 'ERROR', {
+            code: 'FRIENDLY_FIRE_DISABLED',
+            message: 'Friendly fire is disabled for party members.',
+          });
+          return false;
+        }
+      } else {
+        return false;
+      }
+      const targetPos = targetPlayer.position || { x: 0, y: 0, z: 4, yaw: 0 };
+      if (Math.hypot(hitX - targetPos.x, hitZ - targetPos.z) > 6.5 || Math.abs(hitY - targetPos.y) > 5.5) {
+        this.sendTo(attackerId, 'ERROR', {
+          code: 'TARGET_POSITION_MISMATCH',
+          message: 'Hit rejected: target player is not at that location.',
+        });
+        return false;
+      }
+      targetPlayer.health = Math.max(0, (targetPlayer.health ?? 100) - damage);
+      targetPlayer.lastDamageAtMs = now;
+      if (targetPlayer.health <= 0) {
+        targetPlayer.isDead = true;
+        targetPlayer.reviveAtMs = now + 2000;
+      }
+      if (targetPlayer.state) {
+        targetPlayer.state.health = targetPlayer.health;
+        targetPlayer.state.isDead = targetPlayer.isDead;
+      }
+      this.broadcast('PLAYER_VITALS', targetId, {
+        playerId: targetId,
+        networkEntityId: targetPlayer.networkEntityId,
+        health: targetPlayer.health,
+        maxHealth: targetPlayer.maxHealth ?? 100,
+        isDead: targetPlayer.isDead,
+        reviveAtMs: targetPlayer.reviveAtMs,
+      });
+      if (targetPlayer.isDead) {
+        this.broadcast('GAME_EVENT', attackerId, {
+          event: 'PLAYER_DIED',
+          data: {
+            playerId: targetId,
+            killerId: attackerId,
+            displayName: targetPlayer.displayName,
+            x: hitX,
+            y: hitY,
+            z: hitZ,
+          },
+          actorId: attackerId,
+          serverTimestamp: now,
+        });
+      }
+      return true;
+    }
+
+    if (targetKind !== 'npc' && targetKind !== 'animal' && targetKind !== 'enemy') {
+      return false;
+    }
+
+    let entity = this.room.entities.get(targetId);
+    if (!entity) {
+      // Auto-seed entity if host hasn't synced this chunk/entity yet (e.g. distant guest or early hit)
+      const resolvedArch = sanitizeText(archetype, 48, 'default');
+      const maxHp = resolveEntityMaxHp(targetKind, resolvedArch);
+      const isBoss = isBossArchetypeOrFlag(targetKind, resolvedArch, false);
+      entity = {
+        id: targetId,
+        kind: targetKind,
+        archetype: resolvedArch,
+        maxHp,
+        hp: maxHp,
+        isDead: false,
+        diedAtMs: 0,
+        x: hitX,
+        y: hitY,
+        z: hitZ,
+        yaw: 0,
+        state: 'idle',
+        lastUpdatedAtMs: now,
+        killSeq: 0,
+        damageByPlayer: {},
+        targetPlayerId: attackerId,
+        isBoss,
+        bossPhase: 1,
+        attackState: 'idle',
+      };
+      this.room.entities.set(targetId, entity);
+    }
+
+    if (entity.kind !== targetKind) {
+      return false;
+    }
+
+    const syncStale = now - (entity.lastUpdatedAtMs || 0) > 1500;
+    const horizDelta = Math.hypot(hitX - entity.x, hitZ - entity.z);
+    const vertDelta = Math.abs(hitY - entity.y);
+    if (syncStale && horizDelta <= 24.0 && vertDelta <= 10.0) {
+      entity.x = hitX;
+      entity.y = hitY;
+      entity.z = hitZ;
+      entity.lastUpdatedAtMs = now;
+    } else if (horizDelta > 6.5 || vertDelta > 5.5) {
+      return false;
+    }
+
+    if (entity.isDead) {
+      return false;
+    }
+
+    const actualDamage = Math.min(entity.hp, Math.max(1, damage));
+    entity.hp = Math.max(0, entity.hp - damage);
+    if (!entity.damageByPlayer) {
+      entity.damageByPlayer = {};
+    }
+    entity.damageByPlayer[attackerId] = (entity.damageByPlayer[attackerId] || 0) + actualDamage;
+    entity.targetPlayerId = attackerId;
+
+    const killed = entity.hp <= 0;
+    if (killed) {
+      entity.isDead = true;
+      entity.diedAtMs = now;
+    }
+
+    const bossEncounter = this.syncBossEncounterFromEntity(entity, attackerId, true, now);
+
+    const damagedEvent =
+      targetKind === 'npc'
+        ? 'NPC_DAMAGED'
+        : targetKind === 'animal'
+          ? 'ANIMAL_DAMAGED'
+          : 'ENEMY_DAMAGED';
+    const diedEvent =
+      targetKind === 'npc'
+        ? 'NPC_DIED'
+        : targetKind === 'animal'
+          ? 'ANIMAL_DIED'
+          : 'ENEMY_DIED';
+
+    this.broadcast('GAME_EVENT', attackerId, {
+      event: damagedEvent,
+      data: {
+        targetId,
+        archetype: entity.archetype,
+        attackerId,
+        damage,
+        hp: entity.hp,
+        maxHp: entity.maxHp,
+        isCrit: isCritOrHeadshot,
+        isBoss: Boolean(bossEncounter),
+        ...(bossEncounter ? { bossPhase: bossEncounter.phase } : {}),
+        x: hitX,
+        y: hitY,
+        z: hitZ,
+      },
+      actorId: attackerId,
+      serverTimestamp: now,
+    });
+
+    if (killed) {
+      if (targetKind === 'enemy') {
+        this.resolveEnemyOrBossLoot(entity, attackerId, now);
+        this.broadcast('GAME_EVENT', attackerId, {
+          event: diedEvent,
+          data: {
+            targetId,
+            archetype: entity.archetype,
+            killerId: attackerId,
+            isBoss: Boolean(bossEncounter),
+            x: entity.x,
+            y: entity.y,
+            z: entity.z,
+          },
+          actorId: attackerId,
+          serverTimestamp: now,
+        });
+      } else {
+        if (targetKind === 'animal') {
+          this.grantProgression(attackerId, 12, 0, 'animal_hunted');
+        }
+        this.broadcast('GAME_EVENT', attackerId, {
+          event: diedEvent,
+          data: {
+            targetId,
+            archetype: entity.archetype,
+            killerId: attackerId,
+            x: entity.x,
+            y: entity.y,
+            z: entity.z,
+          },
+          actorId: attackerId,
+          serverTimestamp: now,
+        });
+      }
+    }
+
+    return true;
+  }
+
   handleWsMessage(playerId, rawText) {
     if (!this.room || !this.room.players.has(playerId)) return;
     let msg;
@@ -805,6 +1875,22 @@ class OfflineLanServer {
           room: snap,
         });
         this.broadcast('ROOM_STATE', 'server', snap);
+        this.sendTo(playerId, 'PLAYER_VITALS', {
+          playerId,
+          networkEntityId: player.networkEntityId,
+          health: player.health ?? 100,
+          maxHealth: player.maxHealth ?? 100,
+          isDead: Boolean(player.isDead),
+          reviveAtMs: player.reviveAtMs ?? null,
+        });
+        this.sendTo(playerId, 'PROGRESSION_UPDATED', {
+          playerId,
+          coins: player.coins ?? 0,
+          xp: player.xp ?? 0,
+          level: player.level ?? 1,
+          xpToNextLevel: (player.level ?? 1) * 100,
+          reason: 'reconnect',
+        });
         const worldSnap = this.buildWorldSnapshotForPlayer(playerId, now);
         if (worldSnap) {
           this.sendTo(playerId, 'WORLD_SNAPSHOT', worldSnap);
@@ -856,7 +1942,23 @@ class OfflineLanServer {
         this.materializeWorldTime(now);
         const snap = this.buildRoomSnapshot();
         this.broadcast('ROOM_STATE', 'server', snap);
-        for (const pid of this.room.players.keys()) {
+        for (const [pid, pl] of this.room.players.entries()) {
+          this.sendTo(pid, 'PLAYER_VITALS', {
+            playerId: pid,
+            networkEntityId: pl.networkEntityId,
+            health: pl.health ?? 100,
+            maxHealth: pl.maxHealth ?? 100,
+            isDead: Boolean(pl.isDead),
+            reviveAtMs: pl.reviveAtMs ?? null,
+          });
+          this.sendTo(pid, 'PROGRESSION_UPDATED', {
+            playerId: pid,
+            coins: pl.coins ?? 0,
+            xp: pl.xp ?? 0,
+            level: pl.level ?? 1,
+            xpToNextLevel: (pl.level ?? 1) * 100,
+            reason: 'start_game',
+          });
           const wsSnap = this.buildWorldSnapshotForPlayer(pid, now);
           if (wsSnap) this.sendTo(pid, 'WORLD_SNAPSHOT', wsSnap);
         }
@@ -885,11 +1987,16 @@ class OfflineLanServer {
         const z = Number(payload.z);
         if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
         const now = Date.now();
+        const roundedX = Math.round(x * 1000) / 1000;
+        const roundedY = Math.round(y * 1000) / 1000;
+        const roundedZ = Math.round(z * 1000) / 1000;
+        const roundedYaw = Number.isFinite(Number(payload.yaw)) ? Math.round(Number(payload.yaw) * 1000) / 1000 : 0;
+        player.position = { x: roundedX, y: roundedY, z: roundedZ, yaw: roundedYaw };
         const flatState = {
-          x: Math.round(x * 1000) / 1000,
-          y: Math.round(y * 1000) / 1000,
-          z: Math.round(z * 1000) / 1000,
-          yaw: Number.isFinite(Number(payload.yaw)) ? Math.round(Number(payload.yaw) * 1000) / 1000 : 0,
+          x: roundedX,
+          y: roundedY,
+          z: roundedZ,
+          yaw: roundedYaw,
           vx: Number.isFinite(Number(payload.vx)) ? Math.round(Number(payload.vx) * 100) / 100 : 0,
           vy: Number.isFinite(Number(payload.vy)) ? Math.round(Number(payload.vy) * 100) / 100 : 0,
           vz: Number.isFinite(Number(payload.vz)) ? Math.round(Number(payload.vz) * 100) / 100 : 0,
@@ -942,7 +2049,147 @@ class OfflineLanServer {
       case 'ENTITY_SYNC': {
         // Only authoritative LAN host broadcasts shared NPC/enemy/animal states
         if (playerId !== this.room.hostId) return;
-        this.broadcast('ENTITY_SYNC', playerId, payload, playerId);
+        if (this.room.status !== 'in-game') return;
+        if (!Array.isArray(payload.entities)) return;
+        const now = Date.now();
+        const relayedEntities = [];
+
+        for (const delta of payload.entities) {
+          if (!delta || typeof delta.id !== 'string' || !delta.id) continue;
+          const kind = delta.kind;
+          if (kind !== 'enemy' && kind !== 'animal' && kind !== 'npc') continue;
+          const archetype = sanitizeText(delta.archetype, 48, 'default');
+          const capMaxHp = resolveEntityMaxHp(kind, archetype);
+          const isBoss = isBossArchetypeOrFlag(kind, archetype, delta.isBoss);
+          const dx = Number.isFinite(Number(delta.x)) ? Number(delta.x) : 0;
+          const dy = Number.isFinite(Number(delta.y)) ? Number(delta.y) : 0;
+          const dz = Number.isFinite(Number(delta.z)) ? Number(delta.z) : 0;
+          const dyaw = Number.isFinite(Number(delta.yaw)) ? Number(delta.yaw) : 0;
+          const dstate = typeof delta.state === 'string' && delta.state ? delta.state.slice(0, 32) : 'idle';
+
+          let tracked = this.room.entities.get(delta.id);
+          if (!tracked) {
+            const initMaxHp =
+              typeof delta.maxHp === 'number' && Number.isFinite(delta.maxHp)
+                ? Math.max(1, Math.min(capMaxHp, delta.maxHp))
+                : capMaxHp;
+            const initHp =
+              typeof delta.hp === 'number' && Number.isFinite(delta.hp)
+                ? Math.max(0, Math.min(initMaxHp, delta.hp))
+                : initMaxHp;
+            const deadInit = Boolean(delta.isDead || initHp <= 0);
+            tracked = {
+              id: delta.id,
+              kind,
+              archetype,
+              maxHp: initMaxHp,
+              hp: deadInit ? 0 : initHp,
+              isDead: deadInit,
+              diedAtMs: deadInit ? now : 0,
+              x: dx,
+              y: dy,
+              z: dz,
+              yaw: dyaw,
+              state: dstate,
+              lastUpdatedAtMs: now,
+              killSeq: 0,
+              damageByPlayer: {},
+              ...(delta.targetPlayerId !== undefined ? { targetPlayerId: delta.targetPlayerId } : {}),
+              ...(isBoss ? { isBoss: true, bossPhase: delta.bossPhase ?? 1 } : {}),
+              ...(delta.attackState !== undefined ? { attackState: delta.attackState } : {}),
+              ...(delta.dialogueState !== undefined ? { dialogueState: delta.dialogueState } : {}),
+              ...(delta.dialoguePlayerId !== undefined ? { dialoguePlayerId: delta.dialoguePlayerId } : {}),
+              ...(delta.questState !== undefined ? { questState: delta.questState } : {}),
+              ...(delta.schedulePeriod !== undefined ? { schedulePeriod: delta.schedulePeriod } : {}),
+              ...(delta.worldId !== undefined ? { worldId: delta.worldId } : {}),
+              ...(delta.chunkId !== undefined ? { chunkId: delta.chunkId } : {}),
+              alive: !deadInit,
+              ...(delta.loaded !== undefined ? { loaded: delta.loaded } : {}),
+              ...(delta.questTarget !== undefined ? { questTarget: delta.questTarget } : {}),
+            };
+            this.room.entities.set(delta.id, tracked);
+          } else {
+            tracked.x = dx;
+            tracked.y = dy;
+            tracked.z = dz;
+            tracked.yaw = dyaw;
+            tracked.state = dstate;
+            tracked.lastUpdatedAtMs = now;
+            if (delta.worldId !== undefined) tracked.worldId = delta.worldId;
+            if (delta.chunkId !== undefined) tracked.chunkId = delta.chunkId;
+            if (delta.loaded !== undefined) tracked.loaded = delta.loaded;
+            if (delta.questTarget !== undefined) {
+              tracked.questTarget = tracked.isDead
+                ? { ...delta.questTarget, lifecycle: 'DEFEATED' }
+                : delta.questTarget;
+            }
+            if (delta.targetPlayerId !== undefined) {
+              tracked.targetPlayerId = delta.targetPlayerId;
+            } else if (kind === 'enemy' && dstate === 'patrol') {
+              tracked.targetPlayerId = null;
+            }
+            if (isBoss) {
+              tracked.isBoss = true;
+              if (delta.attackState !== undefined) tracked.attackState = delta.attackState;
+            }
+            if (kind === 'npc') {
+              if (delta.dialogueState !== undefined) tracked.dialogueState = delta.dialogueState;
+              if (delta.dialoguePlayerId !== undefined) tracked.dialoguePlayerId = delta.dialoguePlayerId;
+              if (delta.questState !== undefined) tracked.questState = delta.questState;
+              if (delta.schedulePeriod !== undefined) tracked.schedulePeriod = delta.schedulePeriod;
+            }
+            if (
+              tracked.isDead &&
+              delta.isDead === false &&
+              (typeof delta.hp !== 'number' || delta.hp > 0) &&
+              now - (tracked.diedAtMs || 0) >= 15_000
+            ) {
+              tracked.isDead = false;
+              tracked.hp = tracked.maxHp;
+              tracked.diedAtMs = 0;
+              tracked.damageByPlayer = {};
+            }
+          }
+
+          tracked.alive = !tracked.isDead;
+          if (tracked.isDead && tracked.questTarget) {
+            tracked.questTarget = { ...tracked.questTarget, lifecycle: 'DEFEATED' };
+          }
+          if (isBoss) {
+            this.syncBossEncounterFromEntity(tracked, tracked.targetPlayerId ?? null, true, now);
+          }
+
+          relayedEntities.push({
+            ...delta,
+            hp: tracked.hp,
+            maxHp: tracked.maxHp,
+            isDead: tracked.isDead,
+            alive: !tracked.isDead,
+            loaded: tracked.loaded ?? true,
+            ...(tracked.worldId ? { worldId: tracked.worldId } : {}),
+            ...(tracked.chunkId ? { chunkId: tracked.chunkId } : {}),
+            ...(tracked.questTarget ? { questTarget: tracked.questTarget } : {}),
+            ...(tracked.isBoss ? { isBoss: true, bossPhase: tracked.bossPhase ?? 1 } : {}),
+            ...(tracked.targetPlayerId ? { targetPlayerId: tracked.targetPlayerId } : {}),
+            ...(tracked.attackState ? { attackState: tracked.attackState } : {}),
+            ...(tracked.dialogueState ? { dialogueState: tracked.dialogueState } : {}),
+            ...(tracked.dialoguePlayerId ? { dialoguePlayerId: tracked.dialoguePlayerId } : {}),
+            ...(tracked.questState ? { questState: tracked.questState } : {}),
+            ...(tracked.schedulePeriod ? { schedulePeriod: tracked.schedulePeriod } : {}),
+          });
+        }
+
+        const worldTime = this.materializeWorldTime(now);
+        this.broadcast(
+          'ENTITY_SYNC',
+          playerId,
+          {
+            entities: relayedEntities,
+            worldHours: worldTime.worldHours,
+            weather: this.room.worldWeather.currentState,
+          },
+          playerId,
+        );
         break;
       }
 
@@ -1059,14 +2306,540 @@ class OfflineLanServer {
         break;
       }
 
+      case 'ENEMY_ATTACK_PLAYER': {
+        if (this.room.status !== 'in-game') return;
+        if (playerId !== this.room.hostId) {
+          this.sendTo(playerId, 'ERROR', {
+            code: 'FORBIDDEN_HOST_ONLY',
+            message: 'Only the room host can submit NPC/enemy attacks.',
+          });
+          return;
+        }
+        if (this.room.worldType === 'creative') return;
+        const targetPlayerId = typeof payload.targetPlayerId === 'string' ? payload.targetPlayerId : '';
+        const sourceId = typeof payload.sourceId === 'string' ? payload.sourceId : '';
+        const rawDamage = Number(payload.damage);
+        if (!targetPlayerId || !sourceId || !Number.isFinite(rawDamage)) return;
+        const targetPlayer = this.room.players.get(targetPlayerId);
+        if (!targetPlayer || targetPlayer.isDead) return;
+
+        const now = Date.now();
+        const lastSrcHit = targetPlayer.lastEnemyAttackAtBySource.get(sourceId) || 0;
+        if (now - lastSrcHit < 650) return;
+
+        const sourceEntity = this.room.entities.get(sourceId);
+        if (sourceEntity && sourceEntity.isDead) return;
+
+        const resolvedArchetype =
+          (sourceEntity && sourceEntity.archetype) ||
+          (typeof payload.archetype === 'string' ? payload.archetype : 'default');
+        const maxArchetypeDamage =
+          LAN_ENEMY_ATTACK_MAX_DAMAGE[resolvedArchetype] || LAN_ENEMY_ATTACK_MAX_DAMAGE.default;
+        const damage = Math.max(1, Math.min(maxArchetypeDamage, Math.round(rawDamage)));
+
+        const ax = Number(payload.x);
+        const az = Number(payload.z);
+        if (Number.isFinite(ax) && Number.isFinite(az)) {
+          const isBossSource = Boolean(
+            (sourceEntity && sourceEntity.isBoss) || resolvedArchetype === 'ancient_guardian',
+          );
+          const maxReach = isBossSource ? 13.5 : 9.5;
+          const tPos = targetPlayer.position || { x: 0, y: 0, z: 4, yaw: 0 };
+          if (Math.hypot(ax - tPos.x, az - tPos.z) > maxReach) return;
+          if (sourceEntity) {
+            sourceEntity.targetPlayerId = targetPlayerId;
+            if (isBossSource) {
+              this.syncBossEncounterFromEntity(sourceEntity, targetPlayerId, true, now);
+            }
+          }
+        }
+
+        targetPlayer.lastEnemyAttackAtBySource.set(sourceId, now);
+        targetPlayer.health = Math.max(0, (targetPlayer.health ?? 100) - damage);
+        targetPlayer.lastDamageAtMs = now;
+        if (targetPlayer.health <= 0) {
+          targetPlayer.isDead = true;
+          targetPlayer.reviveAtMs = now + 2000;
+        }
+        if (targetPlayer.state) {
+          targetPlayer.state.health = targetPlayer.health;
+          targetPlayer.state.isDead = targetPlayer.isDead;
+        }
+        this.broadcast('PLAYER_VITALS', targetPlayerId, {
+          playerId: targetPlayerId,
+          networkEntityId: targetPlayer.networkEntityId,
+          health: targetPlayer.health,
+          maxHealth: targetPlayer.maxHealth ?? 100,
+          isDead: targetPlayer.isDead,
+          reviveAtMs: targetPlayer.reviveAtMs,
+        });
+        if (targetPlayer.isDead) {
+          const tPos = targetPlayer.position || { x: 0, y: 0, z: 4, yaw: 0 };
+          this.broadcast('GAME_EVENT', playerId, {
+            event: 'PLAYER_DIED',
+            data: {
+              playerId: targetPlayerId,
+              killerId: sourceId,
+              displayName: targetPlayer.displayName,
+              x: tPos.x,
+              y: tPos.y,
+              z: tPos.z,
+            },
+            actorId: playerId,
+            serverTimestamp: now,
+          });
+        }
+        break;
+      }
+
+      case 'REPAIR_WEAPONS': {
+        if (this.room.status !== 'in-game') return;
+        const rawCost = Number(payload.costCoins);
+        if (!Number.isFinite(rawCost) || rawCost <= 0) return;
+        const cost = this.room.worldType === 'creative' ? 0 : Math.max(1, Math.min(500, Math.round(rawCost)));
+        if ((player.coins || 0) < cost) {
+          this.sendTo(playerId, 'ERROR', {
+            code: 'INSUFFICIENT_COINS',
+            message: 'Not enough coins to repair weapons.',
+          });
+          return;
+        }
+        this.grantProgression(playerId, 0, -cost, 'weapons_repaired');
+        break;
+      }
+
       case 'GAME_EVENT': {
         if (typeof payload.event !== 'string') return;
-        // Relay validated gameplay events (combat, projectiles, doors, chests, beds, drops, gathering)
+        if (this.room.status !== 'in-game') return;
+        const now = Date.now();
+        const eventName = payload.event.slice(0, 64);
+        const eventData = payload.data && typeof payload.data === 'object' ? payload.data : {};
+
+        if (eventName === 'player:damage-taken') {
+          if (this.room.worldType === 'creative' || player.isDead) return;
+          if (now - (player.lastDamageAtMs || 0) < 240) return;
+          const rawAmount =
+            typeof eventData.amount === 'number' && Number.isFinite(eventData.amount)
+              ? eventData.amount
+              : 0;
+          const clampedDamage = Math.max(1, Math.min(55, Math.round(rawAmount)));
+          player.health = Math.max(0, (player.health ?? 100) - clampedDamage);
+          player.lastDamageAtMs = now;
+          if (player.health <= 0) {
+            player.isDead = true;
+            player.reviveAtMs = now + 2000;
+          }
+          if (player.state) {
+            player.state.health = player.health;
+            player.state.isDead = player.isDead;
+          }
+          this.broadcast('PLAYER_VITALS', playerId, {
+            playerId,
+            networkEntityId: player.networkEntityId,
+            health: player.health,
+            maxHealth: player.maxHealth ?? 100,
+            isDead: player.isDead,
+            reviveAtMs: player.reviveAtMs,
+          });
+          if (player.isDead) {
+            const pPos = player.position || { x: 0, y: 0, z: 4 };
+            this.broadcast('GAME_EVENT', playerId, {
+              event: 'PLAYER_DIED',
+              data: {
+                playerId,
+                displayName: player.displayName,
+                x: pPos.x,
+                y: pPos.y,
+                z: pPos.z,
+              },
+              actorId: playerId,
+              serverTimestamp: now,
+            });
+          }
+          break;
+        }
+
+        if (eventName === 'player:respawn') {
+          const spawnX = 0;
+          const spawnY = 0;
+          const spawnZ = 4;
+          player.health = player.maxHealth ?? 100;
+          player.isDead = false;
+          player.reviveAtMs = null;
+          player.position = { x: spawnX, y: spawnY, z: spawnZ, yaw: (player.position && player.position.yaw) || 0 };
+          if (player.state) {
+            player.state.x = spawnX;
+            player.state.y = spawnY;
+            player.state.z = spawnZ;
+            player.state.health = player.health;
+            player.state.isDead = false;
+          }
+          this.broadcast('PLAYER_VITALS', playerId, {
+            playerId,
+            networkEntityId: player.networkEntityId,
+            health: player.health,
+            maxHealth: player.maxHealth ?? 100,
+            isDead: false,
+            reviveAtMs: null,
+          });
+          this.sendTo(playerId, 'POSITION_CORRECTION', {
+            x: spawnX,
+            y: spawnY,
+            z: spawnZ,
+            yaw: player.position.yaw || 0,
+            reason: 'RESPAWN',
+          });
+          break;
+        }
+
+        if (eventName === 'ARROW_FIRED') {
+          if (player.isDead) return;
+          const weaponId =
+            typeof eventData.weaponId === 'string' && eventData.weaponId.length > 0
+              ? eventData.weaponId
+              : 'hunter-bow';
+          const spec = LAN_WEAPON_SPECS[weaponId];
+          if (!spec || !spec.isRanged) {
+            this.sendTo(playerId, 'ERROR', {
+              code: 'INVALID_WEAPON',
+              message: 'Weapon is not a ranged projectile weapon.',
+            });
+            return;
+          }
+          if (now - (player.lastAttackAtMs || 0) < spec.cooldownMs * 0.65) {
+            this.sendTo(playerId, 'ERROR', {
+              code: 'WEAPON_COOLDOWN',
+              message: 'Bow fire rate exceeds weapon cooldown.',
+            });
+            return;
+          }
+          const pPos = player.position || { x: 0, y: 0, z: 4 };
+          const originX =
+            typeof eventData.originX === 'number' && Number.isFinite(eventData.originX)
+              ? eventData.originX
+              : pPos.x;
+          const originY =
+            typeof eventData.originY === 'number' && Number.isFinite(eventData.originY)
+              ? eventData.originY
+              : pPos.y + 1.45;
+          const originZ =
+            typeof eventData.originZ === 'number' && Number.isFinite(eventData.originZ)
+              ? eventData.originZ
+              : pPos.z;
+          if (
+            Math.hypot(originX - pPos.x, originZ - pPos.z) > 4.2 ||
+            Math.abs(originY - (pPos.y + 1.45)) > 3.5
+          ) {
+            this.sendTo(playerId, 'ERROR', {
+              code: 'INVALID_ORIGIN',
+              message: 'Arrow launch origin too far from player position.',
+            });
+            return;
+          }
+          const rawDirX = typeof eventData.dirX === 'number' ? eventData.dirX : 0;
+          const rawDirY = typeof eventData.dirY === 'number' ? eventData.dirY : 0;
+          const rawDirZ = typeof eventData.dirZ === 'number' ? eventData.dirZ : 1;
+          const dirLen = Math.hypot(rawDirX, rawDirY, rawDirZ);
+          if (
+            !Number.isFinite(rawDirX) ||
+            !Number.isFinite(rawDirY) ||
+            !Number.isFinite(rawDirZ) ||
+            dirLen < 0.5 ||
+            dirLen > 1.5
+          ) {
+            this.sendTo(playerId, 'ERROR', {
+              code: 'INVALID_DIRECTION',
+              message: 'Projectile launch direction vector is invalid.',
+            });
+            return;
+          }
+          const dirX = Math.round((rawDirX / dirLen) * 1000) / 1000;
+          const dirY = Math.round((rawDirY / dirLen) * 1000) / 1000;
+          const dirZ = Math.round((rawDirZ / dirLen) * 1000) / 1000;
+          const arrowId =
+            typeof eventData.arrowId === 'string' && eventData.arrowId.length > 0
+              ? eventData.arrowId.slice(0, 48)
+              : `arr_${playerId}_${now}`;
+          if (this.room.activeArrows.has(arrowId)) {
+            this.sendTo(playerId, 'ERROR', {
+              code: 'DUPLICATE_ARROW_ID',
+              message: 'Arrow network ID already exists.',
+            });
+            return;
+          }
+          const charge =
+            typeof eventData.bowCharge === 'number' && Number.isFinite(eventData.bowCharge)
+              ? Math.max(0, Math.min(1, eventData.bowCharge))
+              : 1;
+          const speed = (spec.minSpeed || 15) + charge * ((spec.maxSpeed || 45) - (spec.minSpeed || 15));
+          const gravity = spec.gravity || 9.8;
+          player.lastAttackAtMs = now;
+
+          if (this.room.activeArrows.size > 160) {
+            for (const [k, v] of this.room.activeArrows.entries()) {
+              if (now - v.createdAtMs > 6000 || v.consumed) {
+                this.room.activeArrows.delete(k);
+              }
+            }
+          }
+
+          this.room.activeArrows.set(arrowId, {
+            arrowId,
+            shooterId: playerId,
+            weaponId,
+            charge,
+            originX,
+            originY,
+            originZ,
+            dirX,
+            dirY,
+            dirZ,
+            speed,
+            gravity,
+            createdAtMs: now,
+            consumed: false,
+          });
+
+          this.broadcast('GAME_EVENT', playerId, {
+            event: 'ARROW_FIRED',
+            data: {
+              arrowId,
+              shooterId: playerId,
+              weaponId,
+              originX,
+              originY,
+              originZ,
+              dirX,
+              dirY,
+              dirZ,
+              speed,
+              gravity,
+              bowCharge: charge,
+            },
+            actorId: playerId,
+            serverTimestamp: now,
+          });
+          break;
+        }
+
+        if (eventName === 'PROJECTILE_HIT') {
+          if (player.isDead) return;
+          const arrowId = typeof eventData.arrowId === 'string' ? eventData.arrowId : '';
+          const arrow = this.room.activeArrows.get(arrowId);
+          if (!arrow || arrow.consumed || arrow.shooterId !== playerId) {
+            this.sendTo(playerId, 'ERROR', {
+              code: 'INVALID_PROJECTILE',
+              message: 'Arrow does not exist or already resolved.',
+            });
+            return;
+          }
+          if (now - arrow.createdAtMs > 6500) {
+            this.room.activeArrows.delete(arrowId);
+            return;
+          }
+          const spec = LAN_WEAPON_SPECS[arrow.weaponId];
+          if (!spec) {
+            this.room.activeArrows.delete(arrowId);
+            return;
+          }
+          const hitX = typeof eventData.x === 'number' && Number.isFinite(eventData.x) ? eventData.x : arrow.originX;
+          const hitY = typeof eventData.y === 'number' && Number.isFinite(eventData.y) ? eventData.y : arrow.originY;
+          const hitZ = typeof eventData.z === 'number' && Number.isFinite(eventData.z) ? eventData.z : arrow.originZ;
+          const flightDist = Math.hypot(hitX - arrow.originX, hitY - arrow.originY, hitZ - arrow.originZ);
+          if (flightDist > spec.range + 10) {
+            this.sendTo(playerId, 'ERROR', {
+              code: 'OUT_OF_RANGE',
+              message: 'Projectile hit exceeds maximum weapon range.',
+            });
+            return;
+          }
+          if (flightDist > 2.0) {
+            const tEst = flightDist / Math.max(8, arrow.speed);
+            const dx = hitX - arrow.originX;
+            const dy = hitY - arrow.originY + 0.5 * arrow.gravity * tEst * tEst;
+            const dz = hitZ - arrow.originZ;
+            const compLen = Math.hypot(dx, dy, dz) || 1;
+            const dot = (dx / compLen) * arrow.dirX + (dy / compLen) * arrow.dirY + (dz / compLen) * arrow.dirZ;
+            if (dot < 0.15) {
+              arrow.consumed = true;
+              this.room.activeArrows.delete(arrowId);
+              this.sendTo(playerId, 'ERROR', {
+                code: 'INVALID_PROJECTILE_TRAJECTORY',
+                message: 'Projectile impact point contradicts launch direction.',
+              });
+              return;
+            }
+          }
+
+          arrow.consumed = true;
+          this.room.activeArrows.delete(arrowId);
+
+          const targetKind = typeof eventData.targetKind === 'string' ? eventData.targetKind : 'world';
+          const targetId = typeof eventData.targetId === 'string' ? eventData.targetId : '';
+          if (targetKind === 'world' || !targetId) {
+            this.broadcast('GAME_EVENT', playerId, {
+              event: 'PROJECTILE_HIT',
+              data: {
+                arrowId,
+                shooterId: playerId,
+                targetKind: 'world',
+                targetId: '',
+                x: hitX,
+                y: hitY,
+                z: hitZ,
+                isHeadshot: false,
+              },
+              actorId: playerId,
+              serverTimestamp: now,
+            });
+            break;
+          }
+
+          let isHeadshot = false;
+          if (eventData.isHeadshot) {
+            let targetBaseY = 0;
+            if (targetKind === 'player') {
+              const tp = this.room.players.get(targetId);
+              targetBaseY = (tp && tp.position && tp.position.y) || 0;
+            } else {
+              const tracked = this.room.entities.get(targetId);
+              targetBaseY = (tracked && tracked.y) || 0;
+            }
+            isHeadshot = hitY >= targetBaseY + 0.9;
+          }
+
+          const minD = spec.minDamage ?? spec.baseDamage;
+          const maxD = spec.maxDamage ?? spec.baseDamage;
+          const baseDmg = minD + arrow.charge * (maxD - minD);
+          const damage = Math.max(1, Math.round(baseDmg * (isHeadshot ? (spec.headshotMult || 2.0) : 1)));
+
+          const applied = this.applyAuthoritativeDamage(
+            playerId,
+            targetKind,
+            targetId,
+            typeof eventData.archetype === 'string' ? eventData.archetype : 'default',
+            damage,
+            isHeadshot,
+            hitX,
+            hitY,
+            hitZ,
+            now,
+          );
+          if (applied) {
+            this.broadcast('GAME_EVENT', playerId, {
+              event: 'PROJECTILE_HIT',
+              data: {
+                arrowId,
+                shooterId: playerId,
+                targetKind,
+                targetId,
+                x: hitX,
+                y: hitY,
+                z: hitZ,
+                isHeadshot,
+              },
+              actorId: playerId,
+              serverTimestamp: now,
+            });
+          }
+          break;
+        }
+
+        if (eventName === 'COMBAT_HIT') {
+          if (player.isDead) {
+            this.sendTo(playerId, 'ERROR', {
+              code: 'PLAYER_DEAD',
+              message: 'Downed players cannot attack.',
+            });
+            return;
+          }
+          const weaponId =
+            typeof eventData.weaponId === 'string' && eventData.weaponId.length > 0
+              ? eventData.weaponId
+              : 'unarmed';
+          const spec = LAN_WEAPON_SPECS[weaponId];
+          if (!spec || spec.isRanged) {
+            this.sendTo(playerId, 'ERROR', {
+              code: 'INVALID_WEAPON',
+              message: 'Invalid melee weapon for COMBAT_HIT.',
+            });
+            return;
+          }
+          const targetKind = typeof eventData.targetKind === 'string' ? eventData.targetKind : '';
+          const targetId = typeof eventData.targetId === 'string' ? eventData.targetId : '';
+          if (
+            (targetKind !== 'enemy' && targetKind !== 'animal' && targetKind !== 'npc' && targetKind !== 'player') ||
+            !targetId
+          ) {
+            return;
+          }
+          const attackId =
+            typeof eventData.attackId === 'string' && eventData.attackId.length > 0
+              ? eventData.attackId.slice(0, 64)
+              : null;
+          const isSameSwingCleave = Boolean(
+            attackId &&
+              player.lastSwingId === attackId &&
+              player.lastSwingWeaponId === weaponId &&
+              now - (player.lastSwingAtMs || 0) <= 320 &&
+              Array.isArray(player.lastSwingTargetIds) &&
+              !player.lastSwingTargetIds.includes(targetId) &&
+              player.lastSwingTargetIds.length < 4,
+          );
+          if (!isSameSwingCleave && now - (player.lastAttackAtMs || 0) < spec.cooldownMs * 0.65) {
+            this.sendTo(playerId, 'ERROR', {
+              code: 'WEAPON_COOLDOWN',
+              message: 'Attack speed exceeds weapon cooldown.',
+            });
+            return;
+          }
+          const pPos = player.position || { x: 0, y: 0, z: 4 };
+          const hitX = typeof eventData.x === 'number' && Number.isFinite(eventData.x) ? eventData.x : pPos.x;
+          const hitY = typeof eventData.y === 'number' && Number.isFinite(eventData.y) ? eventData.y : pPos.y;
+          const hitZ = typeof eventData.z === 'number' && Number.isFinite(eventData.z) ? eventData.z : pPos.z;
+          const distToTarget = Math.hypot(hitX - pPos.x, hitZ - pPos.z);
+          if (distToTarget > spec.range + 3.4) {
+            this.sendTo(playerId, 'ERROR', {
+              code: 'OUT_OF_RANGE',
+              message: 'Target is out of melee reach.',
+            });
+            return;
+          }
+
+          if (isSameSwingCleave) {
+            player.lastSwingTargetIds.push(targetId);
+          } else {
+            player.lastAttackAtMs = now;
+            player.lastSwingId = attackId;
+            player.lastSwingWeaponId = weaponId;
+            player.lastSwingAtMs = now;
+            player.lastSwingTargetIds = [targetId];
+          }
+
+          const isCrit = Math.random() < (spec.critChance ?? 0.1);
+          const damage = Math.max(1, Math.round(spec.baseDamage * (isCrit ? spec.critMult : 1)));
+
+          this.applyAuthoritativeDamage(
+            playerId,
+            targetKind,
+            targetId,
+            typeof eventData.archetype === 'string' ? eventData.archetype : 'default',
+            damage,
+            isCrit,
+            hitX,
+            hitY,
+            hitZ,
+            now,
+          );
+          break;
+        }
+
+        // Relay non-combat gameplay events (doors, chests, beds, drops, gathering, buildings, farming, etc.)
         this.broadcast('GAME_EVENT', playerId, {
-          event: payload.event.slice(0, 64),
-          data: payload.data && typeof payload.data === 'object' ? payload.data : {},
+          event: eventName,
+          data: eventData,
           actorId: playerId,
-          serverTimestamp: Date.now(),
+          serverTimestamp: now,
         }, playerId);
         break;
       }

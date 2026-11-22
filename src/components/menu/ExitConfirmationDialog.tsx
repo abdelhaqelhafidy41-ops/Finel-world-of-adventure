@@ -6,11 +6,13 @@ import { performPlatformExit } from '../../utils/platformExit';
 interface ExitConfirmationDialogProps {
   lang: Language;
   onClose: () => void;
+  onBeforeExit?: () => void | Promise<void>;
 }
 
 export const ExitConfirmationDialog: React.FC<ExitConfirmationDialogProps> = ({
   lang,
   onClose,
+  onBeforeExit,
 }) => {
   const t = UI_TEXT[lang];
   const isRtl = lang === 'ar';
@@ -29,6 +31,11 @@ export const ExitConfirmationDialog: React.FC<ExitConfirmationDialogProps> = ({
   }, [onClose]);
 
   const handleConfirmExit = async () => {
+    try {
+      await onBeforeExit?.();
+    } catch {
+      // Never block exiting even if pre-exit flush throws
+    }
     const res = await performPlatformExit();
     if (!res.exited) {
       setStep('webNotice');

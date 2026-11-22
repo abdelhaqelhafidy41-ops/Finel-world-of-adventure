@@ -19,6 +19,11 @@ import type { SavedStoryState } from '../story/storyTypes';
 import type { SavedSideQuestState } from '../sidequest/sideQuestTypes';
 import type { SavedVillageDevelopmentState } from '../village/villageDevTypes';
 import { getBiomeAt } from '../math/noise';
+import {
+  deletePersistentWorldBundle,
+  persistWorldBundle,
+} from './LocalWorldStorage';
+import { migrateSaveData } from './saveMigrations';
 
 const STORAGE_PREFIX = 'woa_save_v1_';
 const WORLD_INDEX_KEY = 'woa_world_ids_v1';
@@ -69,7 +74,8 @@ export interface SaveResult {
 
 /**
  * Unified SaveManager handling serialization, multi-world indexing,
- * metadata stamping, localStorage persistence, and world deletion.
+ * metadata stamping, localStorage mirror + isolated per-world disk persistence,
+ * and world deletion.
  */
 export class SaveManager {
   private static cloudHooks: {
@@ -180,28 +186,40 @@ export class SaveManager {
 
   public saveToSlot(slotId: SaveSlotId, source: SaveSourceState): SaveResult {
     try {
-      const data = this.buildSaveData(slotId, source);
-      localStorage.setItem(getSaveStorageKey(slotId), JSON.stringify(data));
+      const built = this.buildSaveData(slotId, source);
+      const validated = migrateSaveData(built);
+      if (!validated) {
+        return { ok: false, error: 'Save data failed schema validation.' };
+      }
+      const data = validated.data;
+      data.meta.slotId = slotId;
+      data.meta.worldId = data.meta.worldId || slotId;
+
+      try {
+        localStorage.setItem(getSaveStorageKey(slotId), JSON.stringify(data));
+      } catch {
+        // Retry localStorage without thumbnail; disk bundle keeps full payload
+        try {
+          const leanData: SaveGameData = {
+            ...data,
+            meta: { ...data.meta, thumbnailDataUrl: undefined },
+          };
+          localStorage.setItem(getSaveStorageKey(slotId), JSON.stringify(leanData));
+        } catch {
+          // Proceed with isolated persistent disk / IndexedDB save
+        }
+      }
+
+      void persistWorldBundle(slotId, data);
       this.registerWorldId(slotId);
       this.setLastActiveSlot(slotId);
       SaveManager.cloudHooks.onSave?.(slotId);
       return { ok: true, meta: data.meta };
     } catch (err) {
-      // If storage quota exceeded due to thumbnail, retry without thumbnail
-      try {
-        const strippedSource = { ...source, thumbnailDataUrl: undefined };
-        const data = this.buildSaveData(slotId, strippedSource);
-        localStorage.setItem(getSaveStorageKey(slotId), JSON.stringify(data));
-        this.registerWorldId(slotId);
-        this.setLastActiveSlot(slotId);
-        SaveManager.cloudHooks.onSave?.(slotId);
-        return { ok: true, meta: data.meta };
-      } catch {
-        return {
-          ok: false,
-          error: err instanceof Error ? err.message : 'Storage write failed',
-        };
-      }
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Storage write failed',
+      };
     }
   }
 
@@ -213,6 +231,7 @@ export class SaveManager {
       if (this.getLastActiveSlot() === slotId) {
         localStorage.removeItem(LAST_SLOT_KEY);
       }
+      void deletePersistentWorldBundle(slotId);
       SaveManager.cloudHooks.onDelete?.(slotId);
       return true;
     } catch {

@@ -8,6 +8,7 @@ import {
   Crown,
   DoorOpen,
   Flame,
+  FolderOpen,
   Hammer,
   Info,
   Play,
@@ -49,7 +50,16 @@ import {
   type MultiplayerRoomState,
 } from '../../game/multiplayer/multiplayerTypes';
 import { ProfileManager } from '../../game/profile/ProfileManager';
-import type { DifficultyLevel, WorldType } from '../../game/save/saveTypes';
+import { LoadManager } from '../../game/save/LoadManager';
+import { buildLanRoomSeedFromSaveData } from '../../game/save/LocalWorldStorage';
+import { generateWorldId } from '../../game/save/SaveManager';
+import type {
+  DifficultyLevel,
+  SaveGameData,
+  SaveGameMeta,
+  SaveSlotId,
+  WorldType,
+} from '../../game/save/saveTypes';
 import { RoomChatPanel } from '../multiplayer/RoomChatPanel';
 import { MainMenuButton } from './MainMenuButton';
 
@@ -58,6 +68,13 @@ type LanSubView = 'lanHub' | 'lanCreate' | 'lanJoin' | 'lanLobby';
 interface LanMultiplayerScreenProps {
   lang: Language;
   service: IMultiplayerService;
+  savedWorlds?: SaveGameMeta[];
+  initialHostWorldSlotId?: SaveSlotId | null;
+  onConsumeInitialHostWorld?: () => void;
+  onPrepareHostWorld?: (info: {
+    hostWorldSlotId: SaveSlotId | null;
+    savedWorldData: SaveGameData | null;
+  }) => void;
   onStartMultiplayerWorld?: (info: MultiplayerGameStartInfo) => void;
   onBack: () => void;
 }
@@ -65,6 +82,10 @@ interface LanMultiplayerScreenProps {
 export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
   lang,
   service,
+  savedWorlds = [],
+  initialHostWorldSlotId = null,
+  onConsumeInitialHostWorld,
+  onPrepareHostWorld,
   onStartMultiplayerWorld,
   onBack,
 }) => {
@@ -78,7 +99,11 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
     transport?.getActiveMode() === 'lan' ? service.getRoomState() : null;
 
   const [subView, setSubView] = useState<LanSubView>(() =>
-    initialLanRoom ? 'lanLobby' : 'lanHub',
+    initialLanRoom
+      ? 'lanLobby'
+      : initialHostWorldSlotId && caps.canHost
+        ? 'lanCreate'
+        : 'lanHub',
   );
   const [playerName, setPlayerName] = useState<string>(() => {
     const p = ProfileManager.getProfile();
@@ -89,12 +114,59 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
   });
 
   // Create LAN state
-  const [worldName, setWorldName] = useState<string>(() =>
-    isAr ? 'عالم الشبكة المحلية' : 'LAN Adventure World',
+  const [worldSource, setWorldSource] = useState<'new' | 'saved'>(() =>
+    initialHostWorldSlotId && savedWorlds.some((w) => w.slotId === initialHostWorldSlotId)
+      ? 'saved'
+      : 'new',
   );
-  const [worldType, setWorldType] = useState<WorldType>('normal');
-  const [difficulty, setDifficulty] = useState<DifficultyLevel>('normal');
+  const [selectedSavedWorldId, setSelectedSavedWorldId] = useState<SaveSlotId>(
+    () =>
+      (initialHostWorldSlotId &&
+      savedWorlds.some((w) => w.slotId === initialHostWorldSlotId)
+        ? initialHostWorldSlotId
+        : savedWorlds[0]?.slotId) ?? '',
+  );
+  const [worldName, setWorldName] = useState<string>(() => {
+    const matched = initialHostWorldSlotId
+      ? savedWorlds.find((w) => w.slotId === initialHostWorldSlotId)
+      : null;
+    return matched?.worldName || (isAr ? 'عالم الشبكة المحلية' : 'LAN Adventure World');
+  });
+  const [worldType, setWorldType] = useState<WorldType>(() => {
+    const matched = initialHostWorldSlotId
+      ? savedWorlds.find((w) => w.slotId === initialHostWorldSlotId)
+      : null;
+    return matched?.worldType ?? 'normal';
+  });
+  const [difficulty, setDifficulty] = useState<DifficultyLevel>(() => {
+    const matched = initialHostWorldSlotId
+      ? savedWorlds.find((w) => w.slotId === initialHostWorldSlotId)
+      : null;
+    return matched?.difficulty ?? 'normal';
+  });
   const [creatingHost, setCreatingHost] = useState(false);
+
+  useEffect(() => {
+    if (!initialHostWorldSlotId) return;
+    const matched = savedWorlds.find((w) => w.slotId === initialHostWorldSlotId);
+    if (matched) {
+      setWorldSource('saved');
+      setSelectedSavedWorldId(matched.slotId);
+      setWorldName(matched.worldName);
+      setWorldType(matched.worldType);
+      setDifficulty(matched.difficulty);
+    }
+    if (caps.canHost && !initialLanRoom) {
+      setSubView('lanCreate');
+    }
+    onConsumeInitialHostWorld?.();
+  }, [
+    caps.canHost,
+    initialHostWorldSlotId,
+    initialLanRoom,
+    onConsumeInitialHostWorld,
+    savedWorlds,
+  ]);
 
   // Join LAN state
   const [discoveredHosts, setDiscoveredHosts] = useState<DiscoveredLanHost[]>([]);
@@ -233,13 +305,52 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
 
     setCreatingHost(true);
     try {
+      let hostWorldSlotId: SaveSlotId | null = null;
+      let savedWorldData: SaveGameData | null = null;
+      let seedPayload: ReturnType<typeof buildLanRoomSeedFromSaveData> | null = null;
+
+      if (worldSource === 'saved') {
+        const targetSavedId = selectedSavedWorldId || savedWorlds[0]?.slotId;
+        if (!targetSavedId) {
+          setErrorNotice(t.lanNoSavedWorldsHint);
+          return;
+        }
+        const loader = new LoadManager();
+        const loaded = await loader.loadSlotAsync(targetSavedId);
+        if (!loaded.ok) {
+          setErrorNotice(t.loadFailedNotice);
+          return;
+        }
+        savedWorldData = loaded.data;
+        hostWorldSlotId = loaded.data.meta.slotId;
+        seedPayload = buildLanRoomSeedFromSaveData(loaded.data);
+      } else {
+        hostWorldSlotId = generateWorldId();
+      }
+
+      const resolvedWorldName = (
+        seedPayload?.worldName || cleanedWorld
+      ).slice(0, 36);
+      const resolvedWorldType = seedPayload?.worldType ?? worldType;
+      const resolvedDifficulty = seedPayload?.difficulty ?? difficulty;
+      const resolvedSeed =
+        seedPayload?.seed ?? Math.floor(100000 + Math.random() * 899999);
+
       const hostRes = await startLanHost(
         {
-          roomName: cleanedWorld.slice(0, 36),
+          roomName: resolvedWorldName,
           hostName: cleanedPlayer.slice(0, 24),
-          worldName: cleanedWorld.slice(0, 36),
-          worldType,
-          difficulty,
+          worldName: resolvedWorldName,
+          worldType: resolvedWorldType,
+          difficulty: resolvedDifficulty,
+          seed: resolvedSeed,
+          ...(seedPayload
+            ? {
+                worldTime: seedPayload.worldTime,
+                worldWeather: seedPayload.worldWeather,
+                savedWorldState: seedPayload.savedWorldState,
+              }
+            : {}),
         },
         DEFAULT_LAN_PORT,
       );
@@ -263,17 +374,30 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
       }
 
       const createdRoom = await service.createRoom({
-        roomName: cleanedWorld.slice(0, 36),
+        roomName: resolvedWorldName,
         playerName: cleanedPlayer.slice(0, 24),
-        worldName: cleanedWorld.slice(0, 36),
-        worldType,
-        difficulty,
+        worldName: resolvedWorldName,
+        worldType: resolvedWorldType,
+        difficulty: resolvedDifficulty,
+        seed: resolvedSeed,
+        ...(seedPayload
+          ? {
+              worldTime: seedPayload.worldTime,
+              worldWeather: seedPayload.worldWeather,
+              savedWorldState: seedPayload.savedWorldState,
+            }
+          : {}),
         maxPlayers: MAX_LAN_PLAYERS,
         privacy: 'public',
         isPrivate: false,
         allowFriends: true,
         requireAllReady: false,
         friendlyFire: false,
+      });
+
+      onPrepareHostWorld?.({
+        hostWorldSlotId,
+        savedWorldData,
       });
 
       const displayAddr = hostRes.ip
@@ -290,6 +414,7 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
       setSubView('lanLobby');
     } catch (err) {
       await stopLanHost();
+      onPrepareHostWorld?.({ hostWorldSlotId: null, savedWorldData: null });
       setErrorNotice(
         err instanceof Error
           ? err.message
@@ -306,6 +431,7 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
     async (baseUrl: string, rawCode?: string) => {
       if (joiningLan) return;
       clearNotices();
+      onPrepareHostWorld?.({ hostWorldSlotId: null, savedWorldData: null });
 
       const cleanedPlayer = playerName.trim() || (isAr ? 'مغامر' : 'Adventurer');
       saveMultiplayerName(cleanedPlayer);
@@ -417,6 +543,7 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
 
   const handleLeaveLanRoom = async () => {
     clearNotices();
+    onPrepareHostWorld?.({ hostWorldSlotId: null, savedWorldData: null });
     try {
       await service.leaveRoom();
     } catch {
@@ -644,89 +771,195 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
           className="space-y-4"
           data-testid="lan-create-view"
         >
-          <div>
-            <label
-              htmlFor="lan-world-name"
-              className="block text-xs sm:text-sm font-semibold text-[#e6eee4] mb-1.5"
+          {/* New World vs Saved World Selector */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              data-testid="lan-source-new"
+              onClick={() => {
+                setWorldSource('new');
+                clearNotices();
+              }}
+              className={`min-h-[42px] px-3 py-2 rounded-xl border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 cursor-pointer transition ${
+                worldSource === 'new'
+                  ? 'bg-[#1a3c2a] border-[#7fe094] text-[#e9f7ed]'
+                  : 'bg-[#0c1712] border-[#263e31] text-[#a7bca9] hover:border-[#3c624d]'
+              }`}
             >
-              {isAr ? 'اسم العالم' : 'World Name'}
-            </label>
-            <input
-              id="lan-world-name"
-              type="text"
-              maxLength={36}
-              value={worldName}
-              onChange={(e) => setWorldName(e.target.value)}
-              className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0a140f] border border-[#2f493b] focus:border-[#7fe094] focus:outline-none text-sm text-[#f7faf5]"
-            />
+              <PlusCircle className="w-4 h-4" />
+              <span>{t.lanWorldSourceNew}</span>
+            </button>
+            <button
+              type="button"
+              data-testid="lan-source-saved"
+              onClick={() => {
+                setWorldSource('saved');
+                clearNotices();
+                if (!selectedSavedWorldId && savedWorlds[0]) {
+                  setSelectedSavedWorldId(savedWorlds[0].slotId);
+                  setWorldName(savedWorlds[0].worldName);
+                  setWorldType(savedWorlds[0].worldType);
+                  setDifficulty(savedWorlds[0].difficulty);
+                }
+              }}
+              className={`min-h-[42px] px-3 py-2 rounded-xl border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 cursor-pointer transition ${
+                worldSource === 'saved'
+                  ? 'bg-[#1a3c2a] border-[#7fe094] text-[#e9f7ed]'
+                  : 'bg-[#0c1712] border-[#263e31] text-[#a7bca9] hover:border-[#3c624d]'
+              }`}
+            >
+              <FolderOpen className="w-4 h-4" />
+              <span>
+                {t.lanWorldSourceSaved}
+                {savedWorlds.length > 0 ? ` (${savedWorlds.length})` : ''}
+              </span>
+            </button>
           </div>
 
-          <div>
-            <span className="block text-xs sm:text-sm font-semibold text-[#e6eee4] mb-1.5">
-              {isAr ? 'نمط العالم' : 'World Mode'}
-            </span>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {worldTypes.map((wt) => (
-                <button
-                  key={wt.id}
-                  type="button"
-                  onClick={() => setWorldType(wt.id)}
-                  className={`min-h-[44px] px-3 py-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition ${
-                    worldType === wt.id
-                      ? 'bg-[#1a3c2a] border-[#7fe094] text-[#e9f7ed]'
-                      : 'bg-[#0c1712] border-[#263e31] text-[#a7bca9] hover:border-[#3c624d]'
-                  }`}
+          {worldSource === 'saved' ? (
+            <div className="space-y-2.5">
+              <span className="block text-xs sm:text-sm font-semibold text-[#e6eee4]">
+                {t.lanSelectSavedWorld}
+              </span>
+              {savedWorlds.length === 0 ? (
+                <div className="p-3.5 rounded-xl bg-[#0c1611] border border-dashed border-[#2b4436] text-xs text-[#9db1a1]">
+                  {t.lanNoSavedWorldsHint}
+                </div>
+              ) : (
+                <div className="max-h-52 overflow-y-auto space-y-2 pr-1">
+                  {savedWorlds.map((w) => {
+                    const active = (selectedSavedWorldId || savedWorlds[0]?.slotId) === w.slotId;
+                    return (
+                      <button
+                        key={w.slotId}
+                        type="button"
+                        data-testid={`lan-saved-world-item-${w.slotId}`}
+                        onClick={() => {
+                          setSelectedSavedWorldId(w.slotId);
+                          setWorldName(w.worldName);
+                          setWorldType(w.worldType);
+                          setDifficulty(w.difficulty);
+                        }}
+                        className={`w-full p-3 rounded-xl border text-start transition cursor-pointer flex items-center justify-between gap-3 ${
+                          active
+                            ? 'bg-[#173524] border-[#7fe094] text-[#eef7f0]'
+                            : 'bg-[#0c1611] border-[#274033] text-[#c7d6c6] hover:border-[#3c624d]'
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="font-display font-bold text-sm truncate">
+                            {w.worldName}
+                          </div>
+                          <div className="text-[11px] text-[#9db1a1] mt-0.5 flex items-center gap-2 flex-wrap">
+                            <span className="uppercase">{w.worldType}</span>
+                            <span>·</span>
+                            <span>
+                              {t.levelShort}
+                              {w.level}
+                            </span>
+                            <span>·</span>
+                            <span dir="ltr" className="font-mono-num">
+                              #{w.worldSeed}
+                            </span>
+                          </div>
+                        </div>
+                        {active && (
+                          <CheckCircle2 className="w-4 h-4 text-[#7fe094] shrink-0" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-[11px] text-[#9dc4a8]">{t.lanSavedWorldHostNote}</p>
+            </div>
+          ) : (
+            <>
+              <div>
+                <label
+                  htmlFor="lan-world-name"
+                  className="block text-xs sm:text-sm font-semibold text-[#e6eee4] mb-1.5"
                 >
-                  {wt.icon}
-                  <span>{wt.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <span className="block text-xs sm:text-sm font-semibold text-[#e6eee4] mb-1.5">
-                {isAr ? 'الصعوبة' : 'Difficulty'}
-              </span>
-              <div className="grid grid-cols-3 gap-1.5">
-                {difficulties.map((d) => (
-                  <button
-                    key={d.id}
-                    type="button"
-                    onClick={() => setDifficulty(d.id)}
-                    className={`min-h-[40px] px-2 rounded-xl border text-xs font-semibold cursor-pointer ${
-                      difficulty === d.id
-                        ? 'bg-[#2a2313] border-[#e5a93c] text-[#f7d488]'
-                        : 'bg-[#0c1712] border-[#263e31] text-[#a7bca9]'
-                    }`}
-                  >
-                    {d.label}
-                  </button>
-                ))}
+                  {isAr ? 'اسم العالم' : 'World Name'}
+                </label>
+                <input
+                  id="lan-world-name"
+                  type="text"
+                  maxLength={36}
+                  value={worldName}
+                  onChange={(e) => setWorldName(e.target.value)}
+                  className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0a140f] border border-[#2f493b] focus:border-[#7fe094] focus:outline-none text-sm text-[#f7faf5]"
+                />
               </div>
-            </div>
 
-            <div>
-              <span className="block text-xs sm:text-sm font-semibold text-[#e6eee4] mb-1.5">
-                {isAr ? 'الحد الأقصى للاعبين' : 'Max Players'}
-              </span>
-              <div className="min-h-[40px] px-3 rounded-xl bg-[#0c1712] border border-[#2f493b] flex items-center justify-between text-xs text-[#dce5d8]">
-                <span className="inline-flex items-center gap-1.5">
-                  <Users className="w-4 h-4 text-[#7fe094]" />
-                  {isAr ? '4 لاعبين (المضيف + 3)' : '4 Players (Host + 3)'}
+              <div>
+                <span className="block text-xs sm:text-sm font-semibold text-[#e6eee4] mb-1.5">
+                  {isAr ? 'نمط العالم' : 'World Mode'}
                 </span>
-                <span className="font-mono-num font-bold text-[#7fe094]">
-                  MAX {MAX_LAN_PLAYERS}
-                </span>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {worldTypes.map((wt) => (
+                    <button
+                      key={wt.id}
+                      type="button"
+                      onClick={() => setWorldType(wt.id)}
+                      className={`min-h-[44px] px-3 py-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition ${
+                        worldType === wt.id
+                          ? 'bg-[#1a3c2a] border-[#7fe094] text-[#e9f7ed]'
+                          : 'bg-[#0c1712] border-[#263e31] text-[#a7bca9] hover:border-[#3c624d]'
+                      }`}
+                    >
+                      {wt.icon}
+                      <span>{wt.label}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <span className="block text-xs sm:text-sm font-semibold text-[#e6eee4] mb-1.5">
+                    {isAr ? 'الصعوبة' : 'Difficulty'}
+                  </span>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {difficulties.map((d) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() => setDifficulty(d.id)}
+                        className={`min-h-[40px] px-2 rounded-xl border text-xs font-semibold cursor-pointer ${
+                          difficulty === d.id
+                            ? 'bg-[#2a2313] border-[#e5a93c] text-[#f7d488]'
+                            : 'bg-[#0c1712] border-[#263e31] text-[#a7bca9]'
+                        }`}
+                      >
+                        {d.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <span className="block text-xs sm:text-sm font-semibold text-[#e6eee4] mb-1.5">
+                    {isAr ? 'الحد الأقصى للاعبين' : 'Max Players'}
+                  </span>
+                  <div className="min-h-[40px] px-3 rounded-xl bg-[#0c1712] border border-[#2f493b] flex items-center justify-between text-xs text-[#dce5d8]">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Users className="w-4 h-4 text-[#7fe094]" />
+                      {isAr ? '4 لاعبين (المضيف + 3)' : '4 Players (Host + 3)'}
+                    </span>
+                    <span className="font-mono-num font-bold text-[#7fe094]">
+                      MAX {MAX_LAN_PLAYERS}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
 
           <div className="flex items-center gap-2.5 pt-2">
             <button
               type="submit"
-              disabled={creatingHost}
+              disabled={creatingHost || (worldSource === 'saved' && savedWorlds.length === 0)}
               data-testid="lan-submit-create"
               className="flex-1 min-h-[46px] px-4 rounded-xl bg-[#276d46] hover:bg-[#318656] disabled:opacity-60 border border-[#7fe094]/60 text-white font-display font-bold text-sm flex items-center justify-center gap-2 cursor-pointer"
             >

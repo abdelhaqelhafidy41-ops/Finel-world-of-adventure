@@ -1,4 +1,5 @@
 import { SaveManager, getSaveStorageKey } from './SaveManager';
+import { readPersistentWorldBundle } from './LocalWorldStorage';
 import { migrateSaveData } from './saveMigrations';
 import {
   ALL_SAVE_SLOTS,
@@ -14,7 +15,8 @@ export type LoadResult =
 
 /**
  * Modular LoadManager handling multi-world & slot discovery, Continue lookup,
- * schema migration via saveMigrations, and safe loading from localStorage.
+ * schema migration via saveMigrations, and safe loading from localStorage
+ * with persistent per-world bundle recovery.
  */
 export class LoadManager {
   private readonly saveIndexReader = new SaveManager();
@@ -42,6 +44,31 @@ export class LoadManager {
     }
   }
 
+  public async loadSlotAsync(slotId: SaveSlotId): Promise<LoadResult> {
+    const syncRes = this.loadSlot(slotId);
+    if (syncRes.ok) {
+      return syncRes;
+    }
+    try {
+      const recovered = await readPersistentWorldBundle(slotId);
+      if (!recovered) {
+        return syncRes;
+      }
+      try {
+        localStorage.setItem(getSaveStorageKey(slotId), JSON.stringify(recovered));
+      } catch {
+        // Ignore mirror quota failure
+      }
+      return {
+        ok: true,
+        data: recovered,
+        migratedFromVersion: recovered.version,
+      };
+    } catch {
+      return syncRes;
+    }
+  }
+
   public listSaveSlots(): SaveSlotSummary[] {
     return ALL_SAVE_SLOTS.map((slotId) => {
       const res = this.loadSlot(slotId);
@@ -63,9 +90,13 @@ export class LoadManager {
     const worlds: SaveGameMeta[] = [];
 
     for (const id of ids) {
-      const res = this.loadSlot(id);
-      if (res.ok) {
-        worlds.push(res.data.meta);
+      try {
+        const res = this.loadSlot(id);
+        if (res.ok) {
+          worlds.push(res.data.meta);
+        }
+      } catch {
+        // One corrupted world never blocks other worlds from loading
       }
     }
 
