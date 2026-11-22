@@ -346,7 +346,7 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
           seed: resolvedSeed,
           ...(seedPayload
             ? {
-                worldTime: seedPayload.worldTime as any,
+                worldTime: seedPayload.worldTime as any as any,
                 worldWeather: seedPayload.worldWeather,
                 savedWorldState: seedPayload.savedWorldState,
               }
@@ -382,7 +382,7 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
         seed: resolvedSeed,
         ...(seedPayload
           ? {
-              worldTime: seedPayload.worldTime,
+              worldTime: seedPayload.worldTime as any,
               worldWeather: seedPayload.worldWeather,
               savedWorldState: seedPayload.savedWorldState,
             }
