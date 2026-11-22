@@ -163,6 +163,7 @@ export interface MultiplayerRoomState extends MultiplayerRoomSummary {
 }
 
 export interface MultiplayerGameStartInfo {
+  hostId?: string;
   roomId: string;
   roomCode: string;
   roomName: string;
