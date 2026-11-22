@@ -43,6 +43,8 @@ import org.json.JSONObject;
  * and responds to / sends UDP LAN discovery beacons on port 41235.
  */
 public class LanMultiplayerServer {
+    private static final java.util.Set<String> VALID_WEATHER_STATES = new java.util.HashSet<>(java.util.Arrays.asList("clear", "rain", "storm", "snow", "fog", "cloudy", "windy", "sandstorm", "blizzard", "thunderstorm"));
+
     public static final int MAX_LAN_PLAYERS = 4;
     public static final int DEFAULT_LAN_PORT = 41234;
     public static final int DISCOVERY_PORT = 41235;
