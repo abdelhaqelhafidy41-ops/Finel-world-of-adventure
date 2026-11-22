@@ -268,6 +268,10 @@ export interface CreateRoomOptions {
   friendlyFire?: boolean;
   password?: string;
   region?: string;
+  seed?: number;
+  worldTime?: AuthoritativeWorldTimeState;
+  worldWeather?: AuthoritativeWorldWeatherState;
+  savedWorldState?: Partial<RoomWorldSnapshotPayload>;
 }
 
 export interface JoinRoomOptions {
@@ -429,6 +433,7 @@ export interface IMultiplayerService {
   getLocalPlayerId(): string | null;
   isConfigured(): boolean;
   getConfig(): MultiplayerServiceConfig;
+  getActiveMode?(): 'online' | 'lan';
   getRoomState(): MultiplayerRoomState | null;
   getCurrentRoom(): MultiplayerRoomState | null;
   getAuthoritativeGameStartInfo(): MultiplayerGameStartInfo | null;

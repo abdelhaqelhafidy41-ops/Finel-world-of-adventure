@@ -13,4 +13,10 @@ contextBridge.exposeInMainWorld('desktopApp', {
     getLocalIp: () => ipcRenderer.invoke('lan:get-local-ip'),
     discover: (timeoutMs) => ipcRenderer.invoke('lan:discover', timeoutMs),
   },
+  worldStorage: {
+    listWorlds: () => ipcRenderer.invoke('worldStorage:listWorlds'),
+    readBundle: (worldId) => ipcRenderer.invoke('worldStorage:readBundle', worldId),
+    writeBundle: (worldId, bundle) => ipcRenderer.invoke('worldStorage:writeBundle', worldId, bundle),
+    deleteWorld: (worldId) => ipcRenderer.invoke('worldStorage:deleteWorld', worldId),
+  },
 });

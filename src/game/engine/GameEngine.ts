@@ -75,6 +75,7 @@ import { getAudioManager } from '../audio/AudioManager';
 import type { SoundEngine } from '../audio/SoundEngine';
 import { CombatManager } from '../combat/CombatManager';
 import { BowWeapon } from '../combat/weapons/BowWeapon';
+import { ANIMAL_DROP_TABLES, type AnimalSpecies } from '../wildlife/wildlifeTypes';
 import {
   TimeManager,
   type TimePreset,
@@ -385,6 +386,7 @@ export class GameEngine {
   private playTimeSeconds = 0;
   private autosaveTimer = 0;
   private activeSaveSlot: SaveSlotId = 'slot-1';
+  private hostLanWorldSlotId: SaveSlotId | null = null;
   private activeWorldName = 'Oakhollow Valley';
   private activeWorldType: WorldType = 'normal';
   private activeDifficulty: DifficultyLevel = 'normal';
@@ -420,6 +422,7 @@ export class GameEngine {
   private readonly persistedBuildingStates = new Map<string, RoomBuildingState>();
   private readonly persistedQuestObjects = new Map<string, RoomQuestObjectState>();
   private readonly appliedLootGrantIds = new Set<string>();
+  private readonly processedDeathEntityKeys = new Set<string>();
   private readonly activeBossEncounters = new Map<string, BossEncounterState>();
   private activeDialogueNpcId: string | null = null;
   private reducedMotionEnabled = false;
@@ -4941,9 +4944,20 @@ export class GameEngine {
     return this.multiplayerSessionActive;
   }
 
+  public isLanTransportActive(): boolean {
+    return this.multiplayerService?.getActiveMode?.() === 'lan';
+  }
+
+  public canPersistLocalWorld(): boolean {
+    if (!this.multiplayerSessionActive) return true;
+    return this.isLanTransportActive() && this.isLocalMultiplayerHost();
+  }
+
   public saveCurrentWorld(silent = false): boolean {
-    if (!this.controller || !this.world || this.multiplayerSessionActive) return false;
-    const targetSlot = this.activeSaveSlot || 'slot-1';
+    if (!this.controller || !this.world || !this.canPersistLocalWorld()) return false;
+    const targetSlot = this.multiplayerSessionActive
+      ? (this.hostLanWorldSlotId || this.activeSaveSlot || 'slot-1')
+      : (this.activeSaveSlot || 'slot-1');
     const res = this.saveManager.saveToSlot(
       targetSlot,
       this.captureSaveSource(!silent),
@@ -4966,7 +4980,7 @@ export class GameEngine {
   }
 
   public saveToSlot(slotId: SaveSlotId, silent = false): boolean {
-    if (!this.controller || !this.world || this.multiplayerSessionActive) return false;
+    if (!this.controller || !this.world || !this.canPersistLocalWorld()) return false;
     const res = this.saveManager.saveToSlot(
       slotId,
       this.captureSaveSource(!silent),
@@ -4979,6 +4993,9 @@ export class GameEngine {
     }
     if (slotId !== 'autosave') {
       this.activeSaveSlot = slotId;
+      if (this.multiplayerSessionActive && this.canPersistLocalWorld()) {
+        this.hostLanWorldSlotId = slotId;
+      }
     }
     this.hasUnsavedProgress = false;
     this.unsavedTimer = 0;
@@ -5215,6 +5232,7 @@ export class GameEngine {
     this.persistedBuildingStates.clear();
     this.persistedQuestObjects.clear();
     this.appliedLootGrantIds.clear();
+    this.processedDeathEntityKeys.clear();
     this.activeBossEncounters.clear();
     this.activeDialogueNpcId = null;
     this.dialogueEngine?.quests.setLocalPlayerId(null);
@@ -5792,6 +5810,16 @@ export class GameEngine {
     }
   }
 
+  private markEntityDeathProcessed(key: string): boolean {
+    if (this.processedDeathEntityKeys.has(key)) return false;
+    this.processedDeathEntityKeys.add(key);
+    if (this.processedDeathEntityKeys.size > 300) {
+      const oldest = this.processedDeathEntityKeys.values().next();
+      if (!oldest.done) this.processedDeathEntityKeys.delete(oldest.value);
+    }
+    return true;
+  }
+
   private resolveAttackerCoords(
     playerId: string | undefined,
     fallbackX?: number,
@@ -6263,6 +6291,9 @@ export class GameEngine {
         const x = typeof data.x === 'number' ? data.x : 0;
         const y = typeof data.y === 'number' ? data.y : 1;
         const z = typeof data.z === 'number' ? data.z : 0;
+        if (hp > 0) {
+          this.processedDeathEntityKeys.delete(`enemy:${targetId}`);
+        }
         const atkCoords = this.resolveAttackerCoords(attackerId, x, z);
         this.combat.applyAuthoritativeEnemyDamage(
           targetId,
@@ -6299,11 +6330,19 @@ export class GameEngine {
           atkCoords.z,
           killerId,
         );
-        if (res?.justKilled) {
+        const newlyMarkedDeath = this.multiplayerSessionActive
+          ? this.markEntityDeathProcessed(`enemy:${targetId}`)
+          : false;
+        if (res?.justKilled || newlyMarkedDeath) {
           this.spawnDustBurst(x, y, z, 6);
           this.sound.playEnemyDefeat({ x, y, z });
           if (killerId === this.localMultiplayerPlayerId) {
-            this.recordEnemyKill(res.enemy.archetype.id, targetId, { x, z });
+            const archetype =
+              res?.enemy.archetype.id ??
+              (typeof data.archetype === 'string' && data.archetype.length > 0
+                ? data.archetype
+                : 'bandit_scout');
+            this.recordEnemyKill(archetype, targetId, { x, z });
             ProfileManager.recordGameplayDelta({ enemiesDefeated: 1 });
           }
           this.emitHud();
@@ -6322,6 +6361,9 @@ export class GameEngine {
         const x = typeof data.x === 'number' ? data.x : 0;
         const y = typeof data.y === 'number' ? data.y : 0.7;
         const z = typeof data.z === 'number' ? data.z : 0;
+        if (hp > 0) {
+          this.processedDeathEntityKeys.delete(`animal:${targetId}`);
+        }
         const atkCoords = this.resolveAttackerCoords(attackerId, x, z);
         this.world.wildlife.applyAuthoritativeDamage(
           targetId,
@@ -6331,6 +6373,7 @@ export class GameEngine {
           false,
           atkCoords.x,
           atkCoords.z,
+          attackerId,
         );
         this.combat.spawnHitSparks(x, y, z, isCrit ? 6 : 4);
         this.sound.playHitImpact(isCrit, { position: { x, y, z } });
@@ -6357,21 +6400,33 @@ export class GameEngine {
           false,
           atkCoords.x,
           atkCoords.z,
+          killerId,
         );
-        if (res.justKilled) {
+        const newlyMarkedDeath = this.multiplayerSessionActive
+          ? this.markEntityDeathProcessed(`animal:${targetId}`)
+          : false;
+        if (res.justKilled || newlyMarkedDeath) {
+          const species =
+            res.species ??
+            (typeof data.archetype === 'string' && data.archetype in ANIMAL_DROP_TABLES
+              ? (data.archetype as AnimalSpecies)
+              : undefined);
+          const drops =
+            res.drops ??
+            (species ? ANIMAL_DROP_TABLES[species].map((d) => ({ ...d })) : undefined);
           this.spawnDustBurst(x, y, z, 5);
           this.sound.playEnemyDefeat({ x, y, z });
           if (killerId === this.localMultiplayerPlayerId) {
-            if (res.species) {
-              this.recordEnemyKill(`animal:${res.species}`, targetId, { x, z });
+            if (species) {
+              this.recordEnemyKill(`animal:${species}`, targetId, { x, z });
             }
             ProfileManager.recordGameplayDelta({ animalsDefeated: 1 });
           }
-          if (this.isLocalMultiplayerHost() && res.drops && res.drops.length > 0) {
-            for (let i = 0; i < res.drops.length; i++) {
-              const d = res.drops[i];
-              const angle = (i * Math.PI * 2) / Math.max(1, res.drops.length) + 0.4;
-              const offset = res.drops.length > 1 ? 0.65 : 0;
+          if (this.isLocalMultiplayerHost() && drops && drops.length > 0) {
+            for (let i = 0; i < drops.length; i++) {
+              const d = drops[i];
+              const angle = (i * Math.PI * 2) / Math.max(1, drops.length) + 0.4;
+              const offset = drops.length > 1 ? 0.65 : 0;
               const label = this.itemManager.getItem(d.itemId)?.name ?? d.itemId;
               const dropId = `drop_animal_${targetId}_${i}_${Date.now().toString(36)}`;
               const spawned = this.world.spawnWorldPickup(
@@ -6410,6 +6465,9 @@ export class GameEngine {
         const x = typeof data.x === 'number' ? data.x : 0;
         const y = typeof data.y === 'number' ? data.y : 1;
         const z = typeof data.z === 'number' ? data.z : 0;
+        if (hp > 0) {
+          this.processedDeathEntityKeys.delete(`npc:${targetId}`);
+        }
         const atkCoords = this.resolveAttackerCoords(attackerId, x, z);
         this.world.npcs.applyAuthoritativeDamage(
           targetId,
@@ -6444,7 +6502,10 @@ export class GameEngine {
           atkCoords.x,
           atkCoords.z,
         );
-        if (res?.justKilled) {
+        const newlyMarkedDeath = this.multiplayerSessionActive
+          ? this.markEntityDeathProcessed(`npc:${targetId}`)
+          : false;
+        if (res?.justKilled || newlyMarkedDeath) {
           this.spawnDustBurst(x, y, z, 6);
           this.sound.playEnemyDefeat({ x, y, z });
           this.emitHud();
@@ -7263,16 +7324,38 @@ export class GameEngine {
     worldWeather?: AuthoritativeWorldWeatherState;
     localPlayerId?: string;
     players?: MultiplayerPlayer[];
+    hostWorldSlotId?: SaveSlotId | null;
+    savedWorldData?: SaveGameData | null;
   }): Promise<boolean> {
     this.multiplayerSessionActive = true;
-    const cleanName = options.worldName.trim() || 'Oakhollow Co-op';
-    const seed = Number.isFinite(options.seed)
-      ? Math.floor(Math.abs(options.seed)) || DEFAULT_WORLD_SEED
+    const room = this.multiplayerService?.getRoomState();
+    const localId =
+      options.localPlayerId ?? this.multiplayerService?.getLocalPlayerId() ?? null;
+    const isLanHost = Boolean(
+      this.isLanTransportActive() &&
+        room &&
+        localId &&
+        room.hostId === localId,
+    );
+    const saved = isLanHost ? (options.savedWorldData ?? null) : null;
+
+    const cleanName =
+      saved?.meta.worldName || options.worldName.trim() || 'Oakhollow Co-op';
+    const rawSeed = saved ? saved.world.worldSeed : options.seed;
+    const seed = Number.isFinite(rawSeed)
+      ? Math.floor(Math.abs(rawSeed)) || DEFAULT_WORLD_SEED
       : DEFAULT_WORLD_SEED;
+    const resolvedWorldType = saved
+      ? (saved.meta.worldType ?? saved.world.worldType ?? options.worldType)
+      : options.worldType;
+    const resolvedDifficulty = saved
+      ? (saved.meta.difficulty ?? saved.world.difficulty ?? options.difficulty)
+      : options.difficulty;
+
     this.authoritativeMultiplayerConfig = {
       seed,
-      worldType: options.worldType,
-      difficulty: options.difficulty,
+      worldType: resolvedWorldType,
+      difficulty: resolvedDifficulty,
     };
     this.worldSettingsPermission = options.worldSettingsPermission ?? 'HOST_ONLY';
 
@@ -7280,90 +7363,237 @@ export class GameEngine {
     this.sound.playUiClick();
     this.endNpcDialogue();
 
-    const loaded = await this.ensureWorldRuntimeLoaded(seed, { x: 0, z: 4 });
+    const spawnHint = saved
+      ? {
+          x: Number.isFinite(saved.player.position.x) ? saved.player.position.x : 0,
+          z: Number.isFinite(saved.player.position.z) ? saved.player.position.z : 4,
+        }
+      : { x: 0, z: 4 };
+    const loaded = await this.ensureWorldRuntimeLoaded(seed, spawnHint);
     if (!loaded || !this.controller || !this.world) return false;
 
     this.rebuildWorldForSeed(seed);
-    this.playTimeSeconds = 0;
     this.autosaveTimer = 0;
-    this.playerLevel = 1;
-    this.playerXp = 0;
-    this.playerCoins =
-      options.worldType === 'creative' ? 500 : options.worldType === 'adventure' ? 50 : 0;
-    this.activeWorldName = cleanName;
-    this.activeWorldType = options.worldType;
-    this.activeDifficulty = options.difficulty;
-    this.activeWorldCreatedAtMs = Date.now();
     this.hasUnsavedProgress = false;
     this.unsavedTimer = 0;
     this.statAccumTimeSec = 0;
     this.statAccumDistM = 0;
     this.lastStatTrackX = null;
     this.lastStatTrackZ = null;
-
-    this.controller.setGameplayModifiers(options.difficulty, options.worldType);
-
-    this.dialogueEngine.quests.reset();
-    this.dialogueEngine.restoreFlags([]);
-    this.clearStoryLocalEntities();
-    this.storyManager.reset();
-    this.clearSideQuestLocalEntities();
-    this.sideQuestManager.reset();
-    this.trackedQuestSource = 'story';
-    this.aiService.resetAllMemory();
-    this.seedStarterInventory();
-    this.craftingManager.resetProgression();
-    this.syncEquipmentBonuses();
-    this.syncEquippedWeaponFromInventory();
-
     this.isSleeping = false;
     this.sleepTimer = 0;
 
-    this.world.restoreImportantState({
-      discoveredLandmarkIds: ['spawn-glade'],
-      collectedInteractableIds: [],
-      droppedPickups: [],
-      placedBeds: [],
-      placedStations: [],
-      depletedNodes: [],
-      openedChestIds: [],
-    });
-    this.world.wildlife.restoreKilledAnimalIds([]);
-
-    if (options.worldTime) {
-      this.timeManager.syncFromServer(options.worldTime);
+    if (isLanHost) {
+      const hostSlot =
+        saved?.meta.slotId ||
+        options.hostWorldSlotId ||
+        generateWorldId();
+      this.hostLanWorldSlotId = hostSlot;
+      this.activeSaveSlot = hostSlot;
     } else {
-      this.timeManager.restoreState({
-        worldHours: 8.5,
-        dayCount: 1,
-        fullDayDurationSeconds: 360,
-        timeScale: 1,
-        paused: false,
+      this.hostLanWorldSlotId = null;
+    }
+
+    this.activeWorldName = cleanName;
+    this.activeWorldType = resolvedWorldType;
+    this.activeDifficulty = resolvedDifficulty;
+    this.controller.setGameplayModifiers(resolvedDifficulty, resolvedWorldType);
+
+    if (saved) {
+      this.playTimeSeconds = saved.meta.playTimeSeconds;
+      this.activeWorldCreatedAtMs =
+        saved.meta.createdAtMs || saved.meta.savedAtMs || Date.now();
+
+      this.inventoryManager.restoreState(saved.inventory);
+      this.craftingManager.restoreState(saved.crafting);
+      this.syncEquipmentBonuses();
+      this.syncEquippedWeaponFromInventory();
+
+      this.playerLevel = Math.max(1, saved.player.level);
+      this.playerXp = Math.max(0, saved.player.xp);
+      this.playerCoins = Math.max(0, saved.player.coins);
+
+      let px = Number.isFinite(saved.player.position.x) ? saved.player.position.x : 0;
+      let pz = Number.isFinite(saved.player.position.z) ? saved.player.position.z : 4;
+      let py = Number.isFinite(saved.player.position.y)
+        ? saved.player.position.y
+        : groundHeightAt(px, pz);
+      if (!isLand(px, pz, 0.45) || isWater(px, pz)) {
+        const safeLand = findNearestValidLand(px, pz, 4, 0.32, 220);
+        px = safeLand.x;
+        pz = safeLand.z;
+        py = safeLand.y;
+      }
+
+      this.controller.setPoseAndVitals({
+        x: px,
+        y: py,
+        z: pz,
+        yaw: saved.player.rotation.yaw,
+        cameraYaw: saved.player.rotation.cameraYaw,
+        cameraPitch: saved.player.rotation.cameraPitch,
+        health: saved.player.health,
+        stamina: saved.player.stamina,
       });
-    }
-    if (options.worldWeather) {
-      this.weatherManager.syncFromServer(options.worldWeather);
+
+      this.dialogueEngine.quests.restoreState(saved.quests);
+      this.dialogueEngine.restoreFlags(saved.world.dialogueFlags);
+      this.clearStoryLocalEntities();
+      this.storyManager.restoreState(saved.story ?? null);
+      this.clearSideQuestLocalEntities();
+      this.sideQuestManager.restoreState(saved.sideQuests ?? null);
+      this.trackedQuestSource =
+        saved.sideQuests?.trackedSideQuestId &&
+        this.sideQuestManager.getTrackedSideQuestId() ===
+          saved.sideQuests.trackedSideQuestId
+          ? 'sidequest'
+          : 'story';
+
+      if (saved.camera) {
+        this.cameraSettings = { ...saved.camera };
+        this.settings.mouseSensitivity = saved.camera.sensitivity;
+        this.settings.invertY = saved.camera.invertY;
+        this.cameraRig?.updateCameraConfig({
+          distance: saved.camera.distance,
+          shoulderHeight: saved.camera.height,
+          smoothingScale: saved.camera.smoothing,
+        });
+        this.cameraRig?.setPerspective(saved.camera.perspective, true);
+      }
+      if (typeof saved.audio?.footstepVolume === 'number') {
+        this.footstepVolume = saved.audio.footstepVolume;
+        this.sound.setAudioVolumes({ footstepVolume: this.footstepVolume });
+      }
+      this.player?.setFirstPersonMode(
+        this.cameraRig?.isFirstPersonActive() ?? false,
+        this.cameraRig?.getPitch() ?? 0,
+      );
+      this.updateInteractionIndicatorScreenPos();
+
+      this.world.restoreImportantState({
+        discoveredLandmarkIds: saved.world.discoveredLandmarkIds,
+        collectedInteractableIds: saved.world.collectedInteractableIds,
+        droppedPickups: saved.world.droppedPickups,
+        placedBeds: saved.world.placedBeds ?? [],
+        placedStations: saved.world.placedStations ?? [],
+        depletedNodes: saved.world.depletedNodes ?? [],
+        openedChestIds: saved.world.openedChestIds ?? [],
+        doorStates: saved.world.doorStates ?? [],
+        destroyedIds: saved.world.destroyedIds ?? [],
+        customChanges: saved.world.customChanges ?? [],
+        playerBuildings: saved.world.playerBuildings ?? [],
+      });
+      this.waypoint = saved.world.waypoint ? { ...saved.world.waypoint } : null;
+      this.mapManager.restoreFogState(
+        saved.world.fogOfWar,
+        this.landmarks,
+        px,
+        pz,
+      );
+      this.lastFogRevealX = px;
+      this.lastFogRevealZ = pz;
+
+      this.world.wildlife.restoreKilledAnimalIds(saved.world.killedAnimalIds ?? []);
+      this.world.npcs.restoreSaveNpcStates(saved.world.npcStates ?? []);
+      this.combat.dispose();
+      this.combat = this.createCombatManager(this.world.seed);
+      this.wireWorldAndCombatLinks();
+      this.combat.restoreQuestTargetState(saved.world.questTargets ?? []);
+      this.combat.restoreDefeatedEnemies(saved.world.defeatedEnemyIds);
+
+      this.world.villageDev.restoreState(saved.villageDev, this.world.village.villages);
+      this.world.farmAnimals.restoreState(
+        saved.villageDev?.farmAnimals,
+        this.world.village.villages,
+        this.getTotalWorldHours(),
+      );
+      this.world.buildings.syncAllFarmPlotsByWorldHours(
+        this.getTotalWorldHours(),
+        this.isCurrentlyRaining(),
+      );
+
+      if (options.worldTime) {
+        this.timeManager.syncFromServer(options.worldTime);
+      } else {
+        this.timeManager.restoreState(saved.time);
+      }
+      if (options.worldWeather) {
+        this.weatherManager.syncFromServer(options.worldWeather);
+      } else {
+        this.weatherManager.restoreState(saved.weather);
+      }
     } else {
-      this.weatherManager.setWeather('clear', true);
-      this.weatherManager.setDynamicEnabled(true);
+      this.playTimeSeconds = 0;
+      this.playerLevel = 1;
+      this.playerXp = 0;
+      this.playerCoins =
+        resolvedWorldType === 'creative'
+          ? 500
+          : resolvedWorldType === 'adventure'
+            ? 50
+            : 0;
+      this.activeWorldCreatedAtMs = Date.now();
+
+      this.dialogueEngine.quests.reset();
+      this.dialogueEngine.restoreFlags([]);
+      this.clearStoryLocalEntities();
+      this.storyManager.reset();
+      this.clearSideQuestLocalEntities();
+      this.sideQuestManager.reset();
+      this.trackedQuestSource = 'story';
+      this.aiService.resetAllMemory();
+      this.seedStarterInventory();
+      this.craftingManager.resetProgression();
+      this.syncEquipmentBonuses();
+      this.syncEquippedWeaponFromInventory();
+
+      this.world.restoreImportantState({
+        discoveredLandmarkIds: ['spawn-glade'],
+        collectedInteractableIds: [],
+        droppedPickups: [],
+        placedBeds: [],
+        placedStations: [],
+        depletedNodes: [],
+        openedChestIds: [],
+      });
+      this.world.wildlife.restoreKilledAnimalIds([]);
+
+      if (options.worldTime) {
+        this.timeManager.syncFromServer(options.worldTime);
+      } else {
+        this.timeManager.restoreState({
+          worldHours: 8.5,
+          dayCount: 1,
+          fullDayDurationSeconds: 360,
+          timeScale: 1,
+          paused: false,
+        });
+      }
+      if (options.worldWeather) {
+        this.weatherManager.syncFromServer(options.worldWeather);
+      } else {
+        this.weatherManager.setWeather('clear', true);
+        this.weatherManager.setDynamicEnabled(true);
+      }
+
+      this.controller.reset(0, 4);
+      this.waypoint = null;
+      this.mapManager.resetFog();
+      this.mapManager.revealAround(0, 4, 195);
+      this.lastFogRevealX = 0;
+      this.lastFogRevealZ = 4;
+
+      this.combat.dispose();
+      this.combat = this.createCombatManager(this.world.seed);
+      this.wireWorldAndCombatLinks();
+      this.world.villageDev.restoreState(undefined, this.world.village.villages);
+      this.world.farmAnimals.restoreState(
+        undefined,
+        this.world.village.villages,
+        this.getTotalWorldHours(),
+      );
     }
 
-    this.controller.reset(0, 4);
-    this.waypoint = null;
-    this.mapManager.resetFog();
-    this.mapManager.revealAround(0, 4, 195);
-    this.lastFogRevealX = 0;
-    this.lastFogRevealZ = 4;
-
-    this.combat.dispose();
-    this.combat = this.createCombatManager(this.world.seed);
-    this.wireWorldAndCombatLinks();
-    this.world.villageDev.restoreState(undefined, this.world.village.villages);
-    this.world.farmAnimals.restoreState(
-      undefined,
-      this.world.village.villages,
-      this.getTotalWorldHours(),
-    );
     this.syncEquippedWeaponFromInventory();
     this.syncWorldTimeImmediate();
     this.skyRig.updateSunFollow(this.controller.position);
@@ -7380,28 +7610,35 @@ export class GameEngine {
       this.isCurrentlyRaining(),
     );
 
-    const localId =
-      options.localPlayerId ?? this.multiplayerService?.getLocalPlayerId() ?? null;
     const roster =
       options.players ?? this.multiplayerService?.getRoomState()?.players ?? [];
     this.hasAppliedInitialSpawnSnapshot = false;
     this.setupMultiplayerSync(roster, localId);
 
-    const cachedVitals = this.multiplayerService?.getLatestVitals?.();
-    if (cachedVitals && cachedVitals.playerId === localId) {
-      this.controller.syncAuthoritativeHealth(cachedVitals.health);
-      this.combat.syncPlayerStats(cachedVitals.health, cachedVitals.maxHealth);
-    }
-    const cachedProg = this.multiplayerService?.getLatestProgression?.();
-    if (cachedProg && cachedProg.playerId === localId) {
-      this.playerCoins = Math.max(0, cachedProg.coins);
-      this.playerXp = Math.max(0, cachedProg.xp);
-      this.playerLevel = Math.max(1, cachedProg.level);
+    if (!saved) {
+      const cachedVitals = this.multiplayerService?.getLatestVitals?.();
+      if (cachedVitals && cachedVitals.playerId === localId) {
+        this.controller.syncAuthoritativeHealth(cachedVitals.health);
+        this.combat.syncPlayerStats(cachedVitals.health, cachedVitals.maxHealth);
+      }
+      const cachedProg = this.multiplayerService?.getLatestProgression?.();
+      if (cachedProg && cachedProg.playerId === localId) {
+        this.playerCoins = Math.max(0, cachedProg.coins);
+        this.playerXp = Math.max(0, cachedProg.xp);
+        this.playerLevel = Math.max(1, cachedProg.level);
+      }
     }
     const cachedSnap = this.multiplayerService?.getLatestWorldSnapshot?.();
     if (cachedSnap) {
       this.applyRemoteWorldSnapshot(cachedSnap);
       this.syncLocalMultiplayerState(0.05, true);
+    }
+
+    if (isLanHost && this.hostLanWorldSlotId) {
+      this.saveManager.saveToSlot(
+        this.hostLanWorldSlotId,
+        this.captureSaveSource(true),
+      );
     }
 
     this.emitInventorySnapshot();
@@ -7427,6 +7664,7 @@ export class GameEngine {
 
   public returnToMainMenu(): void {
     this.multiplayerSessionActive = false;
+    this.hostLanWorldSlotId = null;
     this.authoritativeMultiplayerConfig = null;
     this.teardownMultiplayerSync();
     this.endNpcDialogue();
@@ -8421,12 +8659,14 @@ export class GameEngine {
     if (this.unsavedTimer >= 2.0) {
       this.hasUnsavedProgress = true;
     }
-    if (!this.multiplayerSessionActive) {
+    if (this.canPersistLocalWorld()) {
       this.autosaveTimer += dt;
       if (this.autosaveTimer >= 45) {
         this.autosaveTimer = 0;
         // Save silently back to active world so Continue & Load World stay up to date
-        const targetSlot = this.activeSaveSlot || 'autosave';
+        const targetSlot = this.multiplayerSessionActive
+          ? (this.hostLanWorldSlotId || this.activeSaveSlot || 'autosave')
+          : (this.activeSaveSlot || 'autosave');
         this.saveManager.saveToSlot(targetSlot, this.captureSaveSource(false));
         this.hasUnsavedProgress = false;
         this.unsavedTimer = 0;

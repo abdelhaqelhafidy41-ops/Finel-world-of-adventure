@@ -22,10 +22,15 @@ import type { InventorySnapshot } from './game/inventory/inventoryTypes';
 import type { DialogueSnapshot } from './game/dialogue/dialogueTypes';
 import type {
   NewWorldOptions,
+  SaveGameData,
   SaveGameMeta,
   SaveSlotId,
   SaveSlotSummary,
 } from './game/save/saveTypes';
+import {
+  flushPendingWorldSaves,
+  hydratePersistentWorldStorage,
+} from './game/save/LocalWorldStorage';
 import {
   UI_TEXT,
   loadSavedLanguage,
@@ -89,6 +94,7 @@ import {
   isSwitchingMultiplayerTransport,
   SwitchingMultiplayerTransport,
 } from './game/multiplayer/MultiplayerTransport';
+import { getLanCapabilities } from './game/multiplayer/LanMultiplayerManager';
 import { extractJoinTargetFromUrl } from './game/multiplayer/inviteUtils';
 import type {
   IMultiplayerService,
@@ -256,8 +262,15 @@ export default function App() {
   }, []);
   const languageRef = useRef<Language>(language);
   languageRef.current = language;
+  const [initialLanHostSlotId, setInitialLanHostSlotId] = useState<SaveSlotId | null>(
+    null,
+  );
   const noticeTimerRef = useRef<number>(0);
   const lastStartedMatchKeyRef = useRef<string | null>(null);
+  const pendingLanHostWorldRef = useRef<{
+    hostWorldSlotId: SaveSlotId | null;
+    savedWorldData: SaveGameData | null;
+  }>({ hostWorldSlotId: null, savedWorldData: null });
   const activeModalRef = useRef<ActiveModal>('none');
   activeModalRef.current = activeModal;
   const customizeReturnTargetRef = useRef<
@@ -392,17 +405,51 @@ export default function App() {
 
   // Lightweight startup setup: populate saved worlds list & accessibility attrs without initializing 3D engine
   useEffect(() => {
+    let cancelled = false;
     applyAccessibilityDocumentAttributes(loadExtendedSettings().accessibility);
     refreshSaveSlots();
+    void hydratePersistentWorldStorage().then(() => {
+      if (!cancelled) {
+        refreshSaveSlots();
+      }
+    });
     return () => {
+      cancelled = true;
       window.clearTimeout(noticeTimerRef.current);
       void ProfileManager.flushStatsDelta();
+      void flushPendingWorldSaves();
       engineRef.current?.dispose();
       engineRef.current = null;
       audioManagerRef.current?.dispose();
       audioManagerRef.current = null;
     };
   }, [refreshSaveSlots]);
+
+  // Persist active world silently when mobile/desktop app goes to background or closes
+  useEffect(() => {
+    const persistOnLifecycle = () => {
+      if (
+        (phase === 'playing' || phase === 'paused') &&
+        engineRef.current?.canPersistLocalWorld()
+      ) {
+        engineRef.current.saveCurrentWorld(true);
+        void flushPendingWorldSaves();
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        persistOnLifecycle();
+      }
+    };
+    window.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', persistOnLifecycle);
+    window.addEventListener('beforeunload', persistOnLifecycle);
+    return () => {
+      window.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', persistOnLifecycle);
+      window.removeEventListener('beforeunload', persistOnLifecycle);
+    };
+  }, [phase]);
 
   // Lazy-loads Three.js GameEngine ONLY when transitioning from menu into a world
   const ensureEngine = useCallback(async (): Promise<GameEngine | null> => {
@@ -845,6 +892,20 @@ export default function App() {
       lastStartedMatchKeyRef.current = matchKey;
       const authType = info.worldSettings?.worldType ?? info.worldType;
       const authDifficulty = info.worldSettings?.difficulty ?? info.difficulty;
+      const svc = multiplayerServiceRef.current;
+      const localId = info.localPlayerId ?? svc?.getLocalPlayerId() ?? null;
+      const isLanHost = Boolean(
+        svc &&
+          isSwitchingMultiplayerTransport(svc) &&
+          svc.getActiveMode() === 'lan' &&
+          localId &&
+          info.hostId === localId,
+      );
+      const pendingHost = pendingLanHostWorldRef.current;
+      pendingLanHostWorldRef.current = {
+        hostWorldSlotId: null,
+        savedWorldData: null,
+      };
       setActiveModal('none');
       setTitleSubScreen('main');
       setPhase('loading');
@@ -872,6 +933,8 @@ export default function App() {
             worldWeather: info.worldWeather,
             localPlayerId: info.localPlayerId,
             players: info.players,
+            hostWorldSlotId: isLanHost ? pendingHost.hostWorldSlotId : null,
+            savedWorldData: isLanHost ? pendingHost.savedWorldData : null,
           });
           if (!started) {
             lastStartedMatchKeyRef.current = null;
@@ -879,6 +942,7 @@ export default function App() {
             return;
           }
           setWaypoint(engine.getWaypoint());
+          refreshSaveSlots();
           const t = UI_TEXT[language];
           const modeLabel =
             authType === 'survival'
@@ -897,7 +961,7 @@ export default function App() {
         }
       })();
     },
-    [ensureEngine, language, showNotice],
+    [ensureEngine, language, refreshSaveSlots, showNotice],
   );
 
   // Root-level multiplayer match transition, room snapshot, connection resilience & unread chat listener
@@ -1071,6 +1135,14 @@ export default function App() {
   }, [hud.isSleeping]);
 
   const handleExitMultiplayerToMenu = useCallback(() => {
+    if (engineRef.current?.canPersistLocalWorld()) {
+      engineRef.current.saveCurrentWorld(true);
+    }
+    void flushPendingWorldSaves();
+    pendingLanHostWorldRef.current = {
+      hostWorldSlotId: null,
+      savedWorldData: null,
+    };
     void multiplayerServiceRef.current?.leaveRoom().catch(() => {
       // Ignore network errors while exiting back to multiplayer menu
     });
@@ -1087,9 +1159,14 @@ export default function App() {
 
   const handleReturnToMainMenu = useCallback(
     (saveFirst: boolean) => {
-      if (saveFirst && !engineRef.current?.isMultiplayerSession()) {
-        engineRef.current?.saveCurrentWorld(false);
+      if (saveFirst && engineRef.current?.canPersistLocalWorld()) {
+        engineRef.current.saveCurrentWorld(false);
       }
+      void flushPendingWorldSaves();
+      pendingLanHostWorldRef.current = {
+        hostWorldSlotId: null,
+        savedWorldData: null,
+      };
       if (engineRef.current?.isMultiplayerSession()) {
         void multiplayerServiceRef.current?.leaveRoom().catch(() => {
           // Ignore network errors when leaving room cleanly
@@ -1109,6 +1186,14 @@ export default function App() {
     },
     [refreshSaveSlots],
   );
+
+  const handleBeforeAppExit = useCallback(async () => {
+    if (engineRef.current?.canPersistLocalWorld()) {
+      engineRef.current.saveCurrentWorld(true);
+    }
+    await flushPendingWorldSaves();
+    refreshSaveSlots();
+  }, [refreshSaveSlots]);
 
   // Register CloudSaveService hooks & bootstrap cloud session on startup
   useEffect(() => {
@@ -1480,6 +1565,12 @@ export default function App() {
           onContinue={handleContinue}
           onCreateWorld={handleCreateWorld}
           onPlayWorld={handleLoadSlot}
+          canHostLan={getLanCapabilities().canHost}
+          onHostWorldLan={(slotId) => {
+            playUiClick();
+            setInitialLanHostSlotId(slotId);
+            setTitleSubScreen('multiplayer');
+          }}
           onDeleteWorld={handleDeleteSlot}
           onApplySettings={handleApplyExtendedSettings}
           onPreviewAudio={handlePreviewAudio}
@@ -1490,6 +1581,11 @@ export default function App() {
           multiplayerService={multiplayerServiceRef.current}
           initialJoinCode={pendingJoinCode}
           onConsumeInitialJoinCode={() => setPendingJoinCode(null)}
+          initialLanHostSlotId={initialLanHostSlotId}
+          onConsumeInitialLanHostSlotId={() => setInitialLanHostSlotId(null)}
+          onPrepareHostWorld={(info) => {
+            pendingLanHostWorldRef.current = info;
+          }}
           onStartMultiplayerWorld={handleStartMultiplayerWorld}
           onOpenProfile={() => {
             playUiClick();
@@ -2008,6 +2104,8 @@ export default function App() {
             }
             isMultiplayer={engineRef.current?.isMultiplayerSession() ?? false}
             isHost={engineRef.current?.isMultiplayerHost() ?? false}
+            canSaveWorld={engineRef.current?.canPersistLocalWorld() ?? false}
+            onBeforeExit={handleBeforeAppExit}
             worldSettingsPermission={
               engineRef.current?.getWorldSettingsPermission() ??
               activeMpRoom?.worldSettingsPermission ??
@@ -2087,7 +2185,10 @@ export default function App() {
       {activeModal === 'saveSlots' && (
         <SaveSlotsModal
           slots={saveSlots}
-          allowSave={phase === 'paused' || phase === 'playing'}
+          allowSave={
+            (phase === 'paused' || phase === 'playing') &&
+            (engineRef.current?.canPersistLocalWorld() ?? false)
+          }
           lang={language}
           onSaveSlot={handleSaveSlot}
           onLoadSlot={handleLoadSlot}

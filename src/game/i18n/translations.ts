@@ -1520,6 +1520,13 @@ export interface UiStrings {
   merchantBoughtNotice: (name: string, coins: number) => string;
   merchantBoughtAnimalNotice: (speciesName: string) => string;
   merchantSoldNotice: (name: string, count: number, coins: number) => string;
+  // Persistent World & Offline LAN Saved World Hosting
+  hostLanBtn: string;
+  lanWorldSourceNew: string;
+  lanWorldSourceSaved: string;
+  lanSelectSavedWorld: string;
+  lanNoSavedWorldsHint: string;
+  lanSavedWorldHostNote: string;
 }
 
 export const UI_TEXT: Record<Language, UiStrings> = {
@@ -2685,6 +2692,12 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     merchantBoughtAnimalNotice: (speciesName) =>
       `Purchased ${speciesName}! Assigned to your nearest coop/pen.`,
     merchantSoldNotice: (name, count, coins) => `Sold ${name} ×${count} for +${coins} Coins.`,
+    hostLanBtn: 'Host Offline LAN',
+    lanWorldSourceNew: 'New World',
+    lanWorldSourceSaved: 'Saved World',
+    lanSelectSavedWorld: 'Select Saved World',
+    lanNoSavedWorldsHint: 'No saved local worlds found yet. Create a new world to save progress automatically.',
+    lanSavedWorldHostNote: 'Saved world progress updates on your device automatically. Connected guests do not save your world locally.',
   },
   ar: {
     gameTitle: 'عالم المغامرة',
@@ -3847,5 +3860,11 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     merchantBoughtAnimalNotice: (speciesName) =>
       `تم شراء ${speciesName}! تم توجيهه إلى أقرب حظيرة/قن.`,
     merchantSoldNotice: (name, count, coins) => `تم بيع ${name} ×${count} مقابل +${coins} عملة.`,
+    hostLanBtn: 'استضافة LAN محلي',
+    lanWorldSourceNew: 'عالم جديد',
+    lanWorldSourceSaved: 'عالم محفوظ',
+    lanSelectSavedWorld: 'اختر عالماً محفوظاً',
+    lanNoSavedWorldsHint: 'لا توجد عوالم محلية محفوظة بعد. أنشئ عالماً جديداً ليتم حفظ التقدم تلقائياً.',
+    lanSavedWorldHostNote: 'يتم تحديث حفظ العالم على جهازك تلقائياً. لا يقوم الضيوف المتصلون بحفظ عالمك محلياً.',
   },
 };

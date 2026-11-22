@@ -69,7 +69,12 @@ import {
 } from '../../game/multiplayer/multiplayerTypes';
 import { ProfileManager } from '../../game/profile/ProfileManager';
 import type { PlayerSearchSummary } from '../../../shared/profileTypes';
-import type { WorldType } from '../../game/save/saveTypes';
+import type {
+  SaveGameData,
+  SaveGameMeta,
+  SaveSlotId,
+  WorldType,
+} from '../../game/save/saveTypes';
 import { useMenuNavigation } from '../../hooks/useMenuNavigation';
 import { PlayerInteractionModal } from '../multiplayer/PlayerInteractionModal';
 import { PartyPanel } from '../multiplayer/PartyPanel';
@@ -96,6 +101,13 @@ export type MultiplayerSubView =
 interface MultiplayerScreenProps {
   lang: Language;
   service?: IMultiplayerService;
+  savedWorlds?: SaveGameMeta[];
+  initialLanHostSlotId?: SaveSlotId | null;
+  onConsumeInitialLanHostSlotId?: () => void;
+  onPrepareHostWorld?: (info: {
+    hostWorldSlotId: SaveSlotId | null;
+    savedWorldData: SaveGameData | null;
+  }) => void;
   initialJoinCode?: string | null;
   onConsumeInitialJoinCode?: () => void;
   onStartMultiplayerWorld?: (info: MultiplayerGameStartInfo) => void;
@@ -105,6 +117,10 @@ interface MultiplayerScreenProps {
 export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
   lang,
   service: injectedService,
+  savedWorlds = [],
+  initialLanHostSlotId = null,
+  onConsumeInitialLanHostSlotId,
+  onPrepareHostWorld,
   initialJoinCode,
   onConsumeInitialJoinCode,
   onStartMultiplayerWorld,
@@ -124,12 +140,20 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
       ? transport?.getActiveMode() === 'lan'
         ? 'offlineLan'
         : 'lobby'
-      : initialJoinCode
-        ? 'joinRoom'
-        : 'modeSelect',
+      : initialLanHostSlotId
+        ? 'offlineLan'
+        : initialJoinCode
+          ? 'joinRoom'
+          : 'modeSelect',
   );
   const [returnToLobbyAfterFriends, setReturnToLobbyAfterFriends] =
     useState(false);
+
+  useEffect(() => {
+    if (initialLanHostSlotId && !initialRoom) {
+      setSubView('offlineLan');
+    }
+  }, [initialLanHostSlotId, initialRoom]);
 
   // Profile & Friends Search state
   const [profileSnap, setProfileSnap] = useState(() =>
@@ -1205,6 +1229,10 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
             <LanMultiplayerScreen
               lang={lang}
               service={service}
+              savedWorlds={savedWorlds}
+              initialHostWorldSlotId={initialLanHostSlotId}
+              onConsumeInitialHostWorld={onConsumeInitialLanHostSlotId}
+              onPrepareHostWorld={onPrepareHostWorld}
               onStartMultiplayerWorld={onStartMultiplayerWorld}
               onBack={() => {
                 clearNotices();

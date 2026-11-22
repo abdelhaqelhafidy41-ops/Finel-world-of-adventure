@@ -402,7 +402,18 @@ export class CombatManager {
     attackerId?: string,
   ): { enemy: EnemyController; justKilled: boolean } | null {
     const enemy = this.enemies.find((e) => e.id === enemyId);
-    if (!enemy) return null;
+    if (!enemy) {
+      if (killed) {
+        const bp = this.enemyBlueprints.find((b) => b.id === enemyId);
+        if (bp) {
+          bp.defeated = true;
+          if (bp.questTarget) {
+            bp.questTarget.lifecycle = 'DEFEATED';
+          }
+        }
+      }
+      return null;
+    }
     const justKilled = enemy.applyAuthoritativeHealth(
       hp,
       maxHp,

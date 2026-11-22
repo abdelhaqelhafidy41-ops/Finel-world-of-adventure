@@ -73,6 +73,7 @@ interface PauseMenuProps {
   onSetWeatherQuality?: (quality: WeatherQuality) => void;
   isMultiplayer?: boolean;
   isHost?: boolean;
+  canSaveWorld?: boolean;
   worldSettingsPermission?: WorldSettingsPermission;
   canControlWorldSettings?: boolean;
   onSetWorldSettingsPermission?: (permission: WorldSettingsPermission) => void;
@@ -85,6 +86,7 @@ interface PauseMenuProps {
     address: string;
     roomCode: string;
   } | null;
+  onBeforeExit?: () => void | Promise<void>;
 }
 
 export const PauseMenu: React.FC<PauseMenuProps> = ({
@@ -115,7 +117,9 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   onSetWeatherQuality,
   isMultiplayer = false,
   isHost = false,
+  canSaveWorld = true,
   worldSettingsPermission = 'HOST_ONLY',
+  onBeforeExit,
   canControlWorldSettings = true,
   onSetWorldSettingsPermission,
   friendlyFire = false,
@@ -158,21 +162,19 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   const weatherQuality = weatherSnapshot?.quality ?? 'medium';
 
   const handleMainMenuClick = () => {
-    if (hasUnsavedProgress) {
+    if (canSaveWorld && hasUnsavedProgress) {
       setUnsavedPromptOpen(true);
     } else {
       onReturnToMainMenu(false);
     }
   };
 
-  const pauseActions = [
-    onResume,
-    () => onOpenMap?.(),
-    onSaveWorld,
-    onOpenSettings,
-    handleMainMenuClick,
-    () => setExitPromptOpen(true),
-  ];
+  const pauseActions: Array<() => void> = [onResume];
+  const mapNavIndex = onOpenMap ? pauseActions.push(() => onOpenMap()) - 1 : -1;
+  const saveNavIndex = canSaveWorld ? pauseActions.push(onSaveWorld) - 1 : -1;
+  const settingsNavIndex = pauseActions.push(onOpenSettings) - 1;
+  const mainMenuNavIndex = pauseActions.push(handleMainMenuClick) - 1;
+  const exitNavIndex = pauseActions.push(() => setExitPromptOpen(true)) - 1;
 
   const { focusedIndex, setFocusedIndex, registerItem } = useMenuNavigation({
     enabled: !unsavedPromptOpen && !exitPromptOpen,
@@ -387,15 +389,15 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
 
           {onOpenMap && (
             <button
-              ref={registerItem(1)}
+              ref={registerItem(mapNavIndex)}
               type="button"
               data-testid="pause-btn-map"
               onClick={() => {
-                setFocusedIndex(1);
+                setFocusedIndex(mapNavIndex);
                 onOpenMap();
               }}
               className={`w-full min-h-[48px] inline-flex items-center justify-center gap-2.5 px-5 py-3 rounded-xl bg-[#162a20] hover:bg-[#1f3b2c] border border-[#355c47] text-[#eef5ec] font-display font-bold text-sm tracking-wide transition-all cursor-pointer active:scale-[0.985] ${
-                focusedIndex === 1 ? 'ring-2 ring-[#e5a93c]' : ''
+                focusedIndex === mapNavIndex ? 'ring-2 ring-[#e5a93c]' : ''
               }`}
             >
               <MapIcon className="w-4 h-4 text-[#38bdf8]" />
@@ -428,32 +430,34 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
             </button>
           )}
 
-          <button
-            ref={registerItem(2)}
-            type="button"
-            data-testid="pause-btn-save-world"
-            onClick={() => {
-              setFocusedIndex(2);
-              onSaveWorld();
-            }}
-            className={`w-full min-h-[48px] inline-flex items-center justify-center gap-2.5 px-5 py-3 rounded-xl bg-[#1a3124] hover:bg-[#234131] border border-[#355c47] text-[#eef5ec] font-display font-bold text-sm tracking-wide transition-all cursor-pointer active:scale-[0.985] ${
-              focusedIndex === 2 ? 'ring-2 ring-[#e5a93c]' : ''
-            }`}
-          >
-            <Save className="w-4 h-4 text-[#7fe094]" />
-            <span>{t.pauseSaveWorld}</span>
-          </button>
+          {canSaveWorld && (
+            <button
+              ref={registerItem(saveNavIndex)}
+              type="button"
+              data-testid="pause-btn-save-world"
+              onClick={() => {
+                setFocusedIndex(saveNavIndex);
+                onSaveWorld();
+              }}
+              className={`w-full min-h-[48px] inline-flex items-center justify-center gap-2.5 px-5 py-3 rounded-xl bg-[#1a3124] hover:bg-[#234131] border border-[#355c47] text-[#eef5ec] font-display font-bold text-sm tracking-wide transition-all cursor-pointer active:scale-[0.985] ${
+                focusedIndex === saveNavIndex ? 'ring-2 ring-[#e5a93c]' : ''
+              }`}
+            >
+              <Save className="w-4 h-4 text-[#7fe094]" />
+              <span>{t.pauseSaveWorld}</span>
+            </button>
+          )}
 
           <button
-            ref={registerItem(3)}
+            ref={registerItem(settingsNavIndex)}
             type="button"
             data-testid="pause-btn-settings"
             onClick={() => {
-              setFocusedIndex(3);
+              setFocusedIndex(settingsNavIndex);
               onOpenSettings();
             }}
             className={`w-full min-h-[48px] inline-flex items-center justify-center gap-2.5 px-5 py-3 rounded-xl bg-[#16271e] hover:bg-[#1e3529] border border-[#2f493b] text-[#e4ece1] font-display font-bold text-sm tracking-wide transition-all cursor-pointer active:scale-[0.985] ${
-              focusedIndex === 3 ? 'ring-2 ring-[#e5a93c]' : ''
+              focusedIndex === settingsNavIndex ? 'ring-2 ring-[#e5a93c]' : ''
             }`}
           >
             <Settings className="w-4 h-4 text-[#e5a93c]" />
@@ -461,15 +465,15 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
           </button>
 
           <button
-            ref={registerItem(4)}
+            ref={registerItem(mainMenuNavIndex)}
             type="button"
             data-testid="pause-btn-main-menu"
             onClick={() => {
-              setFocusedIndex(4);
+              setFocusedIndex(mainMenuNavIndex);
               handleMainMenuClick();
             }}
             className={`w-full min-h-[48px] inline-flex items-center justify-center gap-2.5 px-5 py-3 rounded-xl bg-[#16271e] hover:bg-[#1e3529] border border-[#2f493b] text-[#e4ece1] font-display font-bold text-sm tracking-wide transition-all cursor-pointer active:scale-[0.985] ${
-              focusedIndex === 4 ? 'ring-2 ring-[#e5a93c]' : ''
+              focusedIndex === mainMenuNavIndex ? 'ring-2 ring-[#e5a93c]' : ''
             }`}
           >
             <Home className="w-4 h-4 text-[#9cc6e8]" />
@@ -477,15 +481,15 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
           </button>
 
           <button
-            ref={registerItem(5)}
+            ref={registerItem(exitNavIndex)}
             type="button"
             data-testid="pause-btn-exit"
             onClick={() => {
-              setFocusedIndex(5);
+              setFocusedIndex(exitNavIndex);
               setExitPromptOpen(true);
             }}
             className={`w-full min-h-[48px] inline-flex items-center justify-center gap-2.5 px-5 py-3 rounded-xl bg-[#271516] hover:bg-[#381d1f] border border-[#e05a47]/40 text-[#f5ddd9] font-display font-bold text-sm tracking-wide transition-all cursor-pointer active:scale-[0.985] ${
-              focusedIndex === 5 ? 'ring-2 ring-[#e5a93c]' : ''
+              focusedIndex === exitNavIndex ? 'ring-2 ring-[#e5a93c]' : ''
             }`}
           >
             <LogOut className="w-4 h-4 text-[#f28b7d]" />
@@ -511,7 +515,7 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
 
           {toolsExpanded && (
             <div className="mt-3 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className={`grid grid-cols-1 ${canSaveWorld ? 'sm:grid-cols-2' : ''} gap-2`}>
                 <button
                   type="button"
                   onClick={onResetPosition}
@@ -521,15 +525,17 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                   <span className="truncate">{t.returnToSpawn}</span>
                 </button>
 
-                <button
-                  type="button"
-                  data-testid="open-save-slots-btn"
-                  onClick={onOpenSaveSlots}
-                  className="min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-[#192a21] hover:bg-[#21362b] border border-[#2f493b] text-xs font-medium text-[#e4ece1] cursor-pointer"
-                >
-                  <FolderOpen className="w-3.5 h-3.5 text-[#e5a93c]" />
-                  <span className="truncate">{t.saveLoadTitle}</span>
-                </button>
+                {canSaveWorld && (
+                  <button
+                    type="button"
+                    data-testid="open-save-slots-btn"
+                    onClick={onOpenSaveSlots}
+                    className="min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-[#192a21] hover:bg-[#21362b] border border-[#2f493b] text-xs font-medium text-[#e4ece1] cursor-pointer"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 text-[#e5a93c]" />
+                    <span className="truncate">{t.saveLoadTitle}</span>
+                  </button>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -903,7 +909,7 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
       </div>
 
       {/* Unsaved Progress Confirmation Dialog before returning to Main Menu */}
-      {unsavedPromptOpen && (
+      {canSaveWorld && unsavedPromptOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-[#060d09]/80 backdrop-blur-sm p-4 mobile-hud-safe"
           role="alertdialog"
@@ -973,6 +979,7 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
         <ExitConfirmationDialog
           lang={lang}
           onClose={() => setExitPromptOpen(false)}
+          onBeforeExit={onBeforeExit}
         />
       )}
     </div>

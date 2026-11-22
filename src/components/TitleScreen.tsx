@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { Language } from '../game/i18n/translations';
 import type {
   NewWorldOptions,
+  SaveGameData,
   SaveGameMeta,
   SaveSlotId,
 } from '../game/save/saveTypes';
@@ -62,6 +63,8 @@ interface TitleScreenProps {
   onContinue: () => void;
   onCreateWorld: (options: NewWorldOptions) => void;
   onPlayWorld: (slotId: SaveSlotId) => void;
+  canHostLan?: boolean;
+  onHostWorldLan?: (slotId: SaveSlotId) => void;
   onDeleteWorld: (slotId: SaveSlotId) => void;
   onApplySettings: (payload: {
     lang: Language;
@@ -76,6 +79,12 @@ interface TitleScreenProps {
   multiplayerService?: IMultiplayerService;
   initialJoinCode?: string | null;
   onConsumeInitialJoinCode?: () => void;
+  initialLanHostSlotId?: SaveSlotId | null;
+  onConsumeInitialLanHostSlotId?: () => void;
+  onPrepareHostWorld?: (info: {
+    hostWorldSlotId: SaveSlotId | null;
+    savedWorldData: SaveGameData | null;
+  }) => void;
   onStartMultiplayerWorld?: (info: MultiplayerGameStartInfo) => void;
   onOpenProfile?: () => void;
 }
@@ -97,6 +106,8 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onContinue,
   onCreateWorld,
   onPlayWorld,
+  canHostLan = false,
+  onHostWorldLan,
   onDeleteWorld,
   onApplySettings,
   onPreviewAudio,
@@ -105,6 +116,9 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   multiplayerService,
   initialJoinCode,
   onConsumeInitialJoinCode,
+  initialLanHostSlotId = null,
+  onConsumeInitialLanHostSlotId,
+  onPrepareHostWorld,
   onStartMultiplayerWorld,
   onOpenProfile,
 }) => {
@@ -191,7 +205,9 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
         <WorldSelectionScreen
           lang={lang}
           worlds={savedWorlds}
+          canHostLan={canHostLan}
           onPlayWorld={onPlayWorld}
+          onHostWorldLan={onHostWorldLan}
           onDeleteWorld={onDeleteWorld}
           onCreateNewWorld={() => onChangeSubScreen('newWorld')}
           onBack={() => onChangeSubScreen('main')}
@@ -202,6 +218,10 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
         <MultiplayerScreen
           lang={lang}
           service={multiplayerService}
+          savedWorlds={savedWorlds}
+          initialLanHostSlotId={initialLanHostSlotId}
+          onConsumeInitialLanHostSlotId={onConsumeInitialLanHostSlotId}
+          onPrepareHostWorld={onPrepareHostWorld}
           initialJoinCode={initialJoinCode}
           onConsumeInitialJoinCode={onConsumeInitialJoinCode}
           onStartMultiplayerWorld={onStartMultiplayerWorld}

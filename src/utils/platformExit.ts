@@ -15,6 +15,20 @@ export interface DesktopLanBridgeApi {
   }>;
 }
 
+export interface DesktopWorldStorageApi {
+  listWorlds: () => Promise<{ ok: boolean; worldIds?: string[]; error?: string }>;
+  readBundle: (worldId: string) => Promise<{
+    ok: boolean;
+    bundle?: Record<string, unknown>;
+    error?: string;
+  }>;
+  writeBundle: (
+    worldId: string,
+    bundle: Record<string, unknown>,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  deleteWorld: (worldId: string) => Promise<{ ok: boolean; error?: string }>;
+}
+
 interface DesktopAppApi {
   isDesktop?: boolean;
   platform?: string;
@@ -22,6 +36,7 @@ interface DesktopAppApi {
   isFullscreen?: () => Promise<boolean>;
   quitApp?: () => Promise<void>;
   lan?: DesktopLanBridgeApi;
+  worldStorage?: DesktopWorldStorageApi;
 }
 
 interface AndroidNativeBridgeApi {
@@ -32,6 +47,10 @@ interface AndroidNativeBridgeApi {
   getLanStatus?: () => string;
   getLocalIp?: () => string;
   discoverLanHosts?: (timeoutMs: number) => string;
+  listSavedWorldIds?: () => string;
+  readWorldBundle?: (worldId: string) => string;
+  writeWorldBundle?: (worldId: string, bundleJson: string) => string;
+  deleteWorldBundle?: (worldId: string) => string;
   setOrientation?: (mode: string) => void;
   getOrientation?: () => string;
 }
