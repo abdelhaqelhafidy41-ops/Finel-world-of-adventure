@@ -12,6 +12,7 @@ files:
   - electron/main.cjs
   - electron/preload.cjs
   - electron/lanServer.cjs
+  - electron/windowsStorage.cjs
   - electron/icon.ico
   - electron/icon.png
   - package.json

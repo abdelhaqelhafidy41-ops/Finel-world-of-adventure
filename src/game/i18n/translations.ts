@@ -13,6 +13,9 @@ import type {
   PlacementValidationReason,
 } from '../building/buildingTypes';
 
+import { syncLanguageSettingToAndroid } from '../settings/AndroidSettingsSync';
+import { syncLanguageSettingToWindows } from '../settings/WindowsSettingsSync';
+
 export type Language = 'en' | 'ar';
 
 export const LANGUAGE_STORAGE_KEY = 'woa_language_v1';
@@ -33,6 +36,8 @@ export function saveLanguage(lang: Language): void {
   } catch {
     // Ignore storage access errors
   }
+  syncLanguageSettingToAndroid(lang);
+  syncLanguageSettingToWindows(lang);
 }
 
 export const BIOME_LABELS: Record<Language, Record<BiomeType, string>> = {
@@ -1527,6 +1532,15 @@ export interface UiStrings {
   lanSelectSavedWorld: string;
   lanNoSavedWorldsHint: string;
   lanSavedWorldHostNote: string;
+  // Android Visible Shared Storage Status
+  androidStorageTitle: string;
+  androidStorageStateInitialized: string;
+  androidStorageStateAvailable: string;
+  androidStorageStatePermissionRequired: string;
+  androidStorageStateNotAccessible: string;
+  androidStorageGrantBtn: string;
+  androidStorageChooseFolderBtn: string;
+  androidStoragePermHint: string;
 }
 
 export const UI_TEXT: Record<Language, UiStrings> = {
@@ -2698,6 +2712,14 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     lanSelectSavedWorld: 'Select Saved World',
     lanNoSavedWorldsHint: 'No saved local worlds found yet. Create a new world to save progress automatically.',
     lanSavedWorldHostNote: 'Saved world progress updates on your device automatically. Connected guests do not save your world locally.',
+    androidStorageTitle: 'Save Folder Storage',
+    androidStorageStateInitialized: 'Successfully initialized',
+    androidStorageStateAvailable: 'Available',
+    androidStorageStatePermissionRequired: 'Permission required',
+    androidStorageStateNotAccessible: 'Not accessible',
+    androidStorageGrantBtn: 'Grant Access',
+    androidStorageChooseFolderBtn: 'Choose Folder (SAF)',
+    androidStoragePermHint: 'Grant storage permission to save worlds and settings directly inside /storage/emulated/0/World of Adventure/.',
   },
   ar: {
     gameTitle: 'عالم المغامرة',
@@ -3866,5 +3888,13 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     lanSelectSavedWorld: 'اختر عالماً محفوظاً',
     lanNoSavedWorldsHint: 'لا توجد عوالم محلية محفوظة بعد. أنشئ عالماً جديداً ليتم حفظ التقدم تلقائياً.',
     lanSavedWorldHostNote: 'يتم تحديث حفظ العالم على جهازك تلقائياً. لا يقوم الضيوف المتصلون بحفظ عالمك محلياً.',
+    androidStorageTitle: 'مجلد الحفظ على الجهاز',
+    androidStorageStateInitialized: 'تم التهيئة بنجاح',
+    androidStorageStateAvailable: 'متاح',
+    androidStorageStatePermissionRequired: 'يتطلب إذن الوصول',
+    androidStorageStateNotAccessible: 'غير متاح للوصول',
+    androidStorageGrantBtn: 'منح الإذن',
+    androidStorageChooseFolderBtn: 'اختر مجلدًا (SAF)',
+    androidStoragePermHint: 'امنح إذن التخزين لحفظ العوالم والإعدادات مباشرة داخل /storage/emulated/0/World of Adventure/.',
   },
 };

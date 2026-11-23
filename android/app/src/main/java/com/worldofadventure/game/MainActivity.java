@@ -1,11 +1,17 @@
 package com.worldofadventure.game;
 
+import android.Manifest;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.DocumentsContract;
+import android.provider.Settings;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
@@ -13,145 +19,101 @@ import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
 
     private LanMultiplayerServer lanServer;
-    private final Object worldStorageLock = new Object();
+    private AndroidExternalStorageManager storageManager;
 
-    private File getWorldsRootDir() {
-        File gameData = new File(getFilesDir(), "GameData");
-        return new File(gameData, "Worlds");
+    private ActivityResultLauncher<String[]> runtimePermissionLauncher;
+    private ActivityResultLauncher<Intent> allFilesSettingsLauncher;
+    private ActivityResultLauncher<Intent> safFolderLauncher;
+
+    private void notifyWebStorageStatusChanged() {
+        if (getBridge() == null || storageManager == null) return;
+        final String statusJson = storageManager.getStorageStatusJson();
+        runOnUiThread(() -> {
+            if (getBridge() != null) {
+                getBridge().eval(
+                    "window.__onAndroidStorageStatusChanged && window.__onAndroidStorageStatusChanged(" +
+                    JSONObject.quote(statusJson) +
+                    ");",
+                    null
+                );
+            }
+        });
     }
 
-    private File resolveSafeWorldDir(String worldId) {
-        if (worldId == null) return null;
-        String trimmed = worldId.trim();
-        if (!trimmed.matches("^[A-Za-z0-9_-]{1,80}$")) return null;
-        if (".".equals(trimmed) || "..".equals(trimmed)) return null;
+    private void launchSafFolderPicker() {
         try {
-            File root = getWorldsRootDir();
-            File target = new File(root, trimmed);
-            String rootCanonical = root.getCanonicalPath();
-            String targetCanonical = target.getCanonicalPath();
-            if (!targetCanonical.startsWith(rootCanonical + File.separator)) {
-                return null;
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            intent.addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION |
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION |
+                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+            );
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Uri initialUri = DocumentsContract.buildRootUri(
+                    "com.android.externalstorage.documents",
+                    "primary"
+                );
+                intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri);
             }
-            return target;
-        } catch (IOException e) {
-            return null;
+            safFolderLauncher.launch(intent);
+        } catch (Exception ignored) {
+            notifyWebStorageStatusChanged();
         }
     }
 
-    private String readFileUtf8(File file) throws IOException {
-        try (FileInputStream fis = new FileInputStream(file);
-             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = fis.read(buf)) != -1) {
-                baos.write(buf, 0, n);
-            }
-            return new String(baos.toByteArray(), StandardCharsets.UTF_8);
-        }
-    }
-
-    private JSONObject readJsonFileWithBackup(File file) {
-        File bak = new File(file.getParentFile(), file.getName() + ".bak");
-        File[] candidates = new File[] { file, bak };
-        for (File candidate : candidates) {
-            if (!candidate.exists() || !candidate.isFile()) continue;
-            try {
-                String raw = readFileUtf8(candidate);
-                if (raw.trim().isEmpty()) continue;
-                JSONObject parsed = new JSONObject(raw);
-                if (candidate == bak) {
-                    try {
-                        writeJsonFileAtomic(file, parsed);
-                    } catch (Exception ignored) {
-                    }
-                }
-                return parsed;
-            } catch (Exception ignored) {
-                // Fall back to .bak if primary is corrupted
-            }
-        }
-        return null;
-    }
-
-    private void writeJsonFileAtomic(File file, JSONObject payload) throws Exception {
-        if (payload == null) {
-            throw new IllegalArgumentException("Null JSON payload");
-        }
-        String serialized = payload.toString();
-        // Verify JSON parses cleanly before touching disk
-        new JSONObject(serialized);
-
-        File parent = file.getParentFile();
-        if (parent != null && !parent.exists()) {
-            parent.mkdirs();
-        }
-
-        File tmp = new File(parent, file.getName() + ".tmp");
-        File bak = new File(parent, file.getName() + ".bak");
-        byte[] bytes = serialized.getBytes(StandardCharsets.UTF_8);
-
-        try (FileOutputStream fos = new FileOutputStream(tmp, false)) {
-            fos.write(bytes);
-            fos.flush();
-            fos.getFD().sync();
-        }
-
-        if (file.exists() && file.isFile()) {
-            try {
-                String prevRaw = readFileUtf8(file);
-                if (!prevRaw.trim().isEmpty()) {
-                    new JSONObject(prevRaw);
-                    try (FileOutputStream bakFos = new FileOutputStream(bak, false)) {
-                        bakFos.write(prevRaw.getBytes(StandardCharsets.UTF_8));
-                        bakFos.flush();
-                        bakFos.getFD().sync();
-                    }
-                }
-            } catch (Exception ignored) {
-                // Existing file unreadable; skip backup overwrite
-            }
-        }
-
-        if (file.exists() && !file.delete()) {
-            // Try rename directly on POSIX; if failed on older FS, copy over
-            if (!tmp.renameTo(file)) {
-                throw new IOException("Unable to replace target world save file: " + file.getName());
-            }
+    private void requestStoragePermissionInternal(boolean autoLaunchFallbackSaf) {
+        if (storageManager == null) return;
+        if (storageManager.hasDirectSharedStoragePermission() || storageManager.getPersistedSafTreeUri() != null) {
+            storageManager.ensureInitialized();
+            notifyWebStorageStatusChanged();
             return;
         }
-        if (!tmp.renameTo(file)) {
-            throw new IOException("Unable to commit atomic rename for: " + file.getName());
-        }
-    }
 
-    private void deleteRecursive(File target) {
-        if (target == null || !target.exists()) return;
-        if (target.isDirectory()) {
-            File[] children = target.listFiles();
-            if (children != null) {
-                for (File child : children) {
-                    deleteRecursive(child);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                try {
+                    Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                    intent.setData(Uri.parse("package:" + getPackageName()));
+                    allFilesSettingsLauncher.launch(intent);
+                    return;
+                } catch (Exception e) {
+                    try {
+                        Intent fallbackIntent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+                        allFilesSettingsLauncher.launch(fallbackIntent);
+                        return;
+                    } catch (Exception ignored) {
+                        if (autoLaunchFallbackSaf) {
+                            launchSafFolderPicker();
+                            return;
+                        }
+                    }
                 }
             }
+        } else {
+            runtimePermissionLauncher.launch(
+                new String[] {
+                    Manifest.permission.READ_EXTERNAL_STORAGE,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                }
+            );
+            return;
         }
-        target.delete();
+
+        if (autoLaunchFallbackSaf) {
+            launchSafFolderPicker();
+        }
     }
 
     private class AndroidNativeBridge {
@@ -183,135 +145,75 @@ public class MainActivity extends BridgeActivity {
 
         @JavascriptInterface
         public String listSavedWorldIds() {
-            synchronized (worldStorageLock) {
-                try {
-                    File root = getWorldsRootDir();
-                    JSONArray arr = new JSONArray();
-                    if (root.exists() && root.isDirectory()) {
-                        File[] entries = root.listFiles();
-                        if (entries != null) {
-                            for (File entry : entries) {
-                                if (!entry.isDirectory()) continue;
-                                File safeDir = resolveSafeWorldDir(entry.getName());
-                                if (safeDir == null) continue;
-                                File wd = new File(safeDir, "world-data.json");
-                                File wdBak = new File(safeDir, "world-data.json.bak");
-                                if (wd.exists() || wdBak.exists()) {
-                                    arr.put(safeDir.getName());
-                                }
-                            }
-                        }
-                    }
-                    JSONObject res = new JSONObject();
-                    res.put("ok", true);
-                    res.put("worldIds", arr);
-                    return res.toString();
-                } catch (Exception e) {
-                    return "{\"ok\":false,\"worldIds\":[]}";
-                }
-            }
+            return storageManager != null
+                ? storageManager.listSavedWorldIdsJson()
+                : "{\"ok\":false,\"worldIds\":[]}";
         }
 
         @JavascriptInterface
         public String readWorldBundle(String worldId) {
-            synchronized (worldStorageLock) {
-                try {
-                    File worldDir = resolveSafeWorldDir(worldId);
-                    if (worldDir == null) {
-                        return "{\"ok\":false,\"error\":\"INVALID_WORLD_ID\"}";
-                    }
-                    JSONObject worldData = readJsonFileWithBackup(new File(worldDir, "world-data.json"));
-                    if (worldData == null) {
-                        return "{\"ok\":false,\"error\":\"WORLD_NOT_FOUND\"}";
-                    }
-                    JSONObject settings = readJsonFileWithBackup(new File(worldDir, "settings.json"));
-                    if (settings == null) settings = new JSONObject();
-                    JSONObject playerData = readJsonFileWithBackup(new File(worldDir, "player-data.json"));
-                    if (playerData == null) playerData = new JSONObject();
-                    JSONObject worldState = readJsonFileWithBackup(new File(worldDir, "world-state.json"));
-                    if (worldState == null) worldState = new JSONObject();
-
-                    int saveVersion = worldData.optInt("saveVersion", 1);
-                    JSONObject bundle = new JSONObject();
-                    bundle.put("saveVersion", saveVersion);
-                    bundle.put("worldData", worldData);
-                    bundle.put("settings", settings);
-                    bundle.put("playerData", playerData);
-                    bundle.put("worldState", worldState);
-
-                    JSONObject res = new JSONObject();
-                    res.put("ok", true);
-                    res.put("bundle", bundle);
-                    return res.toString();
-                } catch (Exception e) {
-                    JSONObject err = new JSONObject();
-                    try {
-                        err.put("ok", false);
-                        err.put("error", e.getMessage() != null ? e.getMessage() : "READ_FAILED");
-                    } catch (Exception ignored) {
-                    }
-                    return err.toString();
-                }
-            }
+            return storageManager != null
+                ? storageManager.readWorldBundleJson(worldId)
+                : "{\"ok\":false,\"error\":\"NOT_READY\"}";
         }
 
         @JavascriptInterface
         public String writeWorldBundle(String worldId, String bundleJson) {
-            synchronized (worldStorageLock) {
-                try {
-                    File worldDir = resolveSafeWorldDir(worldId);
-                    if (worldDir == null) {
-                        return "{\"ok\":false,\"error\":\"INVALID_WORLD_ID\"}";
-                    }
-                    if (bundleJson == null || bundleJson.trim().isEmpty()) {
-                        return "{\"ok\":false,\"error\":\"EMPTY_BUNDLE\"}";
-                    }
-                    JSONObject bundle = new JSONObject(bundleJson);
-                    JSONObject worldData = bundle.optJSONObject("worldData");
-                    JSONObject settings = bundle.optJSONObject("settings");
-                    JSONObject playerData = bundle.optJSONObject("playerData");
-                    JSONObject worldState = bundle.optJSONObject("worldState");
-                    if (worldData == null || settings == null || playerData == null || worldState == null) {
-                        return "{\"ok\":false,\"error\":\"INVALID_BUNDLE\"}";
-                    }
-                    if (!worldDir.exists()) {
-                        worldDir.mkdirs();
-                    }
-                    int saveVersion = bundle.optInt("saveVersion", 1);
-                    worldData.put("saveVersion", saveVersion);
-
-                    writeJsonFileAtomic(new File(worldDir, "world-data.json"), worldData);
-                    writeJsonFileAtomic(new File(worldDir, "settings.json"), settings);
-                    writeJsonFileAtomic(new File(worldDir, "player-data.json"), playerData);
-                    writeJsonFileAtomic(new File(worldDir, "world-state.json"), worldState);
-
-                    return "{\"ok\":true}";
-                } catch (Exception e) {
-                    JSONObject err = new JSONObject();
-                    try {
-                        err.put("ok", false);
-                        err.put("error", e.getMessage() != null ? e.getMessage() : "WRITE_FAILED");
-                    } catch (Exception ignored) {
-                    }
-                    return err.toString();
-                }
-            }
+            return storageManager != null
+                ? storageManager.writeWorldBundleJson(worldId, bundleJson)
+                : "{\"ok\":false,\"error\":\"NOT_READY\"}";
         }
 
         @JavascriptInterface
         public String deleteWorldBundle(String worldId) {
-            synchronized (worldStorageLock) {
-                try {
-                    File worldDir = resolveSafeWorldDir(worldId);
-                    if (worldDir == null) {
-                        return "{\"ok\":false,\"error\":\"INVALID_WORLD_ID\"}";
-                    }
-                    deleteRecursive(worldDir);
-                    return "{\"ok\":true}";
-                } catch (Exception e) {
-                    return "{\"ok\":false,\"error\":\"DELETE_FAILED\"}";
-                }
-            }
+            return storageManager != null
+                ? storageManager.deleteWorldBundleJson(worldId)
+                : "{\"ok\":false,\"error\":\"NOT_READY\"}";
+        }
+
+        @JavascriptInterface
+        public String getStorageStatus() {
+            return storageManager != null
+                ? storageManager.getStorageStatusJson()
+                : "{\"ok\":false,\"platform\":\"android\",\"state\":\"not_accessible\"}";
+        }
+
+        @JavascriptInterface
+        public void requestStoragePermission() {
+            runOnUiThread(() -> requestStoragePermissionInternal(true));
+        }
+
+        @JavascriptInterface
+        public void requestSafFolderAccess() {
+            runOnUiThread(() -> launchSafFolderPicker());
+        }
+
+        @JavascriptInterface
+        public String readAllSettings() {
+            return storageManager != null
+                ? storageManager.readAllSettingsJson()
+                : "{\"ok\":false,\"writable\":false,\"hasAny\":false,\"settings\":{}}";
+        }
+
+        @JavascriptInterface
+        public String writeSettingFile(String settingKey, String jsonContent) {
+            return storageManager != null
+                ? storageManager.writeSettingFileJson(settingKey, jsonContent)
+                : "{\"ok\":false,\"error\":\"NOT_READY\"}";
+        }
+
+        @JavascriptInterface
+        public String writeProfileFile(String jsonContent) {
+            return storageManager != null
+                ? storageManager.writeProfileFileJson(jsonContent)
+                : "{\"ok\":false,\"error\":\"NOT_READY\"}";
+        }
+
+        @JavascriptInterface
+        public String readProfileFile() {
+            return storageManager != null
+                ? storageManager.readProfileFileJson()
+                : "{\"ok\":false,\"error\":\"NOT_READY\"}";
         }
 
         @JavascriptInterface
@@ -372,13 +274,87 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        runtimePermissionLauncher = registerForActivityResult(
+            new ActivityResultContracts.RequestMultiplePermissions(),
+            result -> {
+                if (storageManager != null) {
+                    storageManager.ensureInitialized();
+                }
+                notifyWebStorageStatusChanged();
+            }
+        );
+
+        allFilesSettingsLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
+            result -> {
+                if (storageManager != null) {
+                    storageManager.ensureInitialized();
+                }
+                notifyWebStorageStatusChanged();
+            }
+        );
+
+        safFolderLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
+            result -> {
+                if (result != null && result.getResultCode() == RESULT_OK && result.getData() != null) {
+                    Uri treeUri = result.getData().getData();
+                    if (treeUri != null) {
+                        int takeFlags = result.getData().getFlags() &
+                            (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                        if (takeFlags == 0) {
+                            takeFlags =
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+                        }
+                        try {
+                            getContentResolver().takePersistableUriPermission(treeUri, takeFlags);
+                        } catch (Exception ignored) {
+                        }
+                        if (storageManager != null) {
+                            storageManager.saveSafTreeUri(treeUri);
+                        }
+                    }
+                }
+                notifyWebStorageStatusChanged();
+            }
+        );
+
         super.onCreate(savedInstanceState);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR);
         lanServer = new LanMultiplayerServer(this);
+        storageManager = new AndroidExternalStorageManager(this);
+        storageManager.ensureInitialized();
+
         configureFullscreen();
         configureWebView();
         registerBackButtonHandler();
         handleJoinIntent(getIntent());
+
+        if (
+            !storageManager.hasDirectSharedStoragePermission() &&
+            storageManager.getPersistedSafTreeUri() == null &&
+            !storageManager.hasAskedInitialPermission()
+        ) {
+            storageManager.markAskedInitialPermission();
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> {
+                    if (!isFinishing() && !isDestroyed()) {
+                        requestStoragePermissionInternal(false);
+                    }
+                },
+                650
+            );
+        }
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        if (storageManager != null) {
+            storageManager.ensureInitialized();
+            notifyWebStorageStatusChanged();
+        }
     }
 
     @Override

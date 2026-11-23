@@ -29,6 +29,29 @@ export interface DesktopWorldStorageApi {
   deleteWorld: (worldId: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
+export interface DesktopSettingsStorageApi {
+  readAll: () => Promise<{
+    ok: boolean;
+    enabled?: boolean;
+    hasAny?: boolean;
+    rootPath?: string;
+    settings?: Record<string, Record<string, unknown>>;
+    error?: string;
+  }>;
+  writeSetting: (
+    settingKey: 'game' | 'graphics' | 'audio' | 'controls' | 'language',
+    payload: Record<string, unknown>,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  readProfile: () => Promise<{
+    ok: boolean;
+    profile?: Record<string, unknown>;
+    error?: string;
+  }>;
+  writeProfile: (
+    payload: Record<string, unknown>,
+  ) => Promise<{ ok: boolean; error?: string }>;
+}
+
 interface DesktopAppApi {
   isDesktop?: boolean;
   platform?: string;
@@ -37,6 +60,28 @@ interface DesktopAppApi {
   quitApp?: () => Promise<void>;
   lan?: DesktopLanBridgeApi;
   worldStorage?: DesktopWorldStorageApi;
+  settingsStorage?: DesktopSettingsStorageApi;
+}
+
+export type AndroidStorageState =
+  | 'initialized'
+  | 'available'
+  | 'permission_required'
+  | 'not_accessible';
+
+export interface AndroidStorageStatus {
+  ok: boolean;
+  platform: 'android';
+  state: AndroidStorageState;
+  mode: 'direct' | 'saf' | 'none';
+  path: string;
+  writable: boolean;
+  initialized: boolean;
+  sdkInt?: number;
+  canRequestAllFiles?: boolean;
+  hasSafGrant?: boolean;
+  migratedWorldsCount?: number;
+  lastError?: string;
 }
 
 interface AndroidNativeBridgeApi {
@@ -51,6 +96,13 @@ interface AndroidNativeBridgeApi {
   readWorldBundle?: (worldId: string) => string;
   writeWorldBundle?: (worldId: string, bundleJson: string) => string;
   deleteWorldBundle?: (worldId: string) => string;
+  getStorageStatus?: () => string;
+  requestStoragePermission?: () => void;
+  requestSafFolderAccess?: () => void;
+  readAllSettings?: () => string;
+  writeSettingFile?: (settingKey: string, jsonContent: string) => string;
+  writeProfileFile?: (jsonContent: string) => string;
+  readProfileFile?: () => string;
   setOrientation?: (mode: string) => void;
   getOrientation?: () => string;
 }
@@ -65,6 +117,7 @@ declare global {
     desktopApp?: DesktopAppApi;
     AndroidNativeBridge?: AndroidNativeBridgeApi;
     Capacitor?: CapacitorGlobal;
+    __onAndroidStorageStatusChanged?: (statusJson: string) => void;
   }
 }
 

@@ -16,8 +16,14 @@ const {
   getPrimaryLanIp,
   DEFAULT_LAN_PORT,
 } = require('./lanServer.cjs');
+const { createDesktopStorageManager } = require('./windowsStorage.cjs');
 
 const lanServer = new OfflineLanServer();
+const desktopStorage = createDesktopStorageManager({
+  getDocumentsPath: () => app.getPath('documents'),
+  getUserDataPath: () => app.getPath('userData'),
+  platform: process.platform,
+});
 
 const APP_NAME = 'World of Adventure';
 const APP_SCHEME = 'app';
@@ -205,8 +211,9 @@ ipcMain.handle('desktop:is-fullscreen', () => {
   return mainWindow ? mainWindow.isFullScreen() : false;
 });
 
-ipcMain.handle('desktop:quit-app', () => {
+ipcMain.handle('desktop:quit-app', async () => {
   void lanServer.stop();
+  await desktopStorage.flushPendingWrites().catch(() => {});
   app.quit();
 });
 
@@ -236,204 +243,36 @@ ipcMain.handle('lan:get-local-ip', () => {
   return getPrimaryLanIp();
 });
 
-const WORLD_STORAGE_LOCK = new Map();
-
-function getWorldsRoot() {
-  return path.join(app.getPath('userData'), 'GameData', 'Worlds');
-}
-
-function sanitizeWorldId(worldId) {
-  if (typeof worldId !== 'string') return null;
-  const trimmed = worldId.trim();
-  if (!/^[A-Za-z0-9_-]{1,80}$/.test(trimmed)) return null;
-  if (trimmed === '.' || trimmed === '..') return null;
-  const root = path.resolve(getWorldsRoot());
-  const target = path.resolve(root, trimmed);
-  if (!target.startsWith(root + path.sep)) return null;
-  return { id: trimmed, dir: target };
-}
-
-function parseValidJson(raw) {
-  if (typeof raw !== 'string' || !raw.trim()) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function readJsonFileWithBackup(filePath) {
-  const candidates = [filePath, `${filePath}.bak`];
-  for (const candidate of candidates) {
-    try {
-      if (!fs.existsSync(candidate)) continue;
-      const raw = fs.readFileSync(candidate, 'utf8');
-      const parsed = parseValidJson(raw);
-      if (parsed) {
-        if (candidate !== filePath) {
-          try {
-            fs.copyFileSync(candidate, filePath);
-          } catch {
-            // Ignore repair copy failure; parsed data is still valid
-          }
-        }
-        return parsed;
-      }
-    } catch {
-      // Try backup
-    }
-  }
-  return null;
-}
-
-function writeJsonFileAtomic(filePath, dataObj) {
-  if (!dataObj || typeof dataObj !== 'object' || Array.isArray(dataObj)) {
-    throw new Error('Invalid JSON payload for world save file.');
-  }
-  const serialized = JSON.stringify(dataObj);
-  // Verify serialization produces valid JSON before touching disk
-  if (!parseValidJson(serialized)) {
-    throw new Error('Failed JSON serialization verification.');
-  }
-  const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
-  const tmpPath = `${filePath}.tmp`;
-  const bakPath = `${filePath}.bak`;
-  const fd = fs.openSync(tmpPath, 'w');
-  try {
-    fs.writeSync(fd, serialized, 0, 'utf8');
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  if (fs.existsSync(filePath)) {
-    try {
-      const existingRaw = fs.readFileSync(filePath, 'utf8');
-      if (parseValidJson(existingRaw)) {
-        fs.copyFileSync(filePath, bakPath);
-      }
-    } catch {
-      // Ignore if existing file was unreadable
-    }
-  }
-  fs.renameSync(tmpPath, filePath);
-}
-
-async function withWorldLock(worldId, task) {
-  const prev = WORLD_STORAGE_LOCK.get(worldId) || Promise.resolve();
-  let release;
-  const current = new Promise((resolve) => {
-    release = resolve;
-  });
-  WORLD_STORAGE_LOCK.set(worldId, current);
-  try {
-    await prev;
-    return await task();
-  } finally {
-    release();
-    if (WORLD_STORAGE_LOCK.get(worldId) === current) {
-      WORLD_STORAGE_LOCK.delete(worldId);
-    }
-  }
-}
-
 ipcMain.handle('worldStorage:listWorlds', async () => {
-  try {
-    const root = getWorldsRoot();
-    if (!fs.existsSync(root)) return { ok: true, worldIds: [] };
-    const entries = fs.readdirSync(root, { withFileTypes: true });
-    const worldIds = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const safe = sanitizeWorldId(entry.name);
-      if (!safe) continue;
-      const worldDataPath = path.join(safe.dir, 'world-data.json');
-      if (fs.existsSync(worldDataPath) || fs.existsSync(`${worldDataPath}.bak`)) {
-        worldIds.push(safe.id);
-      }
-    }
-    return { ok: true, worldIds };
-  } catch (err) {
-    return { ok: false, worldIds: [], error: (err && err.message) || 'LIST_FAILED' };
-  }
+  return desktopStorage.listWorlds();
 });
 
 ipcMain.handle('worldStorage:readBundle', async (_event, worldId) => {
-  const safe = sanitizeWorldId(worldId);
-  if (!safe) return { ok: false, error: 'INVALID_WORLD_ID' };
-  return withWorldLock(safe.id, () => {
-    try {
-      const worldData = readJsonFileWithBackup(path.join(safe.dir, 'world-data.json'));
-      if (!worldData) {
-        return { ok: false, error: 'WORLD_NOT_FOUND' };
-      }
-      const settings = readJsonFileWithBackup(path.join(safe.dir, 'settings.json')) || {};
-      const playerData = readJsonFileWithBackup(path.join(safe.dir, 'player-data.json')) || {};
-      const worldState = readJsonFileWithBackup(path.join(safe.dir, 'world-state.json')) || {};
-      const saveVersion =
-        typeof worldData.saveVersion === 'number' ? worldData.saveVersion : 1;
-      return {
-        ok: true,
-        bundle: {
-          saveVersion,
-          worldData,
-          settings,
-          playerData,
-          worldState,
-        },
-      };
-    } catch (err) {
-      return { ok: false, error: (err && err.message) || 'READ_FAILED' };
-    }
-  });
+  return desktopStorage.readBundle(worldId);
 });
 
 ipcMain.handle('worldStorage:writeBundle', async (_event, worldId, bundle) => {
-  const safe = sanitizeWorldId(worldId);
-  if (!safe) return { ok: false, error: 'INVALID_WORLD_ID' };
-  if (
-    !bundle ||
-    typeof bundle !== 'object' ||
-    !bundle.worldData ||
-    !bundle.settings ||
-    !bundle.playerData ||
-    !bundle.worldState
-  ) {
-    return { ok: false, error: 'INVALID_BUNDLE' };
-  }
-  return withWorldLock(safe.id, () => {
-    try {
-      fs.mkdirSync(safe.dir, { recursive: true });
-      const worldDataWithVersion = {
-        ...bundle.worldData,
-        saveVersion: typeof bundle.saveVersion === 'number' ? bundle.saveVersion : 1,
-      };
-      writeJsonFileAtomic(path.join(safe.dir, 'world-data.json'), worldDataWithVersion);
-      writeJsonFileAtomic(path.join(safe.dir, 'settings.json'), bundle.settings);
-      writeJsonFileAtomic(path.join(safe.dir, 'player-data.json'), bundle.playerData);
-      writeJsonFileAtomic(path.join(safe.dir, 'world-state.json'), bundle.worldState);
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: (err && err.message) || 'WRITE_FAILED' };
-    }
-  });
+  return desktopStorage.writeBundle(worldId, bundle);
 });
 
 ipcMain.handle('worldStorage:deleteWorld', async (_event, worldId) => {
-  const safe = sanitizeWorldId(worldId);
-  if (!safe) return { ok: false, error: 'INVALID_WORLD_ID' };
-  return withWorldLock(safe.id, () => {
-    try {
-      if (fs.existsSync(safe.dir)) {
-        fs.rmSync(safe.dir, { recursive: true, force: true });
-      }
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: (err && err.message) || 'DELETE_FAILED' };
-    }
-  });
+  return desktopStorage.deleteWorld(worldId);
+});
+
+ipcMain.handle('settingsStorage:readAll', async () => {
+  return desktopStorage.readAllSettings();
+});
+
+ipcMain.handle('settingsStorage:writeSetting', async (_event, settingKey, payload) => {
+  return desktopStorage.writeSetting(settingKey, payload);
+});
+
+ipcMain.handle('settingsStorage:readProfile', async () => {
+  return desktopStorage.readProfile();
+});
+
+ipcMain.handle('settingsStorage:writeProfile', async (_event, payload) => {
+  return desktopStorage.writeProfile(payload);
 });
 
 ipcMain.handle('lan:discover', async (_event, timeoutMs = 1500) => {
@@ -450,6 +289,7 @@ app.on('second-instance', () => {
 });
 
 app.whenReady().then(() => {
+  void desktopStorage.ensureInitialized().catch(() => {});
   if (!IS_DEV) {
     registerAppProtocol();
   }
@@ -465,6 +305,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   void lanServer.stop();
+  void desktopStorage.flushPendingWrites();
 });
 
 app.on('window-all-closed', () => {

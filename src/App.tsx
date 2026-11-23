@@ -84,6 +84,12 @@ import {
   type AudioSettings,
   type ExtendedGameSettings,
 } from './game/settings/GameSettingsStore';
+import {
+  exportMissingAndroidSettingsSnapshot,
+  hydrateAndroidSettingsFromNative,
+  parseAndroidStorageStatusJson,
+} from './game/settings/AndroidSettingsSync';
+import { hydrateWindowsSettingsFromNative } from './game/settings/WindowsSettingsSync';
 import { Mail } from 'lucide-react';
 import { useGamepadPauseButton } from './hooks/useMenuNavigation';
 import {
@@ -162,6 +168,10 @@ const EMPTY_INVENTORY: InventorySnapshot = {
 };
 
 export default function App() {
+  // Synchronously pull Android shared-storage settings (/storage/emulated/0/World of Adventure/Settings)
+  // before initial React state reads localStorage (instant no-op on Electron/Web/PWA).
+  hydrateAndroidSettingsFromNative();
+
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<GameEngine | null>(null);
   const engineLoadPromiseRef = useRef<Promise<GameEngine | null> | null>(null);
@@ -407,14 +417,102 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     applyAccessibilityDocumentAttributes(loadExtendedSettings().accessibility);
+    exportMissingAndroidSettingsSnapshot({
+      lang: languageRef.current,
+      graphics: graphicsSettingsRef.current,
+      extended: extendedSettingsRef.current,
+      mobile: mobileSettingsRef.current,
+    });
     refreshSaveSlots();
     void hydratePersistentWorldStorage().then(() => {
       if (!cancelled) {
         refreshSaveSlots();
       }
     });
+    void hydrateWindowsSettingsFromNative({
+      lang: languageRef.current,
+      graphics: graphicsSettingsRef.current,
+      extended: extendedSettingsRef.current,
+      mobile: mobileSettingsRef.current,
+    }).then((winRes) => {
+      if (cancelled) return;
+      if (winRes.changed) {
+        const nextLang = loadSavedLanguage();
+        const nextGfx = loadGraphicsSettings();
+        const nextExt = loadExtendedSettings();
+        const nextMobile = loadMobileSettings();
+        setLanguage(nextLang);
+        setGraphicsSettings(nextGfx);
+        setExtendedSettings(nextExt);
+        setMobileSettings(nextMobile);
+        setSettings({
+          mouseSensitivity: nextExt.camera.sensitivity,
+          muted: nextExt.audio.muted,
+          invertY: nextExt.camera.invertY,
+        });
+        applyAccessibilityDocumentAttributes(nextExt.accessibility);
+        audioManagerRef.current?.applySettings(nextExt.audio, {
+          persist: false,
+        });
+        engineRef.current?.applyExtendedSettings(nextExt);
+        engineRef.current?.updateGraphicsSettings(nextGfx);
+      }
+      if (winRes.restoredProfile) {
+        ProfileManager.reloadLocalProfileFromStorage();
+      }
+    });
+
+    window.__onAndroidStorageStatusChanged = (statusJson: string) => {
+      if (cancelled) return;
+      const parsedStatus = parseAndroidStorageStatusJson(statusJson);
+      if (parsedStatus?.writable) {
+        const res = hydrateAndroidSettingsFromNative(true);
+        if (res.changed) {
+          const nextLang = loadSavedLanguage();
+          const nextGfx = loadGraphicsSettings();
+          const nextExt = loadExtendedSettings();
+          const nextMobile = loadMobileSettings();
+          setLanguage(nextLang);
+          setGraphicsSettings(nextGfx);
+          setExtendedSettings(nextExt);
+          setMobileSettings(nextMobile);
+          setSettings({
+            mouseSensitivity: nextExt.camera.sensitivity,
+            muted: nextExt.audio.muted,
+            invertY: nextExt.camera.invertY,
+          });
+          applyAccessibilityDocumentAttributes(nextExt.accessibility);
+          audioManagerRef.current?.applySettings(nextExt.audio, {
+            persist: false,
+          });
+          engineRef.current?.applyExtendedSettings(nextExt);
+          engineRef.current?.updateGraphicsSettings(nextGfx);
+          ProfileManager.reloadLocalProfileFromStorage();
+          exportMissingAndroidSettingsSnapshot({
+            lang: nextLang,
+            graphics: nextGfx,
+            extended: nextExt,
+            mobile: nextMobile,
+          });
+        } else {
+          exportMissingAndroidSettingsSnapshot({
+            lang: languageRef.current,
+            graphics: graphicsSettingsRef.current,
+            extended: extendedSettingsRef.current,
+            mobile: mobileSettingsRef.current,
+          });
+        }
+        void hydratePersistentWorldStorage(true).then(() => {
+          if (!cancelled) {
+            refreshSaveSlots();
+          }
+        });
+      }
+    };
+
     return () => {
       cancelled = true;
+      delete window.__onAndroidStorageStatusChanged;
       window.clearTimeout(noticeTimerRef.current);
       void ProfileManager.flushStatsDelta();
       void flushPendingWorldSaves();

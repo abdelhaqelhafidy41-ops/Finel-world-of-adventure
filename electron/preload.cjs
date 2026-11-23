@@ -19,4 +19,11 @@ contextBridge.exposeInMainWorld('desktopApp', {
     writeBundle: (worldId, bundle) => ipcRenderer.invoke('worldStorage:writeBundle', worldId, bundle),
     deleteWorld: (worldId) => ipcRenderer.invoke('worldStorage:deleteWorld', worldId),
   },
+  settingsStorage: {
+    readAll: () => ipcRenderer.invoke('settingsStorage:readAll'),
+    writeSetting: (settingKey, payload) =>
+      ipcRenderer.invoke('settingsStorage:writeSetting', settingKey, payload),
+    readProfile: () => ipcRenderer.invoke('settingsStorage:readProfile'),
+    writeProfile: (payload) => ipcRenderer.invoke('settingsStorage:writeProfile', payload),
+  },
 });
