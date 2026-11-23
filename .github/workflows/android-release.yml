@@ -28,7 +28,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASS" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASS" ]; then
+          if [ -z "${KEYSTORE_B64//[[:space:]]/}" ] || [ -z "$KEYSTORE_PASS" ] || [ -z "${KEY_ALIAS//[[:space:]]/}" ] || [ -z "$KEY_PASS" ]; then
             echo "::error::Missing one or more required GitHub Actions secrets: ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD."
             exit 1
           fi
@@ -112,17 +112,51 @@ jobs:
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "Building release versionName=$VERSION_NAME versionCode=$VERSION_CODE"
 
-      - name: Decode release keystore outside repository
+      - name: Decode and validate release keystore outside repository
+        id: keystore-check
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
+          set -euo pipefail
           KEYSTORE_FILE="${{ runner.temp }}/release.jks"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n' | base64 --decode > "$KEYSTORE_FILE"
-          if [ ! -s "$KEYSTORE_FILE" ]; then
-            echo "::error::Decoded keystore file is empty."
+          rm -f "$KEYSTORE_FILE"
+
+          if ! printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n\t ' | base64 --decode > "$KEYSTORE_FILE"; then
+            echo "::error::Failed to decode ANDROID_KEYSTORE_BASE64."
+            rm -f "$KEYSTORE_FILE"
+            exit 1
+          fi
+
+          if [ ! -f "$KEYSTORE_FILE" ] || [ ! -s "$KEYSTORE_FILE" ]; then
+            echo "::error::Decoded keystore file does not exist or is empty."
+            rm -f "$KEYSTORE_FILE"
             exit 1
           fi
           chmod 600 "$KEYSTORE_FILE"
+
+          if ! LC_ALL=C keytool -list -keystore "$KEYSTORE_FILE" -storepass:env ANDROID_KEYSTORE_PASSWORD >/dev/null; then
+            echo "::error::Failed to open release keystore with ANDROID_KEYSTORE_PASSWORD."
+            exit 1
+          fi
+
+          ALIAS_INFO_FILE="${{ runner.temp }}/keytool-alias-info.txt"
+          if ! LC_ALL=C keytool -list -v -keystore "$KEYSTORE_FILE" -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" > "$ALIAS_INFO_FILE"; then
+            echo "::error::Configured ANDROID_KEY_ALIAS was not found in the release keystore."
+            rm -f "$ALIAS_INFO_FILE"
+            exit 1
+          fi
+
+          KEYSTORE_CERT_SHA256=$(grep -E '^\s*SHA256:' "$ALIAS_INFO_FILE" | head -n 1 | sed 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          rm -f "$ALIAS_INFO_FILE"
+
+          if [ -z "$KEYSTORE_CERT_SHA256" ]; then
+            echo "::error::Could not extract SHA-256 certificate fingerprint from the release keystore alias."
+            exit 1
+          fi
+          echo "Keystore validated; certificate SHA-256: $KEYSTORE_CERT_SHA256"
+          echo "cert_sha256=$KEYSTORE_CERT_SHA256" >> "$GITHUB_OUTPUT"
 
       - name: Build signed Release APK and AAB
         working-directory: android
@@ -137,26 +171,77 @@ jobs:
         run: ./gradlew assembleRelease bundleRelease --no-daemon --stacktrace
 
       - name: Verify signed APK and AAB artifacts
+        env:
+          KEYSTORE_CERT_SHA256: ${{ steps.keystore-check.outputs.cert_sha256 }}
         run: |
+          set -euo pipefail
           APK_PATH="android/app/build/outputs/apk/release/app-release.apk"
           AAB_PATH="android/app/build/outputs/bundle/release/app-release.aab"
 
-          if [ ! -f "$APK_PATH" ]; then
+          if [ ! -f "$APK_PATH" ] || [ ! -s "$APK_PATH" ]; then
             echo "::error::Signed Release APK was not generated at $APK_PATH"
             exit 1
           fi
-          if [ ! -f "$AAB_PATH" ]; then
+          if [ ! -f "$AAB_PATH" ] || [ ! -s "$AAB_PATH" ]; then
             echo "::error::Signed Release AAB was not generated at $AAB_PATH"
             exit 1
           fi
 
-          jarsigner -verify "$APK_PATH"
-          jarsigner -verify "$AAB_PATH"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          APKSIGNER_BIN=$(find "$SDK_ROOT/build-tools" -maxdepth 2 -type f -name "apksigner" 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -z "$APKSIGNER_BIN" ] || [ ! -x "$APKSIGNER_BIN" ]; then
+            echo "::error::Android SDK apksigner binary not found under '$SDK_ROOT/build-tools'."
+            exit 1
+          fi
+
+          APKSIGNER_OUT=$(mktemp "${{ runner.temp }}/apksigner-verify.XXXXXX")
+          if ! "$APKSIGNER_BIN" verify --verbose --print-certs "$APK_PATH" | tee "$APKSIGNER_OUT"; then
+            echo "::error::apksigner verification failed for $APK_PATH"
+            rm -f "$APKSIGNER_OUT"
+            exit 1
+          fi
+          if grep -q "CN=Android Debug" "$APKSIGNER_OUT"; then
+            echo "::error::Release APK is signed with the Android Debug certificate."
+            rm -f "$APKSIGNER_OUT"
+            exit 1
+          fi
+
+          APK_SHA256=$(grep -E 'Signer #1 certificate SHA-256 digest:' "$APKSIGNER_OUT" | head -n 1 | awk '{print tolower($NF)}')
+          rm -f "$APKSIGNER_OUT"
+          if [ -z "$APK_SHA256" ] || [ "$APK_SHA256" != "$KEYSTORE_CERT_SHA256" ]; then
+            echo "::error::Release APK SHA-256 ('$APK_SHA256') does not match keystore SHA-256 ('$KEYSTORE_CERT_SHA256')."
+            exit 1
+          fi
+
+          AAB_VERIFY_OUT=$(mktemp "${{ runner.temp }}/aab-verify.XXXXXX")
+          if ! LC_ALL=C jarsigner -verify -verbose -certs "$AAB_PATH" > "$AAB_VERIFY_OUT"; then
+            echo "::error::jarsigner verification failed for $AAB_PATH"
+            cat "$AAB_VERIFY_OUT"
+            rm -f "$AAB_VERIFY_OUT"
+            exit 1
+          fi
+          if grep -qi "jar is unsigned" "$AAB_VERIFY_OUT" || ! grep -q "jar verified." "$AAB_VERIFY_OUT"; then
+            echo "::error::Release AAB is unsigned or failed verification."
+            cat "$AAB_VERIFY_OUT"
+            rm -f "$AAB_VERIFY_OUT"
+            exit 1
+          fi
+          rm -f "$AAB_VERIFY_OUT"
+
+          AAB_CERT_OUT=$(mktemp "${{ runner.temp }}/aab-cert.XXXXXX")
+          LC_ALL=C keytool -printcert -jarfile "$AAB_PATH" > "$AAB_CERT_OUT"
+          AAB_SHA256=$(grep -E '^\s*SHA256:' "$AAB_CERT_OUT" | head -n 1 | sed 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          rm -f "$AAB_CERT_OUT"
+          if [ -z "$AAB_SHA256" ] || [ "$AAB_SHA256" != "$APK_SHA256" ]; then
+            echo "::error::Release AAB SHA-256 ('$AAB_SHA256') does not match Release APK SHA-256 ('$APK_SHA256')."
+            exit 1
+          fi
+
           ls -lh "$APK_PATH" "$AAB_PATH"
 
       - name: Scrub temporary keystore
         if: always()
-        run: rm -f "${{ runner.temp }}/release.jks"
+        run: rm -f "${{ runner.temp }}/release.jks" "${{ runner.temp }}/keytool-alias-info.txt"
 
       - name: Upload signed Release APK
         uses: actions/upload-artifact@v4

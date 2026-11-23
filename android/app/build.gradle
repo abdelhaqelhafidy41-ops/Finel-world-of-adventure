@@ -3,19 +3,74 @@ apply plugin: 'com.android.application'
 android {
     namespace = "com.worldofadventure.game"
     compileSdk = rootProject.ext.compileSdkVersion
-    def releaseStoreFilePath = System.getenv("ANDROID_KEYSTORE_PATH")
+    def releaseStoreFilePath = System.getenv("ANDROID_KEYSTORE_PATH")?.trim()
     def releaseStorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-    def releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+    def releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")?.trim()
     def releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
-    def hasReleaseSigning = (
-        releaseStoreFilePath != null && !releaseStoreFilePath.trim().isEmpty() &&
-        releaseStorePassword != null && !releaseStorePassword.trim().isEmpty() &&
-        releaseKeyAlias != null && !releaseKeyAlias.trim().isEmpty() &&
-        releaseKeyPassword != null && !releaseKeyPassword.trim().isEmpty()
-    )
+    def missingSigningVars = []
+    if (!releaseStoreFilePath) missingSigningVars << "ANDROID_KEYSTORE_PATH"
+    if (releaseStorePassword == null || releaseStorePassword.trim().isEmpty()) missingSigningVars << "ANDROID_KEYSTORE_PASSWORD"
+    if (!releaseKeyAlias) missingSigningVars << "ANDROID_KEY_ALIAS"
+    if (releaseKeyPassword == null || releaseKeyPassword.trim().isEmpty()) missingSigningVars << "ANDROID_KEY_PASSWORD"
+    def hasReleaseSigning = missingSigningVars.isEmpty()
 
-    if ("true".equalsIgnoreCase(System.getenv("REQUIRE_RELEASE_SIGNING")) && !hasReleaseSigning) {
-        throw new GradleException("REQUIRE_RELEASE_SIGNING=true but ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, or ANDROID_KEY_PASSWORD is missing.")
+    def validateReleaseSigning = {
+        if (!hasReleaseSigning) {
+            throw new GradleException(
+                "Android release build requires signing credentials. Missing environment variable(s): ${missingSigningVars.join(', ')}."
+            )
+        }
+        def keystoreFile = file(releaseStoreFilePath)
+        if (!keystoreFile.exists() || !keystoreFile.isFile() || keystoreFile.length() <= 0L) {
+            throw new GradleException(
+                "Android release keystore file does not exist or is empty at ANDROID_KEYSTORE_PATH."
+            )
+        }
+        try {
+            def ks = java.security.KeyStore.getInstance(keystoreFile, releaseStorePassword.toCharArray())
+            if (!ks.containsAlias(releaseKeyAlias) || !ks.isKeyEntry(releaseKeyAlias)) {
+                throw new GradleException(
+                    "Configured ANDROID_KEY_ALIAS was not found as a private key entry in the release keystore."
+                )
+            }
+            if (ks.getKey(releaseKeyAlias, releaseKeyPassword.toCharArray()) == null) {
+                throw new GradleException(
+                    "Configured ANDROID_KEY_PASSWORD did not unlock the release key entry."
+                )
+            }
+        } catch (GradleException ge) {
+            throw ge
+        } catch (Exception e) {
+            throw new GradleException(
+                "Failed to open or verify the Android release keystore (${e.class.simpleName}).",
+                e
+            )
+        }
+    }
+
+    def isReleaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
+        def lower = taskName.toLowerCase(java.util.Locale.ROOT)
+        lower.contains("release") ||
+            lower == "assemble" || lower.endsWith(":assemble") ||
+            lower == "bundle" || lower.endsWith(":bundle")
+    }
+    if ("true".equalsIgnoreCase(System.getenv("REQUIRE_RELEASE_SIGNING")) || isReleaseTaskRequested) {
+        validateReleaseSigning()
+    }
+    gradle.taskGraph.whenReady { taskGraph ->
+        def runsReleasePackaging = taskGraph.allTasks.any { task ->
+            def name = task.name.toLowerCase(java.util.Locale.ROOT)
+            name.contains("release") && (
+                name.startsWith("assemble") ||
+                name.startsWith("bundle") ||
+                name.startsWith("package") ||
+                name.startsWith("sign") ||
+                name.startsWith("validatesigning")
+            )
+        }
+        if (runsReleasePackaging) {
+            validateReleaseSigning()
+        }
     }
 
     defaultConfig {
@@ -45,9 +100,7 @@ android {
 
     buildTypes {
         release {
-            if (hasReleaseSigning) {
-                signingConfig signingConfigs.release
-            }
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
