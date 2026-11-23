@@ -1,5 +1,7 @@
 import type { DifficultyLevel } from '../save/saveTypes';
 import type { CameraPerspective } from '../types';
+import { syncExtendedSettingsToAndroid } from './AndroidSettingsSync';
+import { syncExtendedSettingsToWindows } from './WindowsSettingsSync';
 
 export type TextSizePreference = 'small' | 'normal' | 'large';
 
@@ -261,6 +263,8 @@ export function saveExtendedSettings(settings: ExtendedGameSettings): void {
   } catch {
     // Ignore storage quota errors
   }
+  syncExtendedSettingsToAndroid(settings);
+  syncExtendedSettingsToWindows(settings);
 }
 
 export const GameSettingsStore = {

@@ -20,6 +20,8 @@ import {
 import { resolveMultiplayerServerUrl } from '../multiplayer/multiplayerConfig';
 import { saveMultiplayerName } from '../multiplayer/MultiplayerService';
 import { GameSettingsStore } from '../settings/GameSettingsStore';
+import { syncProfileToAndroid } from '../settings/AndroidSettingsSync';
+import { syncProfileToWindows } from '../settings/WindowsSettingsSync';
 import {
   AuthService,
   generateSecureLocalPlayerTag,
@@ -102,7 +104,10 @@ function writeLocalProfile(profile: OwnPlayerProfile | null): void {
     if (!profile) {
       localStorage.removeItem(LOCAL_PROFILE_STORAGE_KEY);
     } else {
-      localStorage.setItem(LOCAL_PROFILE_STORAGE_KEY, JSON.stringify(profile));
+      const json = JSON.stringify(profile);
+      localStorage.setItem(LOCAL_PROFILE_STORAGE_KEY, json);
+      syncProfileToAndroid(json);
+      syncProfileToWindows(json);
     }
   } catch {
     // Ignore storage errors
@@ -171,6 +176,16 @@ class ProfileManagerImpl {
   public getProfile(): OwnPlayerProfile | null {
     this.ensureInitialized();
     return this.profile;
+  }
+
+  public reloadLocalProfileFromStorage(): void {
+    const fresh = readLocalProfile();
+    if (!fresh) return;
+    this.initialized = true;
+    this.profile = fresh;
+    saveMultiplayerName(fresh.displayName);
+    this.syncShowPlayerNameSetting(fresh.privacy.showPlayerName);
+    this.notify();
   }
 
   public hasProfile(): boolean {

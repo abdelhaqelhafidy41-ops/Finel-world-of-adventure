@@ -4,12 +4,22 @@ import {
   ArrowLeft,
   Check,
   Gamepad2,
+  HardDrive,
   Languages,
   Monitor,
   RotateCcw,
   Sliders,
   Volume2,
 } from 'lucide-react';
+import {
+  detectRuntimePlatform,
+  type AndroidStorageStatus,
+} from '../../utils/platformExit';
+import {
+  getAndroidStorageStatus,
+  requestAndroidSafFolder,
+  requestAndroidStoragePermission,
+} from '../../game/settings/AndroidSettingsSync';
 import { UI_TEXT, type Language } from '../../game/i18n/translations';
 import type {
   CameraPerspective,
@@ -83,6 +93,25 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [draftMobile, setDraftMobile] =
     useState<MobileControlSettings>(mobileSettings);
   const [appliedBanner, setAppliedBanner] = useState(false);
+  const isAndroidPlatform = detectRuntimePlatform() === 'android';
+  const [androidStorageStatus, setAndroidStorageStatus] =
+    useState<AndroidStorageStatus | null>(() =>
+      isAndroidPlatform ? getAndroidStorageStatus() : null,
+    );
+
+  useEffect(() => {
+    if (!isAndroidPlatform) return;
+    setAndroidStorageStatus(getAndroidStorageStatus());
+    const onFocus = () => setAndroidStorageStatus(getAndroidStorageStatus());
+    window.addEventListener('focus', onFocus);
+    const id = window.setInterval(() => {
+      setAndroidStorageStatus(getAndroidStorageStatus());
+    }, 1500);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.clearInterval(id);
+    };
+  }, [isAndroidPlatform]);
 
   // Sync incoming resets from parent if reset button clicked
   useEffect(() => {
@@ -1042,6 +1071,71 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                   </div>
                 </div>
               </div>
+
+              {isAndroidPlatform && androidStorageStatus && (
+                <div
+                  data-testid="android-storage-status-card"
+                  className="p-3 rounded-xl bg-[#0c1712] border border-white/10 space-y-2"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-2 text-xs sm:text-sm font-medium text-[#dce5d8]">
+                      <HardDrive className="w-4 h-4 text-[#e5a93c]" />
+                      {t.androidStorageTitle}
+                    </span>
+                    <span
+                      data-testid="android-storage-status-badge"
+                      className={`px-2 py-0.5 rounded-md text-[11px] font-semibold ${
+                        androidStorageStatus.state === 'initialized' ||
+                        androidStorageStatus.state === 'available'
+                          ? 'bg-[#193b27] text-[#8ce79f] border border-[#2f6e48]'
+                          : androidStorageStatus.state === 'permission_required'
+                            ? 'bg-[#3d2d12] text-[#f3c56b] border border-[#7c5a1e]'
+                            : 'bg-[#3b1b1c] text-[#f39e96] border border-[#723336]'
+                      }`}
+                    >
+                      {androidStorageStatus.state === 'initialized'
+                        ? t.androidStorageStateInitialized
+                        : androidStorageStatus.state === 'available'
+                          ? t.androidStorageStateAvailable
+                          : androidStorageStatus.state === 'permission_required'
+                            ? t.androidStorageStatePermissionRequired
+                            : t.androidStorageStateNotAccessible}
+                    </span>
+                  </div>
+                  <div
+                    dir="ltr"
+                    className="text-[11px] font-mono text-[#9eb2a0] break-all"
+                  >
+                    {androidStorageStatus.path}
+                  </div>
+                  {androidStorageStatus.state !== 'initialized' &&
+                    androidStorageStatus.state !== 'available' && (
+                      <>
+                        <p className="text-[11px] text-[#b4c4b6] leading-relaxed">
+                          {t.androidStoragePermHint}
+                        </p>
+                        <div className="flex flex-wrap gap-2 pt-0.5">
+                          <button
+                            type="button"
+                            data-testid="android-storage-grant-btn"
+                            onClick={() => requestAndroidStoragePermission()}
+                            className="min-h-[36px] px-3 py-1.5 rounded-lg bg-[#e5a93c] hover:bg-[#eeb750] text-[#111914] font-display font-bold text-xs cursor-pointer"
+                          >
+                            {t.androidStorageGrantBtn}
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="android-storage-saf-btn"
+                            onClick={() => requestAndroidSafFolder()}
+                            className="min-h-[36px] px-3 py-1.5 rounded-lg bg-[#192b22] hover:bg-[#22392d] border border-[#2f493b] text-xs font-medium text-[#e4ece1] cursor-pointer"
+                          >
+                            {t.androidStorageChooseFolderBtn}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                </div>
+              )}
             </div>
           )}
 

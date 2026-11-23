@@ -1,4 +1,6 @@
 import type { WeatherQuality } from '../world/WeatherManager';
+import { syncGraphicsSettingToAndroid } from '../settings/AndroidSettingsSync';
+import { syncGraphicsSettingToWindows } from '../settings/WindowsSettingsSync';
 
 export type QualityPreset =
   | 'auto'
@@ -252,6 +254,8 @@ export function saveGraphicsSettings(settings: GraphicsSettings): void {
   } catch {
     // Ignore storage quota errors
   }
+  syncGraphicsSettingToAndroid(settings);
+  syncGraphicsSettingToWindows(settings);
 }
 
 export function probeHardwareCapabilities(

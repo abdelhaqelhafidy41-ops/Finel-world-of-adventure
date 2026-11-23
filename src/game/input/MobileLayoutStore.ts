@@ -1,4 +1,6 @@
 import { OrientationManager } from './OrientationManager';
+import { syncMobileSettingsToAndroid } from '../settings/AndroidSettingsSync';
+import { syncMobileSettingsToWindows } from '../settings/WindowsSettingsSync';
 import {
   CONTROL_SIZE_LIMITS,
   CONTROL_SIZE_MULTIPLIER,
@@ -411,6 +413,8 @@ export function saveMobileSettings(settings: MobileControlSettings): void {
   } catch {
     // Ignore storage quota issues
   }
+  syncMobileSettingsToAndroid(settings);
+  syncMobileSettingsToWindows(settings);
 }
 
 export function resetOrientationControlsToDefaults(
