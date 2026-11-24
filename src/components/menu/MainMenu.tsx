@@ -5,6 +5,7 @@ import {
   FolderOpen,
   Languages,
   LogOut,
+  Package,
   Play,
   PlusCircle,
   RotateCw,
@@ -48,6 +49,7 @@ interface MainMenuProps {
   onSettings: () => void;
   onExitGame: () => void;
   onOpenProfile?: () => void;
+  onOpenMods?: () => void;
 }
 
 export const MainMenu: React.FC<MainMenuProps> = ({
@@ -65,6 +67,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onSettings,
   onExitGame,
   onOpenProfile,
+  onOpenMods,
 }) => {
   const t = UI_TEXT[lang];
   const isRtl = lang === 'ar';
@@ -126,7 +129,19 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {onOpenMods && (
+            <button
+              type="button"
+              data-testid="title-mods-btn"
+              onClick={onOpenMods}
+              className="woa-surface pointer-events-auto inline-flex items-center gap-2 min-h-[44px] px-3 py-1.5 rounded-xl bg-[#0e1a14]/78 backdrop-blur-md border border-white/15 text-xs font-medium text-[#e9efe6] hover:bg-[#182920] transition-colors focus-visible:outline-2 focus-visible:outline-[#e5a93c] whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Package className="w-4 h-4 text-[#e5a93c]" />
+              <span>{t.menuMods}</span>
+            </button>
+          )}
+
           {onOpenProfile && (
             <button
               type="button"

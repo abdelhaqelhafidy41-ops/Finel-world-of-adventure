@@ -1,0 +1,524 @@
+import { ItemManager } from '../inventory/ItemManager';
+import { CraftingManager } from '../inventory/CraftingManager';
+import type { ModAssetReadResult } from '../../utils/platformExit';
+import { DefaultModContentStore } from './handlers/defaultModHandlers';
+import { ModContentRegistry } from './ModContentRegistry';
+import { ModStorageAdapter } from './ModStorageAdapter';
+import { validateDiscoveredMods } from './ModValidator';
+import {
+  CURRENT_GAME_VERSION,
+  type ModContentHandler,
+  type ModInstallProgress,
+  type ModLogEntry,
+  type ModLogLevel,
+  type ModRecord,
+  type ModsSnapshot,
+  type ModStateConfig,
+} from './modTypes';
+
+const MAX_LOG_ENTRIES = 120;
+
+export class ModManager {
+  private static instance: ModManager | null = null;
+
+  public readonly registry = new ModContentRegistry();
+  private readonly contentStore = new DefaultModContentStore();
+  private readonly storage = new ModStorageAdapter();
+
+  private stateConfig: ModStateConfig = {
+    version: 1,
+    enabledByModId: {},
+    priorityByModId: {},
+  };
+
+  private snapshot: ModsSnapshot;
+  private readonly listeners = new Set<(snap: ModsSnapshot) => void>();
+  private initPromise: Promise<ModsSnapshot> | null = null;
+  private refreshPromise: Promise<ModsSnapshot> | null = null;
+  private logCounter = 0;
+
+  private constructor() {
+    for (const handler of this.contentStore.createHandlers()) {
+      this.registry.registerHandler(handler);
+    }
+
+    ItemManager.setExternalItemProvider(() => this.contentStore.getAllModItems());
+    CraftingManager.setExternalRecipeProvider(() =>
+      this.contentStore.getAllModRecipes(),
+    );
+
+    this.snapshot = {
+      initialized: false,
+      scanning: false,
+      modsDir: '',
+      writable: false,
+      platform: this.storage.getPlatform(),
+      gameVersion: CURRENT_GAME_VERSION,
+      mods: [],
+      activeModIds: [],
+      loadOrder: [],
+      logs: [],
+      lastScanAtMs: null,
+      reloadedAtMs: null,
+      lastError: null,
+      installProgress: null,
+    };
+  }
+
+  public static getInstance(): ModManager {
+    if (!ModManager.instance) {
+      ModManager.instance = new ModManager();
+    }
+    return ModManager.instance;
+  }
+
+  public getSnapshot(): ModsSnapshot {
+    return this.snapshot;
+  }
+
+  public subscribe(listener: (snap: ModsSnapshot) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  public registerCustomHandler(handler: ModContentHandler): void {
+    this.registry.registerHandler(handler);
+  }
+
+  public resolveLocalizationOverride(lang: string, key: string): string | undefined {
+    return this.contentStore.resolveLocalization(lang, key);
+  }
+
+  public getModDescriptors(category: string) {
+    return this.contentStore.getDescriptors(category);
+  }
+
+  public async initialize(): Promise<ModsSnapshot> {
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = (async () => {
+      const info = await this.storage.getModsInfo();
+      this.stateConfig = await this.storage.readState();
+      this.snapshot = {
+        ...this.snapshot,
+        modsDir: info.modsDir,
+        writable: info.writable,
+        platform: info.platform,
+        lastError: info.error ?? null,
+      };
+      const result = await this.refreshMods();
+      this.snapshot = {
+        ...this.snapshot,
+        initialized: true,
+      };
+      this.emit();
+      return result;
+    })();
+    return this.initPromise;
+  }
+
+  public async refreshMods(): Promise<ModsSnapshot> {
+    if (this.refreshPromise) return this.refreshPromise;
+
+    this.refreshPromise = (async () => {
+      this.snapshot = {
+        ...this.snapshot,
+        scanning: true,
+        lastError: null,
+      };
+      this.emit();
+
+      try {
+        const info = await this.storage.getModsInfo();
+        const discovered = await this.storage.discoverRawMods();
+
+        // Safely unload all active mod content before rebuilding state cleanly
+        this.unloadAllActiveModsInternal(false);
+
+        const { records, loadOrder } = validateDiscoveredMods(
+          discovered.entries,
+          this.stateConfig,
+          CURRENT_GAME_VERSION,
+        );
+
+        const recordByModId = new Map<string, ModRecord>();
+        for (const rec of records) {
+          if (rec.status === 'ready') {
+            recordByModId.set(rec.manifest.modId, rec);
+          } else {
+            this.logRecordIssues(rec);
+          }
+        }
+
+        const activeModIds: string[] = [];
+        for (const modId of loadOrder) {
+          const rec = recordByModId.get(modId);
+          if (!rec) continue;
+
+          const loadRes = this.registry.loadMod({
+            modId,
+            sourceId: rec.sourceId,
+            manifest: rec.manifest,
+            files: rec.parsedContentFiles,
+            assets: rec.assets,
+          });
+          rec.diagnostics.push(...loadRes.diagnostics);
+
+          if (!loadRes.ok) {
+            rec.loaded = false;
+            rec.loadedEntriesCount = 0;
+            rec.status = 'corrupted';
+            this.appendLog(
+              'error',
+              `Mod "${rec.manifest.name}" (${modId}) rolled back due to content errors.`,
+              modId,
+              rec.sourceId,
+            );
+          } else {
+            rec.loaded = true;
+            rec.loadedEntriesCount = loadRes.loadedEntries;
+            activeModIds.push(modId);
+            this.appendLog(
+              'info',
+              `Loaded mod "${rec.manifest.name}" v${rec.manifest.version} (${loadRes.loadedEntries} entries, ${rec.assets.length} assets).`,
+              modId,
+              rec.sourceId,
+            );
+          }
+        }
+
+        this.snapshot = {
+          ...this.snapshot,
+          initialized: true,
+          scanning: false,
+          modsDir: discovered.modsDir || info.modsDir,
+          writable: info.writable,
+          platform: info.platform,
+          mods: records,
+          activeModIds,
+          loadOrder: activeModIds,
+          lastScanAtMs: Date.now(),
+          lastError: discovered.ok ? null : (discovered.error ?? 'MOD_SCAN_FAILED'),
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'MOD_REFRESH_FAILED';
+        this.appendLog('error', `Mod scan error: ${msg}`);
+        this.snapshot = {
+          ...this.snapshot,
+          initialized: true,
+          scanning: false,
+          lastError: msg,
+        };
+      } finally {
+        this.refreshPromise = null;
+        this.emit();
+      }
+
+      return this.snapshot;
+    })();
+
+    return this.refreshPromise;
+  }
+
+  public async setModEnabled(modId: string, enabled: boolean): Promise<ModsSnapshot> {
+    this.stateConfig = {
+      ...this.stateConfig,
+      enabledByModId: {
+        ...this.stateConfig.enabledByModId,
+        [modId]: enabled,
+      },
+    };
+    await this.storage.writeState(this.stateConfig);
+    this.appendLog(
+      'info',
+      `${enabled ? 'Enabled' : 'Disabled'} mod "${modId}".`,
+      modId,
+    );
+    return this.refreshMods();
+  }
+
+  public async setModPriority(modId: string, priority: number): Promise<ModsSnapshot> {
+    const cleanPriority = Number.isFinite(priority) ? Math.trunc(priority) : 0;
+    this.stateConfig = {
+      ...this.stateConfig,
+      priorityByModId: {
+        ...this.stateConfig.priorityByModId,
+        [modId]: cleanPriority,
+      },
+    };
+    await this.storage.writeState(this.stateConfig);
+    this.appendLog(
+      'info',
+      `Updated load priority for "${modId}" to ${cleanPriority}.`,
+      modId,
+    );
+    return this.refreshMods();
+  }
+
+  public async removeMod(
+    sourceId: string,
+    modId?: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (modId) {
+      this.registry.unloadMod(modId);
+      const nextEnabled = { ...this.stateConfig.enabledByModId };
+      const nextPriority = { ...this.stateConfig.priorityByModId };
+      delete nextEnabled[modId];
+      delete nextPriority[modId];
+      this.stateConfig = {
+        ...this.stateConfig,
+        enabledByModId: nextEnabled,
+        priorityByModId: nextPriority,
+      };
+      await this.storage.writeState(this.stateConfig);
+    }
+
+    const res = await this.storage.deleteMod(sourceId);
+    if (res.ok) {
+      this.appendLog(
+        'info',
+        `Removed local mod "${sourceId}".`,
+        modId,
+        sourceId,
+      );
+      await this.refreshMods();
+    } else {
+      this.appendLog(
+        'error',
+        `Failed removing "${sourceId}": ${res.error ?? 'UNKNOWN_ERROR'}`,
+        modId,
+        sourceId,
+      );
+      this.emit();
+    }
+    return res;
+  }
+
+  public hasNativeModPicker(): boolean {
+    return this.storage.hasNativeModPicker();
+  }
+
+  public async reloadMods(): Promise<{
+    snapshot: ModsSnapshot;
+    reloadedCount: number;
+    issueCount: number;
+  }> {
+    this.unloadAllActiveModsInternal(false);
+    const snap = await this.refreshMods();
+    const reloadedCount = snap.activeModIds.length;
+    const issueCount = snap.mods.filter(
+      (m) => m.status !== 'ready' && m.status !== 'disabled',
+    ).length;
+    this.appendLog(
+      'info',
+      `Reloaded ${reloadedCount} active mod(s)${issueCount > 0 ? ` (${issueCount} issue(s) skipped safely)` : ''}.`,
+    );
+    this.snapshot = {
+      ...this.snapshot,
+      reloadedAtMs: Date.now(),
+    };
+    this.emit();
+    return {
+      snapshot: this.snapshot,
+      reloadedCount,
+      issueCount,
+    };
+  }
+
+  public setInstallProgress(progress: ModInstallProgress | null): void {
+    this.snapshot = {
+      ...this.snapshot,
+      installProgress: progress,
+    };
+    this.emit();
+  }
+
+  public async importModViaNativePicker(): Promise<{
+    ok: boolean;
+    cancelled?: boolean;
+    sourceId?: string;
+    modId?: string;
+    error?: string;
+    detail?: string;
+  }> {
+    const res = await this.storage.requestNativeModImport((progress) => {
+      this.setInstallProgress(progress);
+    });
+    if (res.cancelled) {
+      this.setInstallProgress(null);
+      return res;
+    }
+    if (res.ok) {
+      this.setInstallProgress({
+        active: true,
+        fileName: res.sourceId ?? 'package.woamod',
+        stage: 'finalizing',
+        percent: 98,
+        processedBytes: 0,
+        totalBytes: 0,
+      });
+      this.appendLog(
+        'info',
+        `Installed .woamod package "${res.sourceId ?? 'package'}" safely.`,
+        res.modId,
+        res.sourceId,
+      );
+      await this.refreshMods();
+      this.setInstallProgress({
+        active: false,
+        fileName: res.sourceId ?? 'package.woamod',
+        stage: 'completed',
+        percent: 100,
+        processedBytes: 0,
+        totalBytes: 0,
+      });
+      window.setTimeout(() => {
+        if (this.snapshot.installProgress?.stage === 'completed') {
+          this.setInstallProgress(null);
+        }
+      }, 2200);
+    } else {
+      this.setInstallProgress(null);
+      this.appendLog(
+        'error',
+        `Mod import failed: ${res.error ?? 'MOD_IMPORT_FAILED'}${res.detail ? ` (${res.detail})` : ''}`,
+      );
+      this.emit();
+    }
+    return res;
+  }
+
+  public async importModPackage(
+    file: File,
+  ): Promise<{
+    ok: boolean;
+    sourceId?: string;
+    modId?: string;
+    error?: string;
+    detail?: string;
+  }> {
+    this.setInstallProgress({
+      active: true,
+      fileName: file.name,
+      stage: 'reading',
+      percent: 1,
+      processedBytes: 0,
+      totalBytes: file.size || 0,
+    });
+
+    const res = await this.storage.importPackageFile(file, {
+      existingMods: this.snapshot.mods,
+      gameVersion: CURRENT_GAME_VERSION,
+      onProgress: (progress) => {
+        this.setInstallProgress(progress);
+      },
+    });
+
+    if (res.ok) {
+      this.appendLog(
+        'info',
+        `Installed .woamod package "${res.sourceId ?? file.name}".`,
+        res.modId,
+        res.sourceId,
+      );
+      await this.refreshMods();
+      this.setInstallProgress({
+        active: false,
+        fileName: file.name,
+        stage: 'completed',
+        percent: 100,
+        processedBytes: file.size || 0,
+        totalBytes: file.size || 0,
+      });
+      window.setTimeout(() => {
+        if (this.snapshot.installProgress?.stage === 'completed') {
+          this.setInstallProgress(null);
+        }
+      }, 2200);
+    } else {
+      this.setInstallProgress(null);
+      this.appendLog(
+        'error',
+        `Failed installing "${file.name}": ${res.error ?? 'IMPORT_ERROR'}${res.detail ? ` (${res.detail})` : ''}`,
+      );
+      this.emit();
+    }
+    return res;
+  }
+
+  public async readModAsset(
+    sourceId: string,
+    relativePath: string,
+  ): Promise<ModAssetReadResult> {
+    return this.storage.readAsset(sourceId, relativePath);
+  }
+
+  public async openModsFolder(): Promise<{ ok: boolean; error?: string }> {
+    return this.storage.openModsFolder();
+  }
+
+  public clearLogs(): void {
+    this.snapshot = {
+      ...this.snapshot,
+      logs: [],
+    };
+    this.emit();
+  }
+
+  private unloadAllActiveModsInternal(emitAfter: boolean): void {
+    this.registry.unloadAll();
+    if (emitAfter) {
+      this.snapshot = {
+        ...this.snapshot,
+        activeModIds: [],
+        loadOrder: [],
+      };
+      this.emit();
+    }
+  }
+
+  private logRecordIssues(rec: ModRecord): void {
+    const firstError = rec.diagnostics.find((d) => d.severity === 'error');
+    if (firstError) {
+      this.appendLog(
+        'warn',
+        `Skipped "${rec.manifest.name}" (${rec.status}): ${firstError.message}`,
+        rec.hasValidManifest ? rec.manifest.modId : undefined,
+        rec.sourceId,
+      );
+    }
+  }
+
+  private appendLog(
+    level: ModLogLevel,
+    message: string,
+    modId?: string,
+    sourceId?: string,
+  ): void {
+    this.logCounter += 1;
+    const entry: ModLogEntry = {
+      id: `modlog-${Date.now()}-${this.logCounter}`,
+      timestampMs: Date.now(),
+      level,
+      modId,
+      sourceId,
+      message,
+    };
+    const nextLogs = [entry, ...this.snapshot.logs].slice(0, MAX_LOG_ENTRIES);
+    this.snapshot = {
+      ...this.snapshot,
+      logs: nextLogs,
+    };
+  }
+
+  private emit(): void {
+    for (const listener of this.listeners) {
+      listener(this.snapshot);
+    }
+  }
+}
+
+export function getModManager(): ModManager {
+  return ModManager.getInstance();
+}

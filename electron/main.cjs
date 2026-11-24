@@ -6,6 +6,7 @@ const {
   net,
   protocol,
   session,
+  shell,
 } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -273,6 +274,54 @@ ipcMain.handle('settingsStorage:readProfile', async () => {
 
 ipcMain.handle('settingsStorage:writeProfile', async (_event, payload) => {
   return desktopStorage.writeProfile(payload);
+});
+
+ipcMain.handle('modStorage:getInfo', async () => {
+  return desktopStorage.getModsInfo();
+});
+
+ipcMain.handle('modStorage:discoverMods', async () => {
+  return desktopStorage.discoverMods();
+});
+
+ipcMain.handle('modStorage:readState', async () => {
+  return desktopStorage.readModState();
+});
+
+ipcMain.handle('modStorage:writeState', async (_event, payload) => {
+  return desktopStorage.writeModState(payload);
+});
+
+ipcMain.handle('modStorage:readAsset', async (_event, sourceId, relativePath) => {
+  return desktopStorage.readModAsset(sourceId, relativePath);
+});
+
+ipcMain.handle('modStorage:deleteMod', async (_event, sourceId) => {
+  return desktopStorage.deleteMod(sourceId);
+});
+
+ipcMain.handle('modStorage:importPackage', async (event, fileName, payload, options = {}) => {
+  return desktopStorage.importModPackage(fileName, payload, options, (progress) => {
+    try {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('modStorage:installProgress', progress);
+      }
+    } catch {
+      // Ignore closed window progress sends
+    }
+  });
+});
+
+ipcMain.handle('modStorage:openModsFolder', async () => {
+  const info = await desktopStorage.getModsInfo();
+  if (!info?.ok || !info.modsDir) {
+    return { ok: false, error: info?.error || 'MODS_DIR_UNAVAILABLE' };
+  }
+  const openErr = await shell.openPath(info.modsDir);
+  if (openErr) {
+    return { ok: false, error: openErr };
+  }
+  return { ok: true, modsDir: info.modsDir };
 });
 
 ipcMain.handle('lan:discover', async (_event, timeoutMs = 1500) => {

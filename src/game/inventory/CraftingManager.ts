@@ -28,6 +28,7 @@ function toLookupSet(input?: ReadonlySet<string> | string[]): ReadonlySet<string
  * with support for crafting stations, tools, player level, prerequisites, and progression tracking.
  */
 export class CraftingManager {
+  private static externalRecipeProvider: (() => CraftingRecipe[]) | null = null;
   private readonly recipes: CraftingRecipe[];
   private readonly craftedRecipeIds = new Set<string>();
   private readonly unlockedRecipeIds = new Set<string>();
@@ -36,11 +37,32 @@ export class CraftingManager {
     this.recipes = recipes;
   }
 
+  public static setExternalRecipeProvider(
+    provider: (() => CraftingRecipe[]) | null,
+  ): void {
+    CraftingManager.externalRecipeProvider = provider;
+  }
+
   public getRecipes(): CraftingRecipe[] {
-    return this.recipes;
+    const ext = CraftingManager.externalRecipeProvider?.();
+    if (!ext || ext.length === 0) return this.recipes;
+    const merged = new Map<string, CraftingRecipe>();
+    for (const r of this.recipes) {
+      merged.set(r.id, r);
+    }
+    for (const r of ext) {
+      merged.set(r.id, r);
+    }
+    return Array.from(merged.values());
   }
 
   public getRecipe(recipeId: string): CraftingRecipe | undefined {
+    const ext = CraftingManager.externalRecipeProvider?.();
+    if (ext && ext.length > 0) {
+      for (let i = ext.length - 1; i >= 0; i--) {
+        if (ext[i].id === recipeId) return ext[i];
+      }
+    }
     return this.recipes.find((r) => r.id === recipeId);
   }
 
@@ -136,9 +158,10 @@ export class CraftingManager {
     inventory: InventoryManager,
     context?: CraftingContext,
   ): CraftingRecipeView[] {
+    const allRecipes = this.getRecipes();
     const views: CraftingRecipeView[] = [];
-    for (let i = 0; i < this.recipes.length; i++) {
-      const recipe = this.recipes[i];
+    for (let i = 0; i < allRecipes.length; i++) {
+      const recipe = allRecipes[i];
       const resultItem = inventory.itemManager.getItem(recipe.resultItemId);
       if (!resultItem) continue;
 

@@ -1541,6 +1541,110 @@ export interface UiStrings {
   androidStorageGrantBtn: string;
   androidStorageChooseFolderBtn: string;
   androidStoragePermHint: string;
+  // Local Mods System
+  menuMods: string;
+  tabMods: string;
+  modsTitle: string;
+  modsSubtitle: string;
+  modsFolderLabel: string;
+  modsOpenFolderBtn: string;
+  modsRefreshBtn: string;
+  modsImportBtn: string;
+  modsDiscoveredLabel: string;
+  modsActiveLabel: string;
+  modsIssuesLabel: string;
+  modsEmptyTitle: string;
+  modsEmptyHint: string;
+  modsEmptyStructureHint: string;
+  modsStatusReady: string;
+  modsStatusDisabled: string;
+  modsStatusIncompatible: string;
+  modsStatusMissingDep: string;
+  modsStatusDepDisabled: string;
+  modsStatusCircularDep: string;
+  modsStatusDuplicate: string;
+  modsStatusCorrupted: string;
+  modsStatusIncomplete: string;
+  modsStatusUnsafe: string;
+  modsEnableBtn: string;
+  modsDisableBtn: string;
+  modsRemoveBtn: string;
+  modsRemoveConfirmTitle: string;
+  modsRemoveConfirmDesc: (name: string) => string;
+  modsRemoveConfirmYes: string;
+  modsByAuthor: (author: string) => string;
+  modsPriorityLabel: string;
+  modsDependenciesLabel: string;
+  modsFoldersCoverageLabel: (present: number, total: number) => string;
+  modsContentAssetsLabel: (contentCount: number, assetCount: number) => string;
+  modsLogsTitle: string;
+  modsLogsShowBtn: string;
+  modsLogsHideBtn: string;
+  modsLogsClearBtn: string;
+  modsLogsEmpty: string;
+  modsInstantSaveNote: string;
+  modsImportSuccessNotice: (name: string) => string;
+  modsImportErrorNotice: (err: string) => string;
+  modsReloadBtn: string;
+  modsReloadSuccessNotice: (activeCount: number, issueCount: number) => string;
+  modsViewDetailsBtn: string;
+  modsFilterInstalled: string;
+  modsFilterEnabled: string;
+  modsFilterDisabled: string;
+  modsFilterEmptyTitle: string;
+  modsFilterEmptyHint: string;
+  modsCompatibilityLabel: string;
+  modsCompatibleBadge: string;
+  modsUnsupportedVersionBadge: string;
+  modsModIdLabel: string;
+  modsVersionLabel: string;
+  modsAuthorLabel: string;
+  modsDescriptionLabel: string;
+  modsNoDescription: string;
+  modsSupportedGameVersionLabel: string;
+  modsLoadOrderLabel: string;
+  modsNoDependencies: string;
+  modsErrorWarningTitle: string;
+  modsNoErrorsOrWarnings: string;
+  modsSourcePathLabel: string;
+  modsContentFilesLabel: string;
+  modsAssetsFilesLabel: string;
+  modsIncompatibleAssetsLabel: string;
+  modsFoldersLabel: string;
+  modsCloseDetailsBtn: string;
+  modsClearSummaryInvalidMod: string;
+  modsClearSummaryUnsupportedVersion: (required: string, current: string) => string;
+  modsClearSummaryMissingDep: string;
+  modsClearSummaryDuplicateId: string;
+  modsClearSummaryCorruptedPackage: string;
+  modsClearSummaryIncompatibleAsset: (count: number) => string;
+  modsErrorInvalidPackageName: string;
+  modsErrorInvalidPackageSize: string;
+  modsErrorCorruptPackage: string;
+  modsErrorPermissionRequired: string;
+  modsKindDevelopment: string;
+  modsKindWoamod: string;
+  modsOriginLabel: string;
+  modsPackageFileLabel: string;
+  modsInstalledAtLabel: string;
+  modsDevBadgeHint: string;
+  modsInstallProgressTitle: string;
+  modsStageReading: string;
+  modsStageValidating: string;
+  modsStageExtracting: string;
+  modsStageFinalizing: string;
+  modsStageCleaningUp: string;
+  modsStageCompleted: string;
+  modsStageFailed: string;
+  modsInstallEntriesLabel: (done: number, total: number) => string;
+  modsErrorPathTraversal: string;
+  modsErrorUnsafeExecutable: string;
+  modsErrorRequiredFilesMissing: string;
+  modsErrorUnsupportedVersion: string;
+  modsErrorDuplicateModId: string;
+  modsErrorMissingDependency: string;
+  modsErrorDepMismatch: string;
+  modsErrorTargetExists: string;
 }
 
 export const UI_TEXT: Record<Language, UiStrings> = {
@@ -2720,6 +2824,116 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     androidStorageGrantBtn: 'Grant Access',
     androidStorageChooseFolderBtn: 'Choose Folder (SAF)',
     androidStoragePermHint: 'Grant storage permission to save worlds and settings directly inside /storage/emulated/0/World of Adventure/.',
+    menuMods: 'Mods',
+    tabMods: 'Mods',
+    modsTitle: 'Local Mods Manager',
+    modsSubtitle: 'Discover, validate, enable, disable, and manage offline data & asset mods.',
+    modsFolderLabel: 'Mods Directory',
+    modsOpenFolderBtn: 'Open Mods Folder',
+    modsRefreshBtn: 'Refresh Mods',
+    modsImportBtn: 'Import .woamod',
+    modsDiscoveredLabel: 'Installed',
+    modsActiveLabel: 'Enabled',
+    modsIssuesLabel: 'Issues',
+    modsEmptyTitle: 'No installed mods found',
+    modsEmptyHint: 'Place unpacked development mod folders into the Mods directory above, or click Import .woamod to install a local .woamod package offline.',
+    modsEmptyStructureHint: 'Standard structure: mod.json + items/, weapons/, recipes/, quests/, characters/, creatures/, npcs/, buildings/, models/, textures/, sounds/, music/, localization/, assets/.',
+    modsStatusReady: 'Enabled',
+    modsStatusDisabled: 'Disabled',
+    modsStatusIncompatible: 'Unsupported Version',
+    modsStatusMissingDep: 'Missing Dependency',
+    modsStatusDepDisabled: 'Dependency Disabled',
+    modsStatusCircularDep: 'Circular Dependency',
+    modsStatusDuplicate: 'Duplicate Mod ID',
+    modsStatusCorrupted: 'Corrupted Package',
+    modsStatusIncomplete: 'Invalid Mod',
+    modsStatusUnsafe: 'Invalid Mod (Blocked)',
+    modsEnableBtn: 'Enable',
+    modsDisableBtn: 'Disable',
+    modsRemoveBtn: 'Remove',
+    modsRemoveConfirmTitle: 'Remove Mod?',
+    modsRemoveConfirmDesc: (name) =>
+      `Delete "${name}" permanently from your local Mods folder?`,
+    modsRemoveConfirmYes: 'Delete Mod',
+    modsByAuthor: (author) => `by ${author}`,
+    modsPriorityLabel: 'Load Priority',
+    modsDependenciesLabel: 'Dependencies',
+    modsFoldersCoverageLabel: (present, total) => `${present}/${total} folders`,
+    modsContentAssetsLabel: (contentCount, assetCount) =>
+      `${contentCount} data · ${assetCount} assets`,
+    modsLogsTitle: 'Validation & Load Log',
+    modsLogsShowBtn: 'View Logs',
+    modsLogsHideBtn: 'Hide Logs',
+    modsLogsClearBtn: 'Clear',
+    modsLogsEmpty: 'No mod loader events recorded yet.',
+    modsInstantSaveNote: 'Mod enable, disable, and priority changes apply offline and save immediately.',
+    modsImportSuccessNotice: (name) => `Successful installation: "${name}" was added to your local Mods folder.`,
+    modsImportErrorNotice: (err) => `Import failed: ${err}`,
+    modsReloadBtn: 'Reload Mods',
+    modsReloadSuccessNotice: (activeCount, issueCount) =>
+      issueCount > 0
+        ? `Reloaded ${activeCount} enabled mod(s) (${issueCount} mod(s) with issues skipped safely).`
+        : `Reloaded ${activeCount} enabled mod(s) cleanly.`,
+    modsViewDetailsBtn: 'View Details',
+    modsFilterInstalled: 'Installed Mods',
+    modsFilterEnabled: 'Enabled Mods',
+    modsFilterDisabled: 'Disabled Mods',
+    modsFilterEmptyTitle: 'No mods in this filter',
+    modsFilterEmptyHint: 'Switch filters or install/enable a local mod to view entries here.',
+    modsCompatibilityLabel: 'Compatibility',
+    modsCompatibleBadge: 'Compatible',
+    modsUnsupportedVersionBadge: 'Unsupported Version',
+    modsModIdLabel: 'Mod ID',
+    modsVersionLabel: 'Version',
+    modsAuthorLabel: 'Author',
+    modsDescriptionLabel: 'Description',
+    modsNoDescription: 'No description provided in mod.json.',
+    modsSupportedGameVersionLabel: 'Supported Game Version',
+    modsLoadOrderLabel: 'Load Order',
+    modsNoDependencies: 'None',
+    modsErrorWarningTitle: 'Error & Warning Status',
+    modsNoErrorsOrWarnings: 'No errors or warnings. Ready for safe loading.',
+    modsSourcePathLabel: 'Source Location',
+    modsContentFilesLabel: 'Data Files',
+    modsAssetsFilesLabel: 'Compatible Assets',
+    modsIncompatibleAssetsLabel: 'Incompatible Assets (Skipped)',
+    modsFoldersLabel: 'Standard Mod Folders',
+    modsCloseDetailsBtn: 'Close',
+    modsClearSummaryInvalidMod: 'Invalid mod: missing or malformed mod.json or required metadata.',
+    modsClearSummaryUnsupportedVersion: (required, current) =>
+      `Unsupported version: requires game ${required || 'unknown'}, current version is ${current}.`,
+    modsClearSummaryMissingDep: 'Missing dependency: one or more required dependency mods are unavailable, disabled, or out of range.',
+    modsClearSummaryDuplicateId: 'Duplicate Mod ID: another installed mod already uses this Mod ID.',
+    modsClearSummaryCorruptedPackage: 'Corrupted package: archive structure or mod data JSON could not be read safely.',
+    modsClearSummaryIncompatibleAsset: (count) =>
+      `Incompatible asset: ${count} unsupported or oversized asset file(s) skipped safely.`,
+    modsErrorInvalidPackageName: 'Invalid mod package file. Only official .woamod packages are accepted.',
+    modsErrorInvalidPackageSize: 'Package size is empty or exceeds the safe 150 MB limit.',
+    modsErrorCorruptPackage: 'Corrupted package: the selected .woamod archive or its JSON data is damaged or invalid.',
+    modsErrorPermissionRequired: 'Storage permission required to write inside World of Adventure/Mods/.',
+    modsKindDevelopment: 'Development / Unpacked',
+    modsKindWoamod: 'Installed .woamod',
+    modsOriginLabel: 'Mod Format',
+    modsPackageFileLabel: 'Package Archive',
+    modsInstalledAtLabel: 'Installed Date',
+    modsDevBadgeHint: 'Loaded directly from an unpacked folder inside Mods/',
+    modsInstallProgressTitle: 'Installing .woamod Package',
+    modsStageReading: 'Reading package',
+    modsStageValidating: 'Validating structure & safety',
+    modsStageExtracting: 'Extracting files safely',
+    modsStageFinalizing: 'Finalizing installation',
+    modsStageCleaningUp: 'Cleaning up incomplete files',
+    modsStageCompleted: 'Installation complete',
+    modsStageFailed: 'Installation failed',
+    modsInstallEntriesLabel: (done, total) => `${done}/${total} files`,
+    modsErrorPathTraversal: 'Security violation blocked: unsafe path traversal or symbolic link detected inside the archive.',
+    modsErrorUnsafeExecutable: 'Security violation blocked: executable files or native libraries are forbidden in mods.',
+    modsErrorRequiredFilesMissing: 'Invalid mod: required mod.json metadata or standard mod folders are missing.',
+    modsErrorUnsupportedVersion: 'Unsupported version: this .woamod package does not support the current game version.',
+    modsErrorDuplicateModId: 'Duplicate Mod ID: a mod with the same Mod ID is already installed.',
+    modsErrorMissingDependency: 'Missing dependency: install and enable required dependency mods first.',
+    modsErrorDepMismatch: 'Dependency conflict: an installed dependency does not match the required version.',
+    modsErrorTargetExists: 'Target folder already exists inside Mods/. Remove the existing mod before reinstalling.',
   },
   ar: {
     gameTitle: 'عالم المغامرة',
@@ -3896,5 +4110,115 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     androidStorageGrantBtn: 'منح الإذن',
     androidStorageChooseFolderBtn: 'اختر مجلدًا (SAF)',
     androidStoragePermHint: 'امنح إذن التخزين لحفظ العوالم والإعدادات مباشرة داخل /storage/emulated/0/World of Adventure/.',
+    menuMods: 'المودات',
+    tabMods: 'المودات',
+    modsTitle: 'مدير المودات المحلية',
+    modsSubtitle: 'اكتشاف والتحقق وتفعيل وتعطيل وإدارة مودات البيانات والأصول دون اتصال بالإنترنت.',
+    modsFolderLabel: 'مجلد المودات',
+    modsOpenFolderBtn: 'فتح مجلد المودات',
+    modsRefreshBtn: 'تحديث المودات',
+    modsImportBtn: 'استيراد .woamod',
+    modsDiscoveredLabel: 'المثبتة',
+    modsActiveLabel: 'المفعلة',
+    modsIssuesLabel: 'المشاكل',
+    modsEmptyTitle: 'لا توجد مودات مثبتة',
+    modsEmptyHint: 'ضع مجلدات المودات التطويرية داخل مجلد المودات أعلاه، أو اضغط استيراد .woamod لتثبيت حزمة مود رسمية دون إنترنت.',
+    modsEmptyStructureHint: 'الهيكل القياسي: mod.json + items/ و weapons/ و recipes/ و quests/ و characters/ و creatures/ و npcs/ و buildings/ و models/ و textures/ و sounds/ و music/ و localization/ و assets/.',
+    modsStatusReady: 'مفعل',
+    modsStatusDisabled: 'معطل',
+    modsStatusIncompatible: 'إصدار غير مدعوم',
+    modsStatusMissingDep: 'اعتمادية مفقودة',
+    modsStatusDepDisabled: 'الاعتمادية معطلة',
+    modsStatusCircularDep: 'اعتمادية دائرية',
+    modsStatusDuplicate: 'معرف مود مكرر',
+    modsStatusCorrupted: 'حزمة تالفة',
+    modsStatusIncomplete: 'مود غير صالح',
+    modsStatusUnsafe: 'مود غير صالح (محظور)',
+    modsEnableBtn: 'تفعيل',
+    modsDisableBtn: 'تعطيل',
+    modsRemoveBtn: 'إزالة',
+    modsRemoveConfirmTitle: 'إزالة المود؟',
+    modsRemoveConfirmDesc: (name) =>
+      `هل تريد حذف "${name}" نهائياً من مجلد المودات المحلي؟`,
+    modsRemoveConfirmYes: 'حذف المود',
+    modsByAuthor: (author) => `بواسطة ${author}`,
+    modsPriorityLabel: 'أولوية التحميل',
+    modsDependenciesLabel: 'الاعتماديات',
+    modsFoldersCoverageLabel: (present, total) => `${present}/${total} مجلدات`,
+    modsContentAssetsLabel: (contentCount, assetCount) =>
+      `${contentCount} بيانات · ${assetCount} أصول`,
+    modsLogsTitle: 'سجل التحقق والتحميل',
+    modsLogsShowBtn: 'عرض السجل',
+    modsLogsHideBtn: 'إخفاء السجل',
+    modsLogsClearBtn: 'مسح',
+    modsLogsEmpty: 'لم يتم تسجيل أحداث للمودات بعد.',
+    modsInstantSaveNote: 'يتم تطبيق وحفظ تفعيل وتعطيل وأولوية المودات فوراً دون اتصال.',
+    modsImportSuccessNotice: (name) => `تم التثبيت بنجاح: تمت إضافة "${name}" إلى مجلد المودات المحلي.`,
+    modsImportErrorNotice: (err) => `فشل الاستيراد: ${err}`,
+    modsReloadBtn: 'إعادة تحميل المودات',
+    modsReloadSuccessNotice: (activeCount, issueCount) =>
+      issueCount > 0
+        ? `تمت إعادة تحميل ${activeCount} مود مفعل (تم تجاوز ${issueCount} مود به مشاكل بأمان).`
+        : `تمت إعادة تحميل ${activeCount} مود مفعل بنجاح.`,
+    modsViewDetailsBtn: 'عرض التفاصيل',
+    modsFilterInstalled: 'المودات المثبتة',
+    modsFilterEnabled: 'المودات المفعلة',
+    modsFilterDisabled: 'المودات المعطلة',
+    modsFilterEmptyTitle: 'لا توجد مودات في هذا التصنيف',
+    modsFilterEmptyHint: 'بدّل التصنيف أو قم بتثبيت/تفعيل مود محلي لعرضه هنا.',
+    modsCompatibilityLabel: 'التوافق',
+    modsCompatibleBadge: 'متوافق',
+    modsUnsupportedVersionBadge: 'إصدار غير مدعوم',
+    modsModIdLabel: 'معرف المود',
+    modsVersionLabel: 'الإصدار',
+    modsAuthorLabel: 'المؤلف',
+    modsDescriptionLabel: 'الوصف',
+    modsNoDescription: 'لا يوجد وصف في ملف mod.json.',
+    modsSupportedGameVersionLabel: 'إصدار اللعبة المدعوم',
+    modsLoadOrderLabel: 'ترتيب التحميل',
+    modsNoDependencies: 'لا يوجد',
+    modsErrorWarningTitle: 'حالة الأخطاء والتحذيرات',
+    modsNoErrorsOrWarnings: 'لا توجد أخطاء أو تحذيرات. جاهز للتحميل الآمن.',
+    modsSourcePathLabel: 'مسار المصدر',
+    modsContentFilesLabel: 'ملفات البيانات',
+    modsAssetsFilesLabel: 'الأصول المتوافقة',
+    modsIncompatibleAssetsLabel: 'أصول غير متوافقة (تم تجاوزها)',
+    modsFoldersLabel: 'مجلدات المود القياسية',
+    modsCloseDetailsBtn: 'إغلاق',
+    modsClearSummaryInvalidMod: 'مود غير صالح: ملف mod.json مفقود أو غير مكتمل أو يفتقد البيانات المطلوبة.',
+    modsClearSummaryUnsupportedVersion: (required, current) =>
+      `إصدار غير مدعوم: يتطلب اللعبة ${required || 'غير محدد'}، والإصدار الحالي هو ${current}.`,
+    modsClearSummaryMissingDep: 'اعتمادية مفقودة: أحد المودات المطلوبة مفقود أو معطل أو غير متوافق بالإصدار.',
+    modsClearSummaryDuplicateId: 'معرف مود مكرر: يوجد مود آخر مثبت يستخدم نفس معرف المود.',
+    modsClearSummaryCorruptedPackage: 'حزمة تالفة: تعذر قراءة الأرشيف أو ملفات JSON الخاصة بالمود بأمان.',
+    modsClearSummaryIncompatibleAsset: (count) =>
+      `أصول غير متوافقة: تم تجاوز ${count} ملف أصول غير مدعوم أو كبير الحجم بأمان.`,
+    modsErrorInvalidPackageName: 'ملف حزمة غير صالح. يتم قبول حزم .woamod الرسمية فقط.',
+    modsErrorInvalidPackageSize: 'حجم الحزمة فارغ أو يتجاوز الحد الآمن 150 ميجابايت.',
+    modsErrorCorruptPackage: 'حزمة تالفة: أرشيف .woamod المحدد أو ملفات JSON الخاصة به معطوبة أو غير صالحة.',
+    modsErrorPermissionRequired: 'يلزم منح إذن التخزين للكتابة داخل مجلد World of Adventure/Mods/.',
+    modsKindDevelopment: 'تطويري / غير مضغوط',
+    modsKindWoamod: 'حزمة .woamod مثبتة',
+    modsOriginLabel: 'تنسيق المود',
+    modsPackageFileLabel: 'ملف الحزمة',
+    modsInstalledAtLabel: 'تاريخ التثبيت',
+    modsDevBadgeHint: 'تم التحميل مباشرة من مجلد غير مضغوط داخل Mods/',
+    modsInstallProgressTitle: 'جارٍ تثبيت حزمة .woamod',
+    modsStageReading: 'قراءة الحزمة',
+    modsStageValidating: 'التحقق من البنية والأمان',
+    modsStageExtracting: 'استخراج الملفات بأمان',
+    modsStageFinalizing: 'إنهاء التثبيت',
+    modsStageCleaningUp: 'تنظيف الملفات غير المكتملة',
+    modsStageCompleted: 'اكتمل التثبيت',
+    modsStageFailed: 'فشل التثبيت',
+    modsInstallEntriesLabel: (done, total) => `${done}/${total} ملف`,
+    modsErrorPathTraversal: 'تم حظر انتهاك أمني: مسار غير آمن أو رابط رمزي داخل الحزمة.',
+    modsErrorUnsafeExecutable: 'تم حظر انتهاك أمني: يُمنع وجود ملفات تنفيذية أو مكتبات أصلية داخل المودات.',
+    modsErrorRequiredFilesMissing: 'مود غير صالح: ملف mod.json المطلوب أو مجلدات المود القياسية مفقودة.',
+    modsErrorUnsupportedVersion: 'إصدار غير مدعوم: حزمة .woamod لا تدعم إصدار اللعبة الحالي.',
+    modsErrorDuplicateModId: 'معرف مود مكرر: يوجد مود مثبت يستخدم نفس المعرف بالفعل.',
+    modsErrorMissingDependency: 'اعتمادية مفقودة: قم بتثبيت وتفعيل المودات المطلوبة أولاً.',
+    modsErrorDepMismatch: 'تعارض اعتمادية: إصدار المود المعتمد لا يطابق النطاق المطلوب.',
+    modsErrorTargetExists: 'مجلد الهدف موجود بالفعل داخل Mods/. احذف المود الحالي قبل إعادة التثبيت.',
   },
 };

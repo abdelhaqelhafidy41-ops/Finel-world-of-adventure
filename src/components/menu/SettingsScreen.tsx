@@ -7,10 +7,12 @@ import {
   HardDrive,
   Languages,
   Monitor,
+  Package,
   RotateCcw,
   Sliders,
   Volume2,
 } from 'lucide-react';
+import { ModsPanel } from './ModsPanel';
 import {
   detectRuntimePlatform,
   type AndroidStorageStatus,
@@ -48,10 +50,12 @@ export type SettingsTabId =
   | 'audio'
   | 'controls'
   | 'gameplay'
-  | 'accessibility';
+  | 'accessibility'
+  | 'mods';
 
 interface SettingsScreenProps {
   lang: Language;
+  initialTab?: SettingsTabId;
   graphicsSettings: GraphicsSettings;
   extendedSettings: ExtendedGameSettings;
   gameSettings: GameSettings;
@@ -72,6 +76,7 @@ interface SettingsScreenProps {
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   lang,
+  initialTab = 'graphics',
   graphicsSettings,
   extendedSettings,
   gameSettings,
@@ -83,7 +88,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onOpenCustomizeControls,
   onBack,
 }) => {
-  const [activeTab, setActiveTab] = useState<SettingsTabId>('graphics');
+  const [activeTab, setActiveTab] = useState<SettingsTabId>(initialTab);
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
   const [draftLang, setDraftLang] = useState<Language>(lang);
   const [draftGraphics, setDraftGraphics] =
     useState<GraphicsSettings>(graphicsSettings);
@@ -160,6 +168,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       id: 'accessibility',
       label: t.tabAccessibility,
       icon: <Accessibility className="w-4 h-4" />,
+    },
+    {
+      id: 'mods',
+      label: t.tabMods,
+      icon: <Package className="w-4 h-4" />,
     },
   ];
 
@@ -1212,6 +1225,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 }
               />
             </div>
+          )}
+
+          {activeTab === 'mods' && (
+            <ModsPanel
+              lang={draftLang}
+              androidStorageStatus={androidStorageStatus}
+            />
           )}
         </div>
 

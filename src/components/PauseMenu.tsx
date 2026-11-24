@@ -14,6 +14,7 @@ import {
   LogOut,
   Map as MapIcon,
   Moon,
+  Package,
   Play,
   RotateCcw,
   RotateCw,
@@ -58,6 +59,7 @@ interface PauseMenuProps {
   onOpenMap?: () => void;
   onSaveWorld: () => void;
   onOpenSettings: () => void;
+  onOpenMods?: () => void;
   onReturnToMainMenu: (saveFirst: boolean) => void;
   onResetPosition: () => void;
   onOpenSaveSlots: () => void;
@@ -102,6 +104,7 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   onOpenMap,
   onSaveWorld,
   onOpenSettings,
+  onOpenMods,
   onReturnToMainMenu,
   onResetPosition,
   onOpenSaveSlots,
@@ -173,6 +176,7 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   const mapNavIndex = onOpenMap ? pauseActions.push(() => onOpenMap()) - 1 : -1;
   const saveNavIndex = canSaveWorld ? pauseActions.push(onSaveWorld) - 1 : -1;
   const settingsNavIndex = pauseActions.push(onOpenSettings) - 1;
+  const modsNavIndex = onOpenMods ? pauseActions.push(onOpenMods) - 1 : -1;
   const mainMenuNavIndex = pauseActions.push(handleMainMenuClick) - 1;
   const exitNavIndex = pauseActions.push(() => setExitPromptOpen(true)) - 1;
 
@@ -463,6 +467,24 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
             <Settings className="w-4 h-4 text-[#e5a93c]" />
             <span>{t.pauseSettings}</span>
           </button>
+
+          {onOpenMods && (
+            <button
+              ref={registerItem(modsNavIndex)}
+              type="button"
+              data-testid="pause-btn-mods"
+              onClick={() => {
+                setFocusedIndex(modsNavIndex);
+                onOpenMods();
+              }}
+              className={`w-full min-h-[48px] inline-flex items-center justify-center gap-2.5 px-5 py-3 rounded-xl bg-[#16271e] hover:bg-[#1e3529] border border-[#2f493b] text-[#e4ece1] font-display font-bold text-sm tracking-wide transition-all cursor-pointer active:scale-[0.985] ${
+                focusedIndex === modsNavIndex ? 'ring-2 ring-[#e5a93c]' : ''
+              }`}
+            >
+              <Package className="w-4 h-4 text-[#e5a93c]" />
+              <span>{t.menuMods}</span>
+            </button>
+          )}
 
           <button
             ref={registerItem(mainMenuNavIndex)}

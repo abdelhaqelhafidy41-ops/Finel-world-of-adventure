@@ -148,7 +148,7 @@ jobs:
             exit 1
           fi
 
-          KEYSTORE_CERT_SHA256=$(grep -E '^\s*SHA256:' "$ALIAS_INFO_FILE" | head -n 1 | sed 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          KEYSTORE_CERT_SHA256=$(grep -E '^\s*SHA256:' "$ALIAS_INFO_FILE" | head -n 1 | sed 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr '[:upper:]' '[:lower:]' || true)
           rm -f "$ALIAS_INFO_FILE"
 
           if [ -z "$KEYSTORE_CERT_SHA256" ]; then
@@ -200,15 +200,29 @@ jobs:
             rm -f "$APKSIGNER_OUT"
             exit 1
           fi
+          if ! grep -qiE 'Verified using v2 scheme.*:[[:space:]]*true' "$APKSIGNER_OUT"; then
+            echo "::error::Release APK did not pass mandatory APK Signature Scheme v2 verification."
+            rm -f "$APKSIGNER_OUT"
+            exit 1
+          fi
           if grep -q "CN=Android Debug" "$APKSIGNER_OUT"; then
             echo "::error::Release APK is signed with the Android Debug certificate."
             rm -f "$APKSIGNER_OUT"
             exit 1
           fi
 
-          APK_SHA256=$(grep -E 'Signer #1 certificate SHA-256 digest:' "$APKSIGNER_OUT" | head -n 1 | awk '{print tolower($NF)}')
+          APK_SHA256=$(grep -E 'certificate SHA-256 digest:' "$APKSIGNER_OUT" | head -n 1 | awk '{print tolower($NF)}' || true)
+          APK_DN=$(grep -E 'certificate DN:' "$APKSIGNER_OUT" | head -n 1 | sed 's/.*certificate DN:[[:space:]]*//' || true)
           rm -f "$APKSIGNER_OUT"
-          if [ -z "$APK_SHA256" ] || [ "$APK_SHA256" != "$KEYSTORE_CERT_SHA256" ]; then
+
+          if [ -z "$APK_SHA256" ]; then
+            echo "::error::Failed to extract certificate SHA-256 digest from apksigner output."
+            exit 1
+          fi
+          echo "Verified Release APK Signer DN: ${APK_DN:-unknown}"
+          echo "Verified Release APK SHA-256: $APK_SHA256"
+
+          if [ "$APK_SHA256" != "$KEYSTORE_CERT_SHA256" ]; then
             echo "::error::Release APK SHA-256 ('$APK_SHA256') does not match keystore SHA-256 ('$KEYSTORE_CERT_SHA256')."
             exit 1
           fi
@@ -230,12 +244,13 @@ jobs:
 
           AAB_CERT_OUT=$(mktemp "${{ runner.temp }}/aab-cert.XXXXXX")
           LC_ALL=C keytool -printcert -jarfile "$AAB_PATH" > "$AAB_CERT_OUT"
-          AAB_SHA256=$(grep -E '^\s*SHA256:' "$AAB_CERT_OUT" | head -n 1 | sed 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          AAB_SHA256=$(grep -E '^\s*SHA256:' "$AAB_CERT_OUT" | head -n 1 | sed 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr '[:upper:]' '[:lower:]' || true)
           rm -f "$AAB_CERT_OUT"
           if [ -z "$AAB_SHA256" ] || [ "$AAB_SHA256" != "$APK_SHA256" ]; then
             echo "::error::Release AAB SHA-256 ('$AAB_SHA256') does not match Release APK SHA-256 ('$APK_SHA256')."
             exit 1
           fi
+          echo "Verified Release AAB SHA-256: $AAB_SHA256"
 
           ls -lh "$APK_PATH" "$AAB_PATH"
 

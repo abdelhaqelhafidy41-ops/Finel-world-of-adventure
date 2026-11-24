@@ -44,6 +44,7 @@ export type TitleSubScreen =
   | 'loadWorld'
   | 'multiplayer'
   | 'settings'
+  | 'mods'
   | 'exit';
 
 interface TitleScreenProps {
@@ -190,6 +191,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
         onSettings={() => onChangeSubScreen('settings')}
         onExitGame={() => onChangeSubScreen('exit')}
         onOpenProfile={onOpenProfile}
+        onOpenMods={() => onChangeSubScreen('mods')}
       />
 
       {subScreen === 'newWorld' && (
@@ -229,9 +231,10 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
         />
       )}
 
-      {subScreen === 'settings' && (
+      {(subScreen === 'settings' || subScreen === 'mods') && (
         <SettingsScreen
           lang={lang}
+          initialTab={subScreen === 'mods' ? 'mods' : 'graphics'}
           graphicsSettings={graphicsSettings}
           extendedSettings={extendedSettings}
           gameSettings={gameSettings}

@@ -26,4 +26,22 @@ contextBridge.exposeInMainWorld('desktopApp', {
     readProfile: () => ipcRenderer.invoke('settingsStorage:readProfile'),
     writeProfile: (payload) => ipcRenderer.invoke('settingsStorage:writeProfile', payload),
   },
+  modStorage: {
+    getInfo: () => ipcRenderer.invoke('modStorage:getInfo'),
+    discoverMods: () => ipcRenderer.invoke('modStorage:discoverMods'),
+    readState: () => ipcRenderer.invoke('modStorage:readState'),
+    writeState: (payload) => ipcRenderer.invoke('modStorage:writeState', payload),
+    readAsset: (sourceId, relativePath) =>
+      ipcRenderer.invoke('modStorage:readAsset', sourceId, relativePath),
+    deleteMod: (sourceId) => ipcRenderer.invoke('modStorage:deleteMod', sourceId),
+    importPackage: (fileName, payload, options) =>
+      ipcRenderer.invoke('modStorage:importPackage', fileName, payload, options),
+    onInstallProgress: (listener) => {
+      if (typeof listener !== 'function') return () => {};
+      const handler = (_event, progress) => listener(progress);
+      ipcRenderer.on('modStorage:installProgress', handler);
+      return () => ipcRenderer.removeListener('modStorage:installProgress', handler);
+    },
+    openModsFolder: () => ipcRenderer.invoke('modStorage:openModsFolder'),
+  },
 });

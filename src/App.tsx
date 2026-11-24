@@ -31,6 +31,7 @@ import {
   flushPendingWorldSaves,
   hydratePersistentWorldStorage,
 } from './game/save/LocalWorldStorage';
+import { getModManager } from './game/mods';
 import {
   UI_TEXT,
   loadSavedLanguage,
@@ -60,7 +61,10 @@ import { PauseMenu } from './components/PauseMenu';
 import { SaveSlotsModal } from './components/SaveSlotsModal';
 import { GraphicsSettingsModal } from './components/GraphicsSettingsModal';
 import { DebugPerformanceOverlay } from './components/DebugPerformanceOverlay';
-import { SettingsScreen } from './components/menu/SettingsScreen';
+import {
+  SettingsScreen,
+  type SettingsTabId,
+} from './components/menu/SettingsScreen';
 import { UpdateNotificationModal } from './components/menu/UpdateNotificationModal';
 import {
   checkForAppUpdate,
@@ -197,6 +201,8 @@ export default function App() {
   const [language, setLanguage] = useState<Language>(() => loadSavedLanguage());
   const [phase, setPhase] = useState<GamePhase>('title');
   const [activeModal, setActiveModal] = useState<ActiveModal>('none');
+  const [settingsInitialTab, setSettingsInitialTab] =
+    useState<SettingsTabId>('graphics');
   const [inventoryInitialTab, setInventoryInitialTab] = useState<'pack' | 'craft'>('pack');
   const [buildingModalVersion, setBuildingModalVersion] = useState(0);
   const [loadProgress, setLoadProgress] = useState(0);
@@ -429,6 +435,7 @@ export default function App() {
         refreshSaveSlots();
       }
     });
+    void getModManager().initialize();
     void hydrateWindowsSettingsFromNative({
       lang: languageRef.current,
       graphics: graphicsSettingsRef.current,
@@ -507,6 +514,7 @@ export default function App() {
             refreshSaveSlots();
           }
         });
+        void getModManager().refreshMods();
       }
     };
 
@@ -2150,6 +2158,12 @@ export default function App() {
             onSaveWorld={handleQuickSave}
             onOpenSettings={() => {
               engineRef.current?.sound.playUiClick();
+              setSettingsInitialTab('graphics');
+              setActiveModal('settings');
+            }}
+            onOpenMods={() => {
+              engineRef.current?.sound.playUiClick();
+              setSettingsInitialTab('mods');
               setActiveModal('settings');
             }}
             onReturnToMainMenu={handleReturnToMainMenu}
@@ -2242,6 +2256,7 @@ export default function App() {
       {activeModal === 'settings' && (
         <SettingsScreen
           lang={language}
+          initialTab={settingsInitialTab}
           graphicsSettings={graphicsSettings}
           extendedSettings={extendedSettings}
           gameSettings={settings}

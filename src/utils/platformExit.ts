@@ -52,6 +52,106 @@ export interface DesktopSettingsStorageApi {
   ) => Promise<{ ok: boolean; error?: string }>;
 }
 
+export interface RawModContentFile {
+  category: string;
+  relativePath: string;
+  rawText: string;
+  readError?: string;
+}
+
+export interface RawModAssetFile {
+  category: string;
+  relativePath: string;
+  sizeBytes: number;
+}
+
+export interface RawDiscoveredModEntry {
+  sourceId: string;
+  sourceType: 'folder' | 'archive';
+  installKind?: 'development' | 'woamod';
+  packageFileName?: string;
+  installedAtMs?: number;
+  sourcePath: string;
+  modifiedAtMs: number;
+  manifestRaw: string | null;
+  manifestError: string | null;
+  presentFolders: string[];
+  contentFiles: RawModContentFile[];
+  assetFiles: RawModAssetFile[];
+  executableFiles: string[];
+  archiveCorrupt: boolean;
+  archiveError?: string;
+}
+
+export interface ModInstallProgressBridgePayload {
+  stage: 'reading' | 'validating' | 'extracting' | 'finalizing' | 'cleaning_up' | 'completed' | 'failed';
+  fileName?: string;
+  percent: number;
+  processedBytes?: number;
+  totalBytes?: number;
+  entriesDone?: number;
+  entriesTotal?: number;
+  currentEntry?: string;
+  message?: string;
+}
+
+export interface ModAssetReadResult {
+  ok: boolean;
+  mimeType?: string;
+  base64?: string;
+  sizeBytes?: number;
+  error?: string;
+}
+
+export interface DesktopModStorageApi {
+  getInfo: () => Promise<{
+    ok: boolean;
+    modsDir: string;
+    platform?: string;
+    writable: boolean;
+    error?: string;
+  }>;
+  discoverMods: () => Promise<{
+    ok: boolean;
+    modsDir: string;
+    entries: RawDiscoveredModEntry[];
+    error?: string;
+  }>;
+  readState: () => Promise<{
+    ok: boolean;
+    state?: Record<string, unknown>;
+    error?: string;
+  }>;
+  writeState: (
+    payload: Record<string, unknown>,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  readAsset: (
+    sourceId: string,
+    relativePath: string,
+  ) => Promise<ModAssetReadResult>;
+  deleteMod: (sourceId: string) => Promise<{ ok: boolean; error?: string }>;
+  importPackage: (
+    fileName: string,
+    payload: string | Uint8Array,
+    options?: { expectedModId?: string; installFolderName?: string },
+  ) => Promise<{
+    ok: boolean;
+    sourceId?: string;
+    sourcePath?: string;
+    modId?: string;
+    error?: string;
+    detail?: string;
+  }>;
+  onInstallProgress?: (
+    listener: (progress: ModInstallProgressBridgePayload) => void,
+  ) => () => void;
+  openModsFolder: () => Promise<{
+    ok: boolean;
+    modsDir?: string;
+    error?: string;
+  }>;
+}
+
 interface DesktopAppApi {
   isDesktop?: boolean;
   platform?: string;
@@ -61,6 +161,7 @@ interface DesktopAppApi {
   lan?: DesktopLanBridgeApi;
   worldStorage?: DesktopWorldStorageApi;
   settingsStorage?: DesktopSettingsStorageApi;
+  modStorage?: DesktopModStorageApi;
 }
 
 export type AndroidStorageState =
@@ -75,6 +176,7 @@ export interface AndroidStorageStatus {
   state: AndroidStorageState;
   mode: 'direct' | 'saf' | 'none';
   path: string;
+  modsPath?: string;
   writable: boolean;
   initialized: boolean;
   sdkInt?: number;
@@ -103,6 +205,14 @@ interface AndroidNativeBridgeApi {
   writeSettingFile?: (settingKey: string, jsonContent: string) => string;
   writeProfileFile?: (jsonContent: string) => string;
   readProfileFile?: () => string;
+  getModsInfo?: () => string;
+  listLocalMods?: () => string;
+  readModState?: () => string;
+  writeModState?: (stateJson: string) => string;
+  readModAsset?: (sourceId: string, relativePath: string) => string;
+  deleteLocalMod?: (sourceId: string) => string;
+  importModPackage?: (fileName: string, base64Content: string) => string;
+  requestImportModPackage?: () => void;
   setOrientation?: (mode: string) => void;
   getOrientation?: () => string;
 }
@@ -118,6 +228,8 @@ declare global {
     AndroidNativeBridge?: AndroidNativeBridgeApi;
     Capacitor?: CapacitorGlobal;
     __onAndroidStorageStatusChanged?: (statusJson: string) => void;
+    __onAndroidModImported?: (resultJson: string) => void;
+    __onAndroidModInstallProgress?: (progressJson: string) => void;
   }
 }
 

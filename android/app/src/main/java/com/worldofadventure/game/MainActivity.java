@@ -25,16 +25,56 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
 
     private LanMultiplayerServer lanServer;
     private AndroidExternalStorageManager storageManager;
+    private final ExecutorService modInstallExecutor = Executors.newSingleThreadExecutor();
 
     private ActivityResultLauncher<String[]> runtimePermissionLauncher;
     private ActivityResultLauncher<Intent> allFilesSettingsLauncher;
     private ActivityResultLauncher<Intent> safFolderLauncher;
+    private ActivityResultLauncher<String[]> modImportLauncher;
+
+    private void notifyWebModInstallProgress(String progressJson) {
+        if (getBridge() == null) return;
+        runOnUiThread(() -> {
+            if (getBridge() != null) {
+                getBridge().eval(
+                    "window.__onAndroidModInstallProgress && window.__onAndroidModInstallProgress(" +
+                    JSONObject.quote(progressJson) +
+                    ");",
+                    null
+                );
+            }
+        });
+    }
+
+    private void notifyWebModImported(String resultJson) {
+        if (getBridge() == null) return;
+        runOnUiThread(() -> {
+            if (getBridge() != null) {
+                getBridge().eval(
+                    "window.__onAndroidModImported && window.__onAndroidModImported(" +
+                    JSONObject.quote(resultJson) +
+                    ");",
+                    null
+                );
+            }
+        });
+    }
+
+    private void launchModPackagePicker() {
+        try {
+            modImportLauncher.launch(new String[] { "application/octet-stream", "application/zip", "*/*" });
+        } catch (Exception e) {
+            notifyWebModImported("{\"ok\":false,\"error\":\"FILE_PICKER_UNAVAILABLE\"}");
+        }
+    }
 
     private void notifyWebStorageStatusChanged() {
         if (getBridge() == null || storageManager == null) return;
@@ -217,6 +257,60 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public String getModsInfo() {
+            return storageManager != null
+                ? storageManager.getModsInfoJson()
+                : "{\"ok\":false,\"platform\":\"android\",\"modsDir\":\"/storage/emulated/0/World of Adventure/Mods/\",\"writable\":false}";
+        }
+
+        @JavascriptInterface
+        public String listLocalMods() {
+            return storageManager != null
+                ? storageManager.listLocalModsJson()
+                : "{\"ok\":false,\"writable\":false,\"modsDir\":\"/storage/emulated/0/World of Adventure/Mods/\",\"entries\":[]}";
+        }
+
+        @JavascriptInterface
+        public String readModState() {
+            return storageManager != null
+                ? storageManager.readModStateJson()
+                : "{\"ok\":false,\"error\":\"NOT_READY\"}";
+        }
+
+        @JavascriptInterface
+        public String writeModState(String stateJson) {
+            return storageManager != null
+                ? storageManager.writeModStateJson(stateJson)
+                : "{\"ok\":false,\"error\":\"NOT_READY\"}";
+        }
+
+        @JavascriptInterface
+        public String readModAsset(String sourceId, String relativePath) {
+            return storageManager != null
+                ? storageManager.readModAssetJson(sourceId, relativePath)
+                : "{\"ok\":false,\"error\":\"NOT_READY\"}";
+        }
+
+        @JavascriptInterface
+        public String deleteLocalMod(String sourceId) {
+            return storageManager != null
+                ? storageManager.deleteLocalModJson(sourceId)
+                : "{\"ok\":false,\"error\":\"NOT_READY\"}";
+        }
+
+        @JavascriptInterface
+        public String importModPackage(String fileName, String base64Content) {
+            return storageManager != null
+                ? storageManager.importModPackageJson(fileName, base64Content)
+                : "{\"ok\":false,\"error\":\"NOT_READY\"}";
+        }
+
+        @JavascriptInterface
+        public void requestImportModPackage() {
+            runOnUiThread(() -> launchModPackagePicker());
+        }
+
+        @JavascriptInterface
         public String startLanHost(int port, String roomOptionsJson) {
             if (lanServer == null) {
                 lanServer = new LanMultiplayerServer(MainActivity.this);
@@ -320,6 +414,24 @@ public class MainActivity extends BridgeActivity {
             }
         );
 
+        modImportLauncher = registerForActivityResult(
+            new ActivityResultContracts.OpenDocument(),
+            uri -> {
+                if (uri == null || storageManager == null) {
+                    notifyWebModImported("{\"ok\":false,\"error\":\"IMPORT_CANCELLED\"}");
+                    return;
+                }
+                modInstallExecutor.execute(() -> {
+                    final String resultJson = storageManager.importModPackageFromUriJson(
+                        uri,
+                        null,
+                        this::notifyWebModInstallProgress
+                    );
+                    notifyWebModImported(resultJson);
+                });
+            }
+        );
+
         super.onCreate(savedInstanceState);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR);
         lanServer = new LanMultiplayerServer(this);
@@ -368,6 +480,7 @@ public class MainActivity extends BridgeActivity {
         if (lanServer != null) {
             lanServer.stopHostJson();
         }
+        modInstallExecutor.shutdownNow();
         super.onDestroy();
     }
 

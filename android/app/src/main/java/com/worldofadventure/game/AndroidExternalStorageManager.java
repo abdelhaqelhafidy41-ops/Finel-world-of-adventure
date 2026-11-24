@@ -12,7 +12,10 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.DocumentsContract;
+import android.provider.OpenableColumns;
 import androidx.core.content.ContextCompat;
+import android.util.Base64;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -21,9 +24,17 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -53,6 +64,7 @@ public final class AndroidExternalStorageManager {
 
     public static final String APP_FOLDER_NAME = "World of Adventure";
     public static final String VISIBLE_TARGET_PATH = "/storage/emulated/0/" + APP_FOLDER_NAME + "/";
+    public static final String VISIBLE_MODS_PATH = VISIBLE_TARGET_PATH + "Mods/";
 
     private static final String PREFS_NAME = "woa_android_storage";
     private static final String PREF_SAF_TREE_URI = "saf_tree_uri";
@@ -64,6 +76,7 @@ public final class AndroidExternalStorageManager {
     private static final String DIR_SETTINGS = "Settings";
     private static final String DIR_PROFILES = "Profiles";
     private static final String DIR_BACKUPS = "Backups";
+    private static final String DIR_MODS = "Mods";
     private static final String DIR_WORLD_BACKUPS = "backups";
 
     private static final String FILE_WORLD_DATA = "world-data.json";
@@ -72,6 +85,89 @@ public final class AndroidExternalStorageManager {
     private static final String FILE_PLAYER_DATA = "player-data.json";
     private static final String FILE_WORLD_STATE = "world-state.json";
     private static final String FILE_PROFILE = "profile.json";
+    private static final String FILE_MODS_CONFIG = "mods-config.json";
+
+    private static final List<String> STANDARD_MOD_FOLDERS = Arrays.asList(
+        "assets",
+        "models",
+        "textures",
+        "sounds",
+        "music",
+        "items",
+        "weapons",
+        "characters",
+        "creatures",
+        "npcs",
+        "buildings",
+        "quests",
+        "recipes",
+        "localization"
+    );
+
+    private static final Set<String> MOD_CONTENT_FOLDERS = new HashSet<>(Arrays.asList(
+        "items",
+        "weapons",
+        "characters",
+        "creatures",
+        "npcs",
+        "buildings",
+        "quests",
+        "recipes",
+        "localization"
+    ));
+
+    private static final Set<String> MOD_ASSET_FOLDERS = new HashSet<>(Arrays.asList(
+        "assets",
+        "models",
+        "textures",
+        "sounds",
+        "music"
+    ));
+
+    private static final String CURRENT_GAME_VERSION = "1.0.0";
+    private static final String FILE_WOAMOD_META = ".woamod-package.json";
+    private static final String STAGING_DIR_PREFIX = ".woamod-staging-";
+
+    private static final Set<String> FORBIDDEN_MOD_EXTENSIONS = new HashSet<>(Arrays.asList(
+        ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rb", ".pl", ".lua",
+        ".sh", ".bash", ".zsh", ".bat", ".cmd", ".ps1", ".vbs", ".vbe", ".wsf", ".wsh",
+        ".exe", ".msi", ".com", ".scr", ".pif", ".lnk", ".dll", ".so", ".dylib",
+        ".sys", ".drv", ".ocx", ".cpl", ".node", ".dex", ".jar", ".apk", ".aab",
+        ".class", ".wasm", ".php", ".html", ".htm", ".svg"
+    ));
+
+    private static final Map<String, String> ALLOWED_MOD_ASSET_MIME = createAllowedModMimeMap();
+
+    private static Map<String, String> createAllowedModMimeMap() {
+        Map<String, String> map = new HashMap<>();
+        map.put(".json", "application/json");
+        map.put(".txt", "text/plain");
+        map.put(".png", "image/png");
+        map.put(".jpg", "image/jpeg");
+        map.put(".jpeg", "image/jpeg");
+        map.put(".webp", "image/webp");
+        map.put(".avif", "image/avif");
+        map.put(".ogg", "audio/ogg");
+        map.put(".mp3", "audio/mpeg");
+        map.put(".wav", "audio/wav");
+        map.put(".m4a", "audio/mp4");
+        map.put(".glb", "model/gltf-binary");
+        map.put(".gltf", "model/gltf+json");
+        map.put(".obj", "text/plain");
+        map.put(".mtl", "text/plain");
+        map.put(".bin", "application/octet-stream");
+        return map;
+    }
+
+    private static final int MAX_MOD_ENTRIES = 1200;
+    private static final int MAX_MOD_JSON_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_MOD_ASSET_BYTES = 32 * 1024 * 1024;
+    private static final int MAX_MOD_PACKAGE_BYTES = 150 * 1024 * 1024;
+    private static final long MAX_MOD_TOTAL_UNCOMPRESSED = 300L * 1024L * 1024L;
+
+    public interface ModInstallProgressListener {
+        void onProgress(String progressJson);
+    }
 
     private final Context appContext;
     private final Object lock = new Object();
@@ -183,7 +279,57 @@ public final class AndroidExternalStorageManager {
         if ("audio".equals(settingKey)) return "audio-settings.json";
         if ("controls".equals(settingKey)) return "controls-settings.json";
         if ("language".equals(settingKey)) return "language-settings.json";
+        if ("mods".equals(settingKey)) return FILE_MODS_CONFIG;
         return null;
+    }
+
+    private String sanitizeModSourceId(String sourceId) {
+        if (sourceId == null) return null;
+        String trimmed = sourceId.trim();
+        if (trimmed.isEmpty() || ".".equals(trimmed) || "..".equals(trimmed)) return null;
+        if (trimmed.contains("/") || trimmed.contains("\\") || trimmed.indexOf('\0') >= 0) return null;
+        if (!trimmed.matches("^[A-Za-z0-9._ -]{1,120}$")) return null;
+        return trimmed;
+    }
+
+    private String sanitizeModRelativePath(String relPath) {
+        if (relPath == null) return null;
+        String normalized = relPath.replace('\\', '/').replaceAll("^/+", "").trim();
+        if (normalized.isEmpty() || normalized.indexOf('\0') >= 0) return null;
+        String[] segments = normalized.split("/");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < segments.length; i++) {
+            String seg = segments[i];
+            if (seg.isEmpty() || ".".equals(seg) || "..".equals(seg)) return null;
+            if (i > 0) sb.append('/');
+            sb.append(seg);
+        }
+        return sb.toString();
+    }
+
+    private boolean isArchiveModFileName(String name) {
+        if (name == null) return false;
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".zip") || lower.endsWith(".woamod");
+    }
+
+    private String getLowerExtension(String name) {
+        if (name == null) return "";
+        int slash = name.lastIndexOf('/');
+        int dot = name.lastIndexOf('.');
+        if (dot <= slash || dot < 0) return "";
+        return name.substring(dot).toLowerCase(Locale.ROOT);
+    }
+
+    private boolean isCanonicalChild(File rootDir, File target) {
+        try {
+            String rootCanon = rootDir.getCanonicalPath();
+            String targetCanon = target.getCanonicalPath();
+            String prefix = rootCanon.endsWith(File.separator) ? rootCanon : rootCanon + File.separator;
+            return targetCanon.startsWith(prefix);
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     // ---------- Direct java.io.File helpers ----------
@@ -539,12 +685,14 @@ public final class AndroidExternalStorageManager {
                 File settingsDir = new File(root, DIR_SETTINGS);
                 File profilesDir = new File(root, DIR_PROFILES);
                 File backupsDir = new File(root, DIR_BACKUPS);
+                File modsDir = new File(root, DIR_MODS);
 
                 if (!root.exists()) root.mkdirs();
                 if (!worldsDir.exists()) worldsDir.mkdirs();
                 if (!settingsDir.exists()) settingsDir.mkdirs();
                 if (!profilesDir.exists()) profilesDir.mkdirs();
                 if (!backupsDir.exists()) backupsDir.mkdirs();
+                if (!modsDir.exists()) modsDir.mkdirs();
 
                 // Verify actual write & read-back capability (do not assume mkdir succeeded)
                 if (!externalWritableVerified) {
@@ -581,6 +729,7 @@ public final class AndroidExternalStorageManager {
                 getOrCreateSafDirDocId(treeUri, rootDocId, DIR_SETTINGS);
                 getOrCreateSafDirDocId(treeUri, rootDocId, DIR_PROFILES);
                 getOrCreateSafDirDocId(treeUri, rootDocId, DIR_BACKUPS);
+                getOrCreateSafDirDocId(treeUri, rootDocId, DIR_MODS);
 
                 if (!externalWritableVerified) {
                     String token = "woa_ok_" + System.currentTimeMillis();
@@ -1258,6 +1407,7 @@ public final class AndroidExternalStorageManager {
                 res.put("state", state);
                 res.put("mode", mode);
                 res.put("path", VISIBLE_TARGET_PATH);
+                res.put("modsPath", VISIBLE_MODS_PATH);
                 res.put("writable", externalWritableVerified);
                 res.put("initialized", externalWritableVerified && getPrefs().getBoolean(PREF_INITIALIZED_ONCE, false));
                 res.put("sdkInt", Build.VERSION.SDK_INT);
@@ -1269,7 +1419,1456 @@ public final class AndroidExternalStorageManager {
                 }
                 return res.toString();
             } catch (Exception e) {
-                return "{\"ok\":false,\"platform\":\"android\",\"state\":\"not_accessible\",\"path\":\"" + VISIBLE_TARGET_PATH + "\"}";
+                return "{\"ok\":false,\"platform\":\"android\",\"state\":\"not_accessible\",\"path\":\"" + VISIBLE_TARGET_PATH + "\",\"modsPath\":\"" + VISIBLE_MODS_PATH + "\"}";
+            }
+        }
+    }
+
+    // ---------- Local Mods Directory (/storage/emulated/0/World of Adventure/Mods/) ----------
+
+    public String getModsInfoJson() {
+        synchronized (lock) {
+            ensureInitializedAndMigrateLocked();
+            String mode = getActiveExternalModeLocked();
+            try {
+                JSONObject res = new JSONObject();
+                res.put("ok", true);
+                res.put("platform", "android");
+                res.put("modsDir", VISIBLE_MODS_PATH);
+                res.put("mode", mode);
+                res.put("writable", externalWritableVerified);
+                return res.toString();
+            } catch (Exception e) {
+                return "{\"ok\":false,\"platform\":\"android\",\"modsDir\":\"" + VISIBLE_MODS_PATH + "\",\"writable\":false}";
+            }
+        }
+    }
+
+    private byte[] readStreamCapped(InputStream is, int maxBytes) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int total = 0;
+        int n;
+        while ((n = is.read(buf)) != -1) {
+            total += n;
+            if (total > maxBytes) {
+                throw new IOException("FILE_TOO_LARGE");
+            }
+            baos.write(buf, 0, n);
+        }
+        return baos.toByteArray();
+    }
+
+    private JSONObject scanArchiveStreamToModEntry(
+        String sourceId,
+        String sourcePath,
+        long modifiedAtMs,
+        InputStream rawArchiveStream
+    ) {
+        try (ZipInputStream zis = new ZipInputStream(rawArchiveStream)) {
+            List<String> rawNames = new ArrayList<>();
+            Map<String, byte[]> jsonFiles = new HashMap<>();
+            Map<String, Long> assetSizes = new HashMap<>();
+            Set<String> dirEntries = new HashSet<>();
+
+            ZipEntry entry;
+            int count = 0;
+            while ((entry = zis.getNextEntry()) != null) {
+                count++;
+                if (count > MAX_MOD_ENTRIES) {
+                    throw new IOException("ARCHIVE_TOO_MANY_ENTRIES");
+                }
+                String cleanName = entry.getName()
+                    .replace('\\', '/')
+                    .replaceAll("^/+", "")
+                    .replaceAll("/+$", "");
+                if (cleanName.isEmpty()) continue;
+
+                String[] segs = cleanName.split("/");
+                for (String seg : segs) {
+                    if (".".equals(seg) || "..".equals(seg) || seg.indexOf('\0') >= 0) {
+                        throw new IOException("ARCHIVE_UNSAFE_PATH:" + cleanName);
+                    }
+                }
+
+                rawNames.add(cleanName);
+                if (entry.isDirectory()) {
+                    dirEntries.add(cleanName);
+                } else {
+                    String ext = getLowerExtension(cleanName);
+                    if ("mod.json".equals(cleanName) || cleanName.endsWith("/mod.json") || ".json".equals(ext)) {
+                        byte[] bytes = readStreamCapped(zis, MAX_MOD_JSON_BYTES);
+                        jsonFiles.put(cleanName, bytes);
+                    } else {
+                        long sz = entry.getSize();
+                        if (sz < 0) {
+                            byte[] bytes = readStreamCapped(zis, MAX_MOD_ASSET_BYTES);
+                            sz = bytes.length;
+                        } else if (sz > MAX_MOD_ASSET_BYTES) {
+                            throw new IOException("ARCHIVE_ENTRY_TOO_LARGE:" + cleanName);
+                        }
+                        assetSizes.put(cleanName, sz);
+                    }
+                }
+                zis.closeEntry();
+            }
+
+            if (rawNames.isEmpty()) {
+                throw new IOException("ARCHIVE_EMPTY");
+            }
+
+            String stripPrefix = "";
+            if (!jsonFiles.containsKey("mod.json")) {
+                Set<String> roots = new HashSet<>();
+                for (String n : rawNames) {
+                    int slash = n.indexOf('/');
+                    roots.add(slash >= 0 ? n.substring(0, slash) : n);
+                }
+                if (roots.size() == 1) {
+                    String singleRoot = roots.iterator().next();
+                    if (jsonFiles.containsKey(singleRoot + "/mod.json")) {
+                        stripPrefix = singleRoot + "/";
+                    }
+                }
+            }
+
+            Set<String> presentFolders = new HashSet<>();
+            JSONArray contentFiles = new JSONArray();
+            JSONArray assetFiles = new JSONArray();
+            JSONArray executableFiles = new JSONArray();
+            String manifestRaw = null;
+            String manifestError = "MANIFEST_MISSING";
+
+            for (String rawName : rawNames) {
+                String rel = rawName;
+                if (!stripPrefix.isEmpty()) {
+                    if (rawName.startsWith(stripPrefix)) {
+                        rel = rawName.substring(stripPrefix.length());
+                    } else if (rawName.equals(stripPrefix.substring(0, stripPrefix.length() - 1))) {
+                        continue;
+                    }
+                }
+                if (rel.isEmpty()) continue;
+
+                String[] parts = rel.split("/");
+                String topFolder = parts[0];
+                boolean isDirEntry = dirEntries.contains(rawName);
+                if (STANDARD_MOD_FOLDERS.contains(topFolder) && (isDirEntry || parts.length > 1)) {
+                    presentFolders.add(topFolder);
+                }
+                if ("assets".equals(topFolder) && parts.length > 1 && STANDARD_MOD_FOLDERS.contains(parts[1])) {
+                    presentFolders.add(parts[1]);
+                }
+                if (isDirEntry) continue;
+
+                String ext = getLowerExtension(rel);
+                if (FORBIDDEN_MOD_EXTENSIONS.contains(ext)) {
+                    executableFiles.put(rel);
+                    continue;
+                }
+
+                if ("mod.json".equals(rel)) {
+                    byte[] mBytes = jsonFiles.get(rawName);
+                    if (mBytes != null) {
+                        manifestRaw = new String(mBytes, StandardCharsets.UTF_8);
+                        manifestError = null;
+                    }
+                    continue;
+                }
+
+                if (MOD_CONTENT_FOLDERS.contains(topFolder) && ".json".equals(ext)) {
+                    byte[] cBytes = jsonFiles.get(rawName);
+                    JSONObject item = new JSONObject();
+                    item.put("category", topFolder);
+                    item.put("relativePath", rel);
+                    item.put("rawText", cBytes != null ? new String(cBytes, StandardCharsets.UTF_8) : "");
+                    contentFiles.put(item);
+                } else {
+                    String secondFolder = "assets".equals(topFolder) && parts.length > 1 ? parts[1] : null;
+                    String category = (secondFolder != null && MOD_ASSET_FOLDERS.contains(secondFolder))
+                        ? secondFolder
+                        : topFolder;
+                    JSONObject asset = new JSONObject();
+                    asset.put("category", category);
+                    asset.put("relativePath", rel);
+                    Long sz = assetSizes.get(rawName);
+                    asset.put("sizeBytes", sz != null ? sz : 0L);
+                    assetFiles.put(asset);
+                }
+            }
+
+            JSONArray foldersArr = new JSONArray();
+            for (String std : STANDARD_MOD_FOLDERS) {
+                if (presentFolders.contains(std)) foldersArr.put(std);
+            }
+
+            JSONObject out = new JSONObject();
+            out.put("sourceId", sourceId);
+            out.put("sourceType", "archive");
+            out.put("sourcePath", sourcePath);
+            out.put("modifiedAtMs", modifiedAtMs);
+            out.put("manifestRaw", manifestRaw != null ? manifestRaw : JSONObject.NULL);
+            out.put("manifestError", manifestError != null ? manifestError : JSONObject.NULL);
+            out.put("presentFolders", foldersArr);
+            out.put("contentFiles", contentFiles);
+            out.put("assetFiles", assetFiles);
+            out.put("executableFiles", executableFiles);
+            out.put("archiveCorrupt", false);
+            return out;
+        } catch (Exception e) {
+            try {
+                JSONObject err = new JSONObject();
+                err.put("sourceId", sourceId);
+                err.put("sourceType", "archive");
+                err.put("sourcePath", sourcePath);
+                err.put("modifiedAtMs", modifiedAtMs);
+                err.put("manifestRaw", JSONObject.NULL);
+                err.put("manifestError", e.getMessage() != null ? e.getMessage() : "ARCHIVE_CORRUPT");
+                err.put("presentFolders", new JSONArray());
+                err.put("contentFiles", new JSONArray());
+                err.put("assetFiles", new JSONArray());
+                err.put("executableFiles", new JSONArray());
+                err.put("archiveCorrupt", true);
+                err.put("archiveError", e.getMessage() != null ? e.getMessage() : "ARCHIVE_CORRUPT");
+                return err;
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+    }
+
+    private void walkDirectModDir(
+        File modRootDir,
+        File currentDir,
+        String relPrefix,
+        int depth,
+        JSONArray contentFiles,
+        JSONArray assetFiles,
+        JSONArray executableFiles
+    ) {
+        if (depth > 8) return;
+        File[] children = currentDir.listFiles();
+        if (children == null) return;
+        for (File child : children) {
+            if (contentFiles.length() + assetFiles.length() >= MAX_MOD_ENTRIES) break;
+            if (!isCanonicalChild(modRootDir, child)) continue;
+            if (FILE_WOAMOD_META.equals(child.getName())) continue;
+            String rel = relPrefix.isEmpty() ? child.getName() : relPrefix + "/" + child.getName();
+            if (child.isDirectory()) {
+                walkDirectModDir(modRootDir, child, rel, depth + 1, contentFiles, assetFiles, executableFiles);
+                continue;
+            }
+            if (!child.isFile()) continue;
+
+            String ext = getLowerExtension(child.getName());
+            if (FORBIDDEN_MOD_EXTENSIONS.contains(ext)) {
+                executableFiles.put(rel);
+                continue;
+            }
+            if ("mod.json".equals(rel)) continue;
+
+            String[] parts = rel.split("/");
+            String topFolder = parts[0];
+            try {
+                if (MOD_CONTENT_FOLDERS.contains(topFolder) && ".json".equals(ext)) {
+                    JSONObject item = new JSONObject();
+                    item.put("category", topFolder);
+                    item.put("relativePath", rel);
+                    if (child.length() > MAX_MOD_JSON_BYTES) {
+                        item.put("rawText", "");
+                        item.put("readError", "FILE_TOO_LARGE");
+                    } else {
+                        item.put("rawText", readFileUtf8(child));
+                    }
+                    contentFiles.put(item);
+                } else {
+                    String secondFolder = "assets".equals(topFolder) && parts.length > 1 ? parts[1] : null;
+                    String category = (secondFolder != null && MOD_ASSET_FOLDERS.contains(secondFolder))
+                        ? secondFolder
+                        : topFolder;
+                    JSONObject asset = new JSONObject();
+                    asset.put("category", category);
+                    asset.put("relativePath", rel);
+                    asset.put("sizeBytes", child.length());
+                    assetFiles.put(asset);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private JSONObject scanDirectFolderMod(File modsDir, File modDir) {
+        try {
+            if (!isCanonicalChild(modsDir, modDir)) return null;
+            Set<String> presentFolders = new HashSet<>();
+            File[] rootChildren = modDir.listFiles();
+            if (rootChildren != null) {
+                for (File child : rootChildren) {
+                    if (child.isDirectory() && STANDARD_MOD_FOLDERS.contains(child.getName())) {
+                        presentFolders.add(child.getName());
+                    }
+                }
+            }
+            File assetsSub = new File(modDir, "assets");
+            if (assetsSub.isDirectory() && isCanonicalChild(modDir, assetsSub)) {
+                File[] assetsChildren = assetsSub.listFiles();
+                if (assetsChildren != null) {
+                    for (File ac : assetsChildren) {
+                        if (ac.isDirectory() && STANDARD_MOD_FOLDERS.contains(ac.getName())) {
+                            presentFolders.add(ac.getName());
+                        }
+                    }
+                }
+            }
+
+            String manifestRaw = null;
+            String manifestError = "MANIFEST_MISSING";
+            File manifestFile = new File(modDir, "mod.json");
+            if (manifestFile.exists() && manifestFile.isFile() && isCanonicalChild(modDir, manifestFile)) {
+                if (manifestFile.length() > MAX_MOD_JSON_BYTES) {
+                    manifestError = "MANIFEST_TOO_LARGE_OR_INVALID";
+                } else {
+                    manifestRaw = readFileUtf8(manifestFile);
+                    manifestError = null;
+                }
+            }
+
+            JSONObject packageMeta = null;
+            File pkgMetaFile = new File(modDir, FILE_WOAMOD_META);
+            if (pkgMetaFile.exists() && pkgMetaFile.isFile() && isCanonicalChild(modDir, pkgMetaFile)) {
+                try {
+                    JSONObject parsedMeta = parseValidJsonObject(readFileUtf8(pkgMetaFile));
+                    if (parsedMeta != null && "woamod".equals(parsedMeta.optString("format", ""))) {
+                        packageMeta = parsedMeta;
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+
+            JSONArray contentFiles = new JSONArray();
+            JSONArray assetFiles = new JSONArray();
+            JSONArray executableFiles = new JSONArray();
+            walkDirectModDir(modDir, modDir, "", 0, contentFiles, assetFiles, executableFiles);
+
+            JSONArray foldersArr = new JSONArray();
+            for (String std : STANDARD_MOD_FOLDERS) {
+                if (presentFolders.contains(std)) foldersArr.put(std);
+            }
+
+            JSONObject out = new JSONObject();
+            out.put("sourceId", modDir.getName());
+            out.put("sourceType", "folder");
+            out.put("installKind", packageMeta != null ? "woamod" : "development");
+            if (packageMeta != null) {
+                String pfn = packageMeta.optString("packageFileName", "");
+                if (!pfn.isEmpty()) out.put("packageFileName", pfn);
+                long instMs = packageMeta.optLong("installedAtMs", 0L);
+                if (instMs > 0L) out.put("installedAtMs", instMs);
+            }
+            out.put("sourcePath", modDir.getAbsolutePath());
+            out.put("modifiedAtMs", modDir.lastModified());
+            out.put("manifestRaw", manifestRaw != null ? manifestRaw : JSONObject.NULL);
+            out.put("manifestError", manifestError != null ? manifestError : JSONObject.NULL);
+            out.put("presentFolders", foldersArr);
+            out.put("contentFiles", contentFiles);
+            out.put("assetFiles", assetFiles);
+            out.put("executableFiles", executableFiles);
+            out.put("archiveCorrupt", false);
+            return out;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void walkSafModDir(
+        Uri treeUri,
+        String dirDocId,
+        String relPrefix,
+        int depth,
+        JSONArray contentFiles,
+        JSONArray assetFiles,
+        JSONArray executableFiles,
+        Set<String> presentFolders,
+        StringBuilder manifestRawOut
+    ) {
+        if (depth > 8 || contentFiles.length() + assetFiles.length() >= MAX_MOD_ENTRIES) return;
+        ContentResolver cr = appContext.getContentResolver();
+        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, dirDocId);
+        String[] proj = new String[] {
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE,
+        };
+        try (Cursor c = cr.query(childrenUri, proj, null, null, null)) {
+            if (c == null) return;
+            int idIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID);
+            int nameIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME);
+            int mimeIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE);
+            int sizeIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE);
+            while (c.moveToNext()) {
+                String docId = idIdx >= 0 ? c.getString(idIdx) : null;
+                String name = nameIdx >= 0 ? c.getString(nameIdx) : null;
+                String mime = mimeIdx >= 0 ? c.getString(mimeIdx) : "";
+                long size = sizeIdx >= 0 ? c.getLong(sizeIdx) : 0L;
+                if (docId == null || name == null || ".".equals(name) || "..".equals(name)) continue;
+
+                String rel = relPrefix.isEmpty() ? name : relPrefix + "/" + name;
+                boolean isDir = DocumentsContract.Document.MIME_TYPE_DIR.equals(mime);
+                if (isDir) {
+                    if (depth == 0 && STANDARD_MOD_FOLDERS.contains(name)) {
+                        presentFolders.add(name);
+                    } else if (depth == 1 && "assets".equals(relPrefix) && STANDARD_MOD_FOLDERS.contains(name)) {
+                        presentFolders.add(name);
+                    }
+                    walkSafModDir(
+                        treeUri, docId, rel, depth + 1,
+                        contentFiles, assetFiles, executableFiles, presentFolders, manifestRawOut
+                    );
+                    continue;
+                }
+
+                String ext = getLowerExtension(name);
+                if (FORBIDDEN_MOD_EXTENSIONS.contains(ext)) {
+                    executableFiles.put(rel);
+                    continue;
+                }
+                if ("mod.json".equals(rel)) {
+                    if (size <= MAX_MOD_JSON_BYTES) {
+                        String txt = readSafDocUtf8(treeUri, docId);
+                        if (txt != null) manifestRawOut.append(txt);
+                    }
+                    continue;
+                }
+
+                String[] parts = rel.split("/");
+                String topFolder = parts[0];
+                try {
+                    if (MOD_CONTENT_FOLDERS.contains(topFolder) && ".json".equals(ext)) {
+                        JSONObject item = new JSONObject();
+                        item.put("category", topFolder);
+                        item.put("relativePath", rel);
+                        if (size > MAX_MOD_JSON_BYTES) {
+                            item.put("rawText", "");
+                            item.put("readError", "FILE_TOO_LARGE");
+                        } else {
+                            String txt = readSafDocUtf8(treeUri, docId);
+                            item.put("rawText", txt != null ? txt : "");
+                        }
+                        contentFiles.put(item);
+                    } else {
+                        String secondFolder = "assets".equals(topFolder) && parts.length > 1 ? parts[1] : null;
+                        String category = (secondFolder != null && MOD_ASSET_FOLDERS.contains(secondFolder))
+                            ? secondFolder
+                            : topFolder;
+                        JSONObject asset = new JSONObject();
+                        asset.put("category", category);
+                        asset.put("relativePath", rel);
+                        asset.put("sizeBytes", size);
+                        assetFiles.put(asset);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    public String listLocalModsJson() {
+        synchronized (lock) {
+            ensureInitializedAndMigrateLocked();
+            JSONArray entries = new JSONArray();
+            String mode = getActiveExternalModeLocked();
+
+            if (externalWritableVerified) {
+                if ("direct".equals(mode)) {
+                    File modsDir = new File(getDirectRootDir(), DIR_MODS);
+                    File[] children = modsDir.exists() && modsDir.isDirectory() ? modsDir.listFiles() : null;
+                    if (children != null) {
+                        for (File child : children) {
+                            if (child.getName().startsWith(STAGING_DIR_PREFIX)) {
+                                if (isCanonicalChild(modsDir, child)) {
+                                    deleteRecursiveDirect(child);
+                                }
+                                continue;
+                            }
+                            if (child.getName().startsWith(".")) continue;
+                            String safeId = sanitizeModSourceId(child.getName());
+                            if (safeId == null) continue;
+                            if (child.isDirectory()) {
+                                JSONObject modObj = scanDirectFolderMod(modsDir, child);
+                                if (modObj != null) entries.put(modObj);
+                            } else if (child.isFile() && isArchiveModFileName(safeId)) {
+                                if (child.length() <= MAX_MOD_PACKAGE_BYTES) {
+                                    try (FileInputStream fis = new FileInputStream(child)) {
+                                        JSONObject modObj = scanArchiveStreamToModEntry(
+                                            safeId,
+                                            child.getAbsolutePath(),
+                                            child.lastModified(),
+                                            fis
+                                        );
+                                        if (modObj != null) entries.put(modObj);
+                                    } catch (Exception ignored) {
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if ("saf".equals(mode)) {
+                    Uri treeUri = getPersistedSafTreeUri();
+                    if (treeUri != null) {
+                        try {
+                            String rootDocId = resolveSafRootDocId(treeUri, false);
+                            String modsDocId = rootDocId != null ? findSafChildDocId(treeUri, rootDocId, DIR_MODS) : null;
+                            if (modsDocId != null) {
+                                ContentResolver cr = appContext.getContentResolver();
+                                Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, modsDocId);
+                                String[] proj = new String[] {
+                                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                                    DocumentsContract.Document.COLUMN_MIME_TYPE,
+                                    DocumentsContract.Document.COLUMN_SIZE,
+                                    DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                                };
+                                try (Cursor c = cr.query(childrenUri, proj, null, null, null)) {
+                                    if (c != null) {
+                                        int idIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID);
+                                        int nameIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME);
+                                        int mimeIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE);
+                                        int sizeIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE);
+                                        int modIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED);
+                                        while (c.moveToNext()) {
+                                            String docId = idIdx >= 0 ? c.getString(idIdx) : null;
+                                            String rawName = nameIdx >= 0 ? c.getString(nameIdx) : null;
+                                            String mime = mimeIdx >= 0 ? c.getString(mimeIdx) : "";
+                                            long size = sizeIdx >= 0 ? c.getLong(sizeIdx) : 0L;
+                                            long lastMod = modIdx >= 0 ? c.getLong(modIdx) : System.currentTimeMillis();
+                                            String safeId = sanitizeModSourceId(rawName);
+                                            if (docId == null) continue;
+                                            if (rawName != null && rawName.startsWith(STAGING_DIR_PREFIX)) {
+                                                try {
+                                                    DocumentsContract.deleteDocument(
+                                                        cr,
+                                                        DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                                                    );
+                                                } catch (Exception ignored) {
+                                                }
+                                                continue;
+                                            }
+                                            if (safeId == null || safeId.startsWith(".")) continue;
+
+                                            if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                                                Set<String> presentFolders = new HashSet<>();
+                                                JSONArray contentFiles = new JSONArray();
+                                                JSONArray assetFiles = new JSONArray();
+                                                JSONArray executableFiles = new JSONArray();
+                                                StringBuilder manifestBuf = new StringBuilder();
+                                                walkSafModDir(
+                                                    treeUri, docId, "", 0,
+                                                    contentFiles, assetFiles, executableFiles, presentFolders, manifestBuf
+                                                );
+                                                JSONObject safPkgMeta = null;
+                                                String metaDocId = findSafChildDocId(treeUri, docId, FILE_WOAMOD_META);
+                                                if (metaDocId != null) {
+                                                    safPkgMeta = parseValidJsonObject(readSafDocUtf8(treeUri, metaDocId));
+                                                }
+                                                boolean isWoamodPkg = safPkgMeta != null && "woamod".equals(safPkgMeta.optString("format", ""));
+                                                JSONArray foldersArr = new JSONArray();
+                                                for (String std : STANDARD_MOD_FOLDERS) {
+                                                    if (presentFolders.contains(std)) foldersArr.put(std);
+                                                }
+                                                String manifestRaw = manifestBuf.length() > 0 ? manifestBuf.toString() : null;
+                                                JSONObject out = new JSONObject();
+                                                out.put("sourceId", safeId);
+                                                out.put("sourceType", "folder");
+                                                out.put("installKind", isWoamodPkg ? "woamod" : "development");
+                                                if (isWoamodPkg) {
+                                                    String pfn = safPkgMeta.optString("packageFileName", "");
+                                                    if (!pfn.isEmpty()) out.put("packageFileName", pfn);
+                                                    long instMs = safPkgMeta.optLong("installedAtMs", 0L);
+                                                    if (instMs > 0L) out.put("installedAtMs", instMs);
+                                                }
+                                                out.put("sourcePath", VISIBLE_MODS_PATH + safeId + "/");
+                                                out.put("modifiedAtMs", lastMod);
+                                                out.put("manifestRaw", manifestRaw != null ? manifestRaw : JSONObject.NULL);
+                                                out.put("manifestError", manifestRaw != null ? JSONObject.NULL : "MANIFEST_MISSING");
+                                                out.put("presentFolders", foldersArr);
+                                                out.put("contentFiles", contentFiles);
+                                                out.put("assetFiles", assetFiles);
+                                                out.put("executableFiles", executableFiles);
+                                                out.put("archiveCorrupt", false);
+                                                entries.put(out);
+                                            } else if (isArchiveModFileName(safeId) && size <= MAX_MOD_PACKAGE_BYTES) {
+                                                Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+                                                try (InputStream is = cr.openInputStream(docUri)) {
+                                                    if (is != null) {
+                                                        JSONObject modObj = scanArchiveStreamToModEntry(
+                                                            safeId,
+                                                            VISIBLE_MODS_PATH + safeId,
+                                                            lastMod,
+                                                            is
+                                                        );
+                                                        if (modObj != null) entries.put(modObj);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+            }
+
+            try {
+                JSONObject res = new JSONObject();
+                res.put("ok", true);
+                res.put("writable", externalWritableVerified);
+                res.put("modsDir", VISIBLE_MODS_PATH);
+                res.put("mode", mode);
+                res.put("entries", entries);
+                return res.toString();
+            } catch (Exception e) {
+                return "{\"ok\":false,\"writable\":false,\"modsDir\":\"" + VISIBLE_MODS_PATH + "\",\"entries\":[]}";
+            }
+        }
+    }
+
+    public String readModStateJson() {
+        synchronized (lock) {
+            ensureInitializedAndMigrateLocked();
+            if (!externalWritableVerified) {
+                return "{\"ok\":false,\"error\":\"PERMISSION_REQUIRED\"}";
+            }
+            try {
+                String mode = getActiveExternalModeLocked();
+                JSONObject state = null;
+                if ("direct".equals(mode)) {
+                    File root = getDirectRootDir();
+                    state = readJsonDirectWithBackups(
+                        new File(new File(root, DIR_SETTINGS), FILE_MODS_CONFIG),
+                        new File(new File(root, DIR_BACKUPS), FILE_MODS_CONFIG + ".bak")
+                    );
+                } else if ("saf".equals(mode)) {
+                    Uri treeUri = getPersistedSafTreeUri();
+                    if (treeUri != null) {
+                        String rootDocId = resolveSafRootDocId(treeUri, false);
+                        String settingsDocId = rootDocId != null ? findSafChildDocId(treeUri, rootDocId, DIR_SETTINGS) : null;
+                        String backupsDocId = rootDocId != null ? findSafChildDocId(treeUri, rootDocId, DIR_BACKUPS) : null;
+                        if (settingsDocId != null) {
+                            state = readJsonSafWithBackup(treeUri, settingsDocId, FILE_MODS_CONFIG, backupsDocId);
+                        }
+                    }
+                }
+                if (state == null) {
+                    state = new JSONObject();
+                    state.put("version", 1);
+                    state.put("enabledByModId", new JSONObject());
+                    state.put("priorityByModId", new JSONObject());
+                }
+                JSONObject res = new JSONObject();
+                res.put("ok", true);
+                res.put("state", state);
+                return res.toString();
+            } catch (Exception e) {
+                return "{\"ok\":false,\"error\":\"MOD_STATE_READ_FAILED\"}";
+            }
+        }
+    }
+
+    public String writeModStateJson(String stateJson) {
+        return writeSettingFileJson("mods", stateJson);
+    }
+
+    public String readModAssetJson(String sourceId, String relativePath) {
+        synchronized (lock) {
+            String safeSource = sanitizeModSourceId(sourceId);
+            String safeRel = sanitizeModRelativePath(relativePath);
+            if (safeSource == null || safeRel == null) {
+                return "{\"ok\":false,\"error\":\"INVALID_MOD_ASSET_PATH\"}";
+            }
+            String ext = getLowerExtension(safeRel);
+            String mimeType = ALLOWED_MOD_ASSET_MIME.get(ext);
+            if (mimeType == null || FORBIDDEN_MOD_EXTENSIONS.contains(ext)) {
+                return "{\"ok\":false,\"error\":\"UNSUPPORTED_OR_FORBIDDEN_ASSET_TYPE\"}";
+            }
+            ensureInitializedAndMigrateLocked();
+            if (!externalWritableVerified) {
+                return "{\"ok\":false,\"error\":\"PERMISSION_REQUIRED\"}";
+            }
+
+            try {
+                byte[] assetBytes = null;
+                String mode = getActiveExternalModeLocked();
+
+                if ("direct".equals(mode)) {
+                    File modsDir = new File(getDirectRootDir(), DIR_MODS);
+                    File sourceFile = new File(modsDir, safeSource);
+                    if (!isCanonicalChild(modsDir, sourceFile)) {
+                        return "{\"ok\":false,\"error\":\"PATH_OUTSIDE_MODS_DIR\"}";
+                    }
+                    if (sourceFile.isDirectory()) {
+                        File assetFile = new File(sourceFile, safeRel);
+                        if (!isCanonicalChild(sourceFile, assetFile) || !assetFile.isFile()) {
+                            return "{\"ok\":false,\"error\":\"ASSET_NOT_FOUND\"}";
+                        }
+                        if (assetFile.length() > MAX_MOD_ASSET_BYTES) {
+                            return "{\"ok\":false,\"error\":\"ASSET_TOO_LARGE\"}";
+                        }
+                        try (FileInputStream fis = new FileInputStream(assetFile)) {
+                            assetBytes = readStreamCapped(fis, MAX_MOD_ASSET_BYTES);
+                        }
+                    } else if (sourceFile.isFile() && isArchiveModFileName(safeSource)) {
+                        try (FileInputStream fis = new FileInputStream(sourceFile)) {
+                            assetBytes = extractZipEntryBytes(fis, safeRel);
+                        }
+                    }
+                } else if ("saf".equals(mode)) {
+                    Uri treeUri = getPersistedSafTreeUri();
+                    if (treeUri != null) {
+                        String rootDocId = resolveSafRootDocId(treeUri, false);
+                        String modsDocId = rootDocId != null ? findSafChildDocId(treeUri, rootDocId, DIR_MODS) : null;
+                        String srcDocId = modsDocId != null ? findSafChildDocId(treeUri, modsDocId, safeSource) : null;
+                        if (srcDocId != null) {
+                            if (isArchiveModFileName(safeSource)) {
+                                Uri arcUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, srcDocId);
+                                try (InputStream is = appContext.getContentResolver().openInputStream(arcUri)) {
+                                    if (is != null) assetBytes = extractZipEntryBytes(is, safeRel);
+                                }
+                            } else {
+                                String curDocId = srcDocId;
+                                String[] parts = safeRel.split("/");
+                                for (String seg : parts) {
+                                    curDocId = curDocId != null ? findSafChildDocId(treeUri, curDocId, seg) : null;
+                                }
+                                if (curDocId != null) {
+                                    Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, curDocId);
+                                    try (InputStream is = appContext.getContentResolver().openInputStream(fileUri)) {
+                                        if (is != null) assetBytes = readStreamCapped(is, MAX_MOD_ASSET_BYTES);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (assetBytes == null) {
+                    return "{\"ok\":false,\"error\":\"ASSET_NOT_FOUND\"}";
+                }
+                JSONObject res = new JSONObject();
+                res.put("ok", true);
+                res.put("mimeType", mimeType);
+                res.put("base64", Base64.encodeToString(assetBytes, Base64.NO_WRAP));
+                res.put("sizeBytes", assetBytes.length);
+                return res.toString();
+            } catch (Exception e) {
+                return "{\"ok\":false,\"error\":\"ASSET_READ_FAILED\"}";
+            }
+        }
+    }
+
+    private byte[] extractZipEntryBytes(InputStream rawArchiveStream, String targetRelPath) throws IOException {
+        try (ZipInputStream zis = new ZipInputStream(rawArchiveStream)) {
+            ZipEntry entry;
+            int count = 0;
+            while ((entry = zis.getNextEntry()) != null) {
+                count++;
+                if (count > MAX_MOD_ENTRIES) break;
+                if (entry.isDirectory()) {
+                    zis.closeEntry();
+                    continue;
+                }
+                String cleanName = entry.getName()
+                    .replace('\\', '/')
+                    .replaceAll("^/+", "")
+                    .replaceAll("/+$", "");
+                if (cleanName.equals(targetRelPath) || cleanName.endsWith("/" + targetRelPath)) {
+                    String remainderPrefix = cleanName.equals(targetRelPath)
+                        ? ""
+                        : cleanName.substring(0, cleanName.length() - targetRelPath.length());
+                    if (remainderPrefix.isEmpty() || !remainderPrefix.substring(0, remainderPrefix.length() - 1).contains("/")) {
+                        return readStreamCapped(zis, MAX_MOD_ASSET_BYTES);
+                    }
+                }
+                zis.closeEntry();
+            }
+        }
+        return null;
+    }
+
+    public String deleteLocalModJson(String sourceId) {
+        synchronized (lock) {
+            String safeSource = sanitizeModSourceId(sourceId);
+            if (safeSource == null) {
+                return "{\"ok\":false,\"error\":\"INVALID_MOD_SOURCE_ID\"}";
+            }
+            ensureInitializedAndMigrateLocked();
+            if (!externalWritableVerified) {
+                return "{\"ok\":false,\"error\":\"PERMISSION_REQUIRED\"}";
+            }
+            try {
+                String mode = getActiveExternalModeLocked();
+                if ("direct".equals(mode)) {
+                    File modsDir = new File(getDirectRootDir(), DIR_MODS);
+                    File target = new File(modsDir, safeSource);
+                    if (!isCanonicalChild(modsDir, target)) {
+                        return "{\"ok\":false,\"error\":\"PATH_OUTSIDE_MODS_DIR\"}";
+                    }
+                    if (!target.exists()) {
+                        return "{\"ok\":false,\"error\":\"MOD_NOT_FOUND\"}";
+                    }
+                    deleteRecursiveDirect(target);
+                    return "{\"ok\":true}";
+                } else if ("saf".equals(mode)) {
+                    Uri treeUri = getPersistedSafTreeUri();
+                    if (treeUri != null) {
+                        String rootDocId = resolveSafRootDocId(treeUri, false);
+                        String modsDocId = rootDocId != null ? findSafChildDocId(treeUri, rootDocId, DIR_MODS) : null;
+                        String srcDocId = modsDocId != null ? findSafChildDocId(treeUri, modsDocId, safeSource) : null;
+                        if (srcDocId == null) {
+                            return "{\"ok\":false,\"error\":\"MOD_NOT_FOUND\"}";
+                        }
+                        DocumentsContract.deleteDocument(
+                            appContext.getContentResolver(),
+                            DocumentsContract.buildDocumentUriUsingTree(treeUri, srcDocId)
+                        );
+                        return "{\"ok\":true}";
+                    }
+                }
+                return "{\"ok\":false,\"error\":\"STORAGE_UNAVAILABLE\"}";
+            } catch (Exception e) {
+                return "{\"ok\":false,\"error\":\"MOD_DELETE_FAILED\"}";
+            }
+        }
+    }
+
+    public String importModPackageJson(String fileName, String base64Content) {
+        synchronized (lock) {
+            String safeName = sanitizeModSourceId(fileName);
+            if (safeName == null || !safeName.toLowerCase(Locale.ROOT).endsWith(".woamod")) {
+                return "{\"ok\":false,\"error\":\"INVALID_MOD_PACKAGE_EXTENSION\"}";
+            }
+            if (base64Content == null || base64Content.trim().isEmpty()) {
+                return "{\"ok\":false,\"error\":\"EMPTY_PACKAGE_DATA\"}";
+            }
+            try {
+                byte[] data = Base64.decode(base64Content, Base64.DEFAULT);
+                return saveValidatedModPackageBytesLocked(safeName, data, null);
+            } catch (Exception e) {
+                return "{\"ok\":false,\"error\":\"CORRUPT_MOD_ARCHIVE\"}";
+            }
+        }
+    }
+
+    public String importModPackageFromUriJson(Uri uri, String fallbackName) {
+        return importModPackageFromUriJson(uri, fallbackName, null);
+    }
+
+    public String importModPackageFromUriJson(
+        Uri uri,
+        String fallbackName,
+        ModInstallProgressListener progressListener
+    ) {
+        synchronized (lock) {
+            if (uri == null) {
+                return "{\"ok\":false,\"error\":\"IMPORT_CANCELLED\"}";
+            }
+            String resolvedName = fallbackName;
+            long reportedSize = 0L;
+            try (Cursor c = appContext.getContentResolver().query(
+                uri,
+                new String[] { OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE },
+                null,
+                null,
+                null
+            )) {
+                if (c != null && c.moveToFirst()) {
+                    int nameIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                    int sizeIdx = c.getColumnIndex(OpenableColumns.SIZE);
+                    if (nameIdx >= 0) {
+                        String n = c.getString(nameIdx);
+                        if (n != null && !n.trim().isEmpty()) {
+                            resolvedName = n.trim();
+                        }
+                    }
+                    if (sizeIdx >= 0) {
+                        reportedSize = Math.max(0L, c.getLong(sizeIdx));
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+
+            String safeName = sanitizeModSourceId(resolvedName);
+            if (safeName == null || !safeName.toLowerCase(Locale.ROOT).endsWith(".woamod")) {
+                return "{\"ok\":false,\"error\":\"INVALID_MOD_PACKAGE_EXTENSION\"}";
+            }
+
+            emitInstallProgress(progressListener, "reading", safeName, 5, 0L, reportedSize, 0, 0, null, null);
+            try (InputStream is = appContext.getContentResolver().openInputStream(uri)) {
+                if (is == null) {
+                    return "{\"ok\":false,\"error\":\"UNREADABLE_PACKAGE_FILE\"}";
+                }
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                byte[] chunk = new byte[32768];
+                int readTotal = 0;
+                int n;
+                int lastReportedPct = 5;
+                while ((n = is.read(chunk)) != -1) {
+                    readTotal += n;
+                    if (readTotal > MAX_MOD_PACKAGE_BYTES) {
+                        return "{\"ok\":false,\"error\":\"INVALID_PACKAGE_SIZE\"}";
+                    }
+                    baos.write(chunk, 0, n);
+                    if (reportedSize > 0) {
+                        int pct = 5 + (int) Math.min(30, (readTotal * 30L) / reportedSize);
+                        if (pct >= lastReportedPct + 5) {
+                            lastReportedPct = pct;
+                            emitInstallProgress(
+                                progressListener, "reading", safeName, pct,
+                                readTotal, reportedSize, 0, 0, null, null
+                            );
+                        }
+                    }
+                }
+                byte[] data = baos.toByteArray();
+                return saveValidatedModPackageBytesLocked(safeName, data, progressListener);
+            } catch (Exception e) {
+                return "{\"ok\":false,\"error\":\"MOD_IMPORT_FAILED\"}";
+            }
+        }
+    }
+
+    private void emitInstallProgress(
+        ModInstallProgressListener listener,
+        String stage,
+        String fileName,
+        int percent,
+        long processedBytes,
+        long totalBytes,
+        int entriesDone,
+        int entriesTotal,
+        String currentEntry,
+        String message
+    ) {
+        if (listener == null) return;
+        try {
+            JSONObject p = new JSONObject();
+            p.put("stage", stage);
+            p.put("fileName", fileName);
+            p.put("percent", Math.max(0, Math.min(100, percent)));
+            p.put("processedBytes", processedBytes);
+            p.put("totalBytes", totalBytes);
+            if (entriesTotal > 0) {
+                p.put("entriesDone", entriesDone);
+                p.put("entriesTotal", entriesTotal);
+            }
+            if (currentEntry != null) p.put("currentEntry", currentEntry);
+            if (message != null) p.put("message", message);
+            listener.onProgress(p.toString());
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static int[] parseBasicSemver(String raw) {
+        if (raw == null) return null;
+        String clean = raw.trim();
+        if (clean.startsWith("v") || clean.startsWith("V")) clean = clean.substring(1).trim();
+        int plus = clean.indexOf('+');
+        if (plus >= 0) clean = clean.substring(0, plus);
+        int dash = clean.indexOf('-');
+        if (dash >= 0) clean = clean.substring(0, dash);
+        String[] parts = clean.split("\\.");
+        if (parts.length == 0 || parts.length > 3) return null;
+        try {
+            int major = Integer.parseInt(parts[0]);
+            int minor = parts.length > 1 ? Integer.parseInt(parts[1]) : 0;
+            int patch = parts.length > 2 ? Integer.parseInt(parts[2]) : 0;
+            if (major < 0 || minor < 0 || patch < 0) return null;
+            return new int[] { major, minor, patch };
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static int compareBasicSemver(int[] a, int[] b) {
+        if (a[0] != b[0]) return Integer.compare(a[0], b[0]);
+        if (a[1] != b[1]) return Integer.compare(a[1], b[1]);
+        return Integer.compare(a[2], b[2]);
+    }
+
+    private static boolean satisfiesBasicSemverRange(String actualStr, String rangeExpr) {
+        if (rangeExpr == null || rangeExpr.trim().isEmpty()) return false;
+        String clean = rangeExpr.trim();
+        if ("*".equals(clean)) return true;
+        int[] actual = parseBasicSemver(actualStr);
+        if (actual == null) return false;
+        String[] tokens = clean.split("\\s+");
+        for (String tok : tokens) {
+            if (tok.isEmpty()) continue;
+            if (tok.startsWith(">=")) {
+                int[] v = parseBasicSemver(tok.substring(2));
+                if (v == null || compareBasicSemver(actual, v) < 0) return false;
+            } else if (tok.startsWith("<=")) {
+                int[] v = parseBasicSemver(tok.substring(2));
+                if (v == null || compareBasicSemver(actual, v) > 0) return false;
+            } else if (tok.startsWith(">")) {
+                int[] v = parseBasicSemver(tok.substring(1));
+                if (v == null || compareBasicSemver(actual, v) <= 0) return false;
+            } else if (tok.startsWith("<")) {
+                int[] v = parseBasicSemver(tok.substring(1));
+                if (v == null || compareBasicSemver(actual, v) >= 0) return false;
+            } else if (tok.startsWith("^")) {
+                int[] v = parseBasicSemver(tok.substring(1));
+                if (v == null || compareBasicSemver(actual, v) < 0 || actual[0] != v[0]) return false;
+            } else if (tok.startsWith("~")) {
+                int[] v = parseBasicSemver(tok.substring(1));
+                if (v == null || compareBasicSemver(actual, v) < 0 || actual[0] != v[0] || actual[1] != v[1]) return false;
+            } else {
+                String exactStr = tok.startsWith("=") ? tok.substring(1) : tok;
+                int[] v = parseBasicSemver(exactStr);
+                if (v == null || compareBasicSemver(actual, v) != 0) return false;
+            }
+        }
+        return true;
+    }
+
+    private String getOrCreateSafNestedDir(Uri treeUri, String parentDocId, String relDirPath) throws Exception {
+        String cur = parentDocId;
+        String[] segs = relDirPath.split("/");
+        for (String seg : segs) {
+            if (seg == null || seg.isEmpty()) continue;
+            cur = getOrCreateSafDirDocId(treeUri, cur, seg);
+        }
+        return cur;
+    }
+
+    private void writeSafBytes(Uri treeUri, String parentDocId, String fileName, byte[] data) throws Exception {
+        String existingId = findSafChildDocId(treeUri, parentDocId, fileName);
+        Uri targetUri = existingId != null
+            ? DocumentsContract.buildDocumentUriUsingTree(treeUri, existingId)
+            : DocumentsContract.createDocument(
+                appContext.getContentResolver(),
+                DocumentsContract.buildDocumentUriUsingTree(treeUri, parentDocId),
+                "application/octet-stream",
+                fileName
+            );
+        if (targetUri == null) {
+            throw new IOException("SAF_CREATE_FAILED:" + fileName);
+        }
+        try (OutputStream os = appContext.getContentResolver().openOutputStream(targetUri, "wt")) {
+            if (os == null) throw new IOException("SAF_WRITE_FAILED:" + fileName);
+            os.write(data);
+            os.flush();
+        }
+    }
+
+    private String saveValidatedModPackageBytesLocked(
+        String safeName,
+        byte[] data,
+        ModInstallProgressListener progressListener
+    ) {
+        ensureInitializedAndMigrateLocked();
+        if (!externalWritableVerified) {
+            return "{\"ok\":false,\"error\":\"PERMISSION_REQUIRED\"}";
+        }
+        if (safeName == null || !safeName.toLowerCase(Locale.ROOT).endsWith(".woamod")) {
+            return "{\"ok\":false,\"error\":\"INVALID_MOD_PACKAGE_EXTENSION\"}";
+        }
+
+        File directStaging = null;
+        boolean directCommitted = false;
+        Uri safTreeUri = null;
+        String safStagingDocId = null;
+        boolean safCommitted = false;
+
+        try {
+            if (data == null || data.length < 22 || data.length > MAX_MOD_PACKAGE_BYTES) {
+                return "{\"ok\":false,\"error\":\"INVALID_PACKAGE_SIZE\"}";
+            }
+            if (data[0] != 0x50 || data[1] != 0x4b || data[2] != 0x03 || data[3] != 0x04) {
+                return "{\"ok\":false,\"error\":\"INVALID_ZIP_SIGNATURE\"}";
+            }
+
+            emitInstallProgress(progressListener, "validating", safeName, 38, data.length, data.length, 0, 0, null, null);
+
+            // 1. Pre-scan & extract archive entries into memory-bounded map while checking path traversal, symlinks/executables & zip bombs
+            List<String> allRawNames = new ArrayList<>();
+            Set<String> rawDirSet = new HashSet<>();
+            Map<String, byte[]> extractedFiles = new HashMap<>();
+            long totalUncompressed = 0L;
+
+            try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(data))) {
+                ZipEntry e;
+                int entryCount = 0;
+                while ((e = zis.getNextEntry()) != null) {
+                    entryCount++;
+                    if (entryCount > MAX_MOD_ENTRIES) {
+                        return "{\"ok\":false,\"error\":\"MOD_TOO_MANY_FILES\"}";
+                    }
+                    String rawName = e.getName();
+                    if (rawName == null || rawName.indexOf('\0') >= 0) {
+                        return "{\"ok\":false,\"error\":\"PATH_TRAVERSAL_BLOCKED\"}";
+                    }
+                    String unix = rawName.replace('\\', '/');
+                    if (unix.startsWith("/") || (unix.length() >= 2 && Character.isLetter(unix.charAt(0)) && unix.charAt(1) == ':')) {
+                        return "{\"ok\":false,\"error\":\"PATH_TRAVERSAL_BLOCKED\"}";
+                    }
+                    String cleanName = unix.replaceAll("/+$", "");
+                    if (cleanName.isEmpty()) {
+                        zis.closeEntry();
+                        continue;
+                    }
+                    for (String seg : cleanName.split("/")) {
+                        if (seg.isEmpty() || ".".equals(seg) || "..".equals(seg)) {
+                            return "{\"ok\":false,\"error\":\"PATH_TRAVERSAL_BLOCKED\"}";
+                        }
+                    }
+
+                    allRawNames.add(cleanName);
+                    if (e.isDirectory()) {
+                        rawDirSet.add(cleanName);
+                    } else {
+                        byte[] fileBytes = readStreamCapped(zis, MAX_MOD_ASSET_BYTES);
+                        totalUncompressed += fileBytes.length;
+                        if (totalUncompressed > MAX_MOD_TOTAL_UNCOMPRESSED) {
+                            return "{\"ok\":false,\"error\":\"ZIP_TOTAL_SIZE_EXCEEDED\"}";
+                        }
+                        extractedFiles.put(cleanName, fileBytes);
+                    }
+                    zis.closeEntry();
+                }
+            } catch (IOException ioErr) {
+                String msg = ioErr.getMessage();
+                if ("FILE_TOO_LARGE".equals(msg)) {
+                    return "{\"ok\":false,\"error\":\"ZIP_ENTRY_TOO_LARGE\"}";
+                }
+                return "{\"ok\":false,\"error\":\"CORRUPT_MOD_ARCHIVE\"}";
+            }
+
+            if (allRawNames.isEmpty() || extractedFiles.isEmpty()) {
+                return "{\"ok\":false,\"error\":\"CORRUPT_MOD_ARCHIVE\"}";
+            }
+
+            // Detect single top-level wrapper folder when mod.json is nested 1 level down
+            String stripPrefix = "";
+            if (!extractedFiles.containsKey("mod.json")) {
+                Set<String> roots = new HashSet<>();
+                for (String n : allRawNames) {
+                    int slash = n.indexOf('/');
+                    roots.add(slash >= 0 ? n.substring(0, slash) : n);
+                }
+                if (roots.size() == 1) {
+                    String singleRoot = roots.iterator().next();
+                    if (extractedFiles.containsKey(singleRoot + "/mod.json")) {
+                        stripPrefix = singleRoot + "/";
+                    }
+                }
+            }
+
+            Map<String, byte[]> finalFiles = new HashMap<>();
+            Set<String> finalDirs = new HashSet<>();
+            Set<String> presentStdFolders = new HashSet<>();
+            byte[] manifestBytes = null;
+
+            for (String rawName : allRawNames) {
+                String rel = rawName;
+                if (!stripPrefix.isEmpty()) {
+                    if (rawName.startsWith(stripPrefix)) {
+                        rel = rawName.substring(stripPrefix.length());
+                    } else if (rawName.equals(stripPrefix.substring(0, stripPrefix.length() - 1))) {
+                        continue;
+                    }
+                }
+                if (rel.isEmpty()) continue;
+                if (FILE_WOAMOD_META.equals(rel) || rel.endsWith("/" + FILE_WOAMOD_META)) {
+                    return "{\"ok\":false,\"error\":\"PATH_TRAVERSAL_BLOCKED\"}";
+                }
+                String[] parts = rel.split("/");
+                String topFolder = parts[0].toLowerCase(Locale.ROOT);
+                boolean isDirEntry = rawDirSet.contains(rawName);
+                if (STANDARD_MOD_FOLDERS.contains(topFolder) && (isDirEntry || parts.length > 1)) {
+                    presentStdFolders.add(topFolder);
+                }
+                if ("assets".equals(topFolder) && parts.length > 1) {
+                    String sub = parts[1].toLowerCase(Locale.ROOT);
+                    if (STANDARD_MOD_FOLDERS.contains(sub)) presentStdFolders.add(sub);
+                }
+
+                if (isDirEntry) {
+                    finalDirs.add(rel);
+                    continue;
+                }
+
+                String ext = getLowerExtension(rel);
+                if (FORBIDDEN_MOD_EXTENSIONS.contains(ext)) {
+                    return "{\"ok\":false,\"error\":\"UNSAFE_EXECUTABLE_CONTENT\",\"detail\":" + JSONObject.quote(rel) + "}";
+                }
+                byte[] content = extractedFiles.get(rawName);
+                if ("mod.json".equals(rel)) {
+                    if (content.length > MAX_MOD_JSON_BYTES) {
+                        return "{\"ok\":false,\"error\":\"MANIFEST_TOO_LARGE_OR_INVALID\"}";
+                    }
+                    manifestBytes = content;
+                } else if (MOD_CONTENT_FOLDERS.contains(topFolder) && ".json".equals(ext)) {
+                    if (content.length > MAX_MOD_JSON_BYTES) {
+                        return "{\"ok\":false,\"error\":\"ZIP_ENTRY_TOO_LARGE\"}";
+                    }
+                    // Verify JSON content integrity before extracting
+                    try {
+                        new org.json.JSONTokener(new String(content, StandardCharsets.UTF_8)).nextValue();
+                    } catch (Exception parseErr) {
+                        return "{\"ok\":false,\"error\":\"CORRUPT_CONTENT_JSON\",\"detail\":" + JSONObject.quote(rel) + "}";
+                    }
+                }
+                finalFiles.put(rel, content);
+            }
+
+            if (manifestBytes == null) {
+                return "{\"ok\":false,\"error\":\"REQUIRED_FILES_MISSING\",\"detail\":\"mod.json missing\"}";
+            }
+
+            JSONObject manifest = parseValidJsonObject(new String(manifestBytes, StandardCharsets.UTF_8));
+            if (manifest == null) {
+                return "{\"ok\":false,\"error\":\"CORRUPT_MOD_ARCHIVE\",\"detail\":\"Invalid mod.json\"}";
+            }
+            String modId = manifest.optString("modId", "").trim();
+            String modName = manifest.optString("name", "").trim();
+            String modVersion = manifest.optString("version", "").trim();
+            String modAuthor = manifest.optString("author", "").trim();
+            String supportedGameVer = manifest.optString("supportedGameVersion", "").trim();
+            if (!modId.matches("^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$") ||
+                modName.isEmpty() ||
+                parseBasicSemver(modVersion) == null ||
+                modAuthor.isEmpty() ||
+                supportedGameVer.isEmpty() ||
+                presentStdFolders.isEmpty()
+            ) {
+                return "{\"ok\":false,\"error\":\"REQUIRED_FILES_MISSING\",\"detail\":\"Missing required manifest fields or standard mod folders\"}";
+            }
+
+            if (!satisfiesBasicSemverRange(CURRENT_GAME_VERSION, supportedGameVer)) {
+                return "{\"ok\":false,\"error\":\"UNSUPPORTED_GAME_VERSION\",\"detail\":" + JSONObject.quote("Requires " + supportedGameVer) + "}";
+            }
+
+            // Collect installed mod versions for duplicate + dependency checks
+            Map<String, String> installedVersionsByModId = new HashMap<>();
+            Map<String, String> installedSourceByModId = new HashMap<>();
+            try {
+                JSONObject existingList = new JSONObject(listLocalModsJson());
+                JSONArray existingArr = existingList.optJSONArray("entries");
+                if (existingArr != null) {
+                    for (int i = 0; i < existingArr.length(); i++) {
+                        JSONObject item = existingArr.optJSONObject(i);
+                        if (item == null) continue;
+                        String mRaw = item.optString("manifestRaw", "");
+                        JSONObject mObj = parseValidJsonObject(mRaw);
+                        if (mObj == null) continue;
+                        String existingModId = mObj.optString("modId", "").trim();
+                        String existingVer = mObj.optString("version", "").trim();
+                        if (!existingModId.isEmpty()) {
+                            installedVersionsByModId.put(existingModId, existingVer);
+                            installedSourceByModId.put(existingModId, item.optString("sourceId", existingModId));
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+
+            if (installedVersionsByModId.containsKey(modId)) {
+                return "{\"ok\":false,\"error\":\"DUPLICATE_MOD_ID\",\"detail\":" +
+                    JSONObject.quote("Conflicts with \"" + installedSourceByModId.get(modId) + "\"") + "}";
+            }
+
+            JSONArray deps = manifest.optJSONArray("dependencies");
+            if (deps != null) {
+                for (int i = 0; i < deps.length(); i++) {
+                    Object depEntry = deps.opt(i);
+                    String depId = null;
+                    String depRange = null;
+                    boolean optional = false;
+                    if (depEntry instanceof String) {
+                        depId = ((String) depEntry).trim();
+                    } else if (depEntry instanceof JSONObject) {
+                        JSONObject dObj = (JSONObject) depEntry;
+                        depId = dObj.optString("modId", dObj.optString("id", "")).trim();
+                        depRange = dObj.optString("versionRange", dObj.optString("version", "")).trim();
+                        optional = dObj.optBoolean("optional", false);
+                    }
+                    if (depId == null || depId.isEmpty() || optional) continue;
+                    String installedDepVer = installedVersionsByModId.get(depId);
+                    if (installedDepVer == null) {
+                        return "{\"ok\":false,\"error\":\"MISSING_DEPENDENCY\",\"detail\":" + JSONObject.quote(depId) + "}";
+                    }
+                    if (depRange != null && !depRange.isEmpty() && !satisfiesBasicSemverRange(installedDepVer, depRange)) {
+                        return "{\"ok\":false,\"error\":\"DEPENDENCY_VERSION_MISMATCH\",\"detail\":" + JSONObject.quote(depId + " (" + depRange + ")") + "}";
+                    }
+                }
+            }
+
+            String safeFolder = sanitizeModSourceId(modId.replaceAll("[^A-Za-z0-9._-]", "_"));
+            if (safeFolder == null || safeFolder.startsWith(".")) {
+                return "{\"ok\":false,\"error\":\"INVALID_MOD_SOURCE_ID\"}";
+            }
+
+            long installedAtMs = System.currentTimeMillis();
+            JSONObject pkgMeta = new JSONObject();
+            pkgMeta.put("format", "woamod");
+            pkgMeta.put("packageVersion", 1);
+            pkgMeta.put("modId", modId);
+            pkgMeta.put("version", modVersion);
+            pkgMeta.put("packageFileName", safeName);
+            pkgMeta.put("installedAtMs", installedAtMs);
+            byte[] pkgMetaBytes = pkgMeta.toString(2).getBytes(StandardCharsets.UTF_8);
+
+            String mode = getActiveExternalModeLocked();
+            int totalFilesCount = Math.max(1, finalFiles.size());
+            int doneFiles = 0;
+
+            if ("direct".equals(mode)) {
+                File modsDir = new File(getDirectRootDir(), DIR_MODS);
+                if (!modsDir.exists()) modsDir.mkdirs();
+                File finalTargetDir = new File(modsDir, safeFolder);
+                if (!isCanonicalChild(modsDir, finalTargetDir)) {
+                    return "{\"ok\":false,\"error\":\"PATH_TRAVERSAL_BLOCKED\"}";
+                }
+                if (finalTargetDir.exists()) {
+                    return "{\"ok\":false,\"error\":\"TARGET_ALREADY_EXISTS\",\"detail\":" + JSONObject.quote(safeFolder) + "}";
+                }
+
+                directStaging = new File(modsDir, STAGING_DIR_PREFIX + System.currentTimeMillis());
+                if (!isCanonicalChild(modsDir, directStaging) || !directStaging.mkdirs()) {
+                    return "{\"ok\":false,\"error\":\"STAGING_CREATE_FAILED\"}";
+                }
+
+                for (String relDir : finalDirs) {
+                    File d = new File(directStaging, relDir);
+                    if (!isCanonicalChild(directStaging, d)) {
+                        return "{\"ok\":false,\"error\":\"PATH_TRAVERSAL_BLOCKED\"}";
+                    }
+                    d.mkdirs();
+                }
+
+                for (Map.Entry<String, byte[]> entry : finalFiles.entrySet()) {
+                    String relPath = entry.getKey();
+                    File dest = new File(directStaging, relPath);
+                    File parent = dest.getParentFile();
+                    if (parent != null && !parent.exists()) parent.mkdirs();
+                    if (!isCanonicalChild(directStaging, dest)) {
+                        return "{\"ok\":false,\"error\":\"PATH_TRAVERSAL_BLOCKED\"}";
+                    }
+                    try (FileOutputStream fos = new FileOutputStream(dest, false)) {
+                        fos.write(entry.getValue());
+                        fos.flush();
+                    }
+                    doneFiles++;
+                    if (doneFiles % 3 == 0 || doneFiles == totalFilesCount) {
+                        int pct = 55 + (int) Math.round((doneFiles * 40.0) / totalFilesCount);
+                        emitInstallProgress(
+                            progressListener, "extracting", safeName, pct,
+                            data.length, data.length, doneFiles, totalFilesCount, relPath, null
+                        );
+                    }
+                }
+
+                File metaFile = new File(directStaging, FILE_WOAMOD_META);
+                if (!isCanonicalChild(directStaging, metaFile)) {
+                    return "{\"ok\":false,\"error\":\"PATH_TRAVERSAL_BLOCKED\"}";
+                }
+                try (FileOutputStream fos = new FileOutputStream(metaFile, false)) {
+                    fos.write(pkgMetaBytes);
+                    fos.flush();
+                    fos.getFD().sync();
+                }
+
+                if (finalTargetDir.exists()) {
+                    return "{\"ok\":false,\"error\":\"TARGET_ALREADY_EXISTS\"}";
+                }
+                if (!directStaging.renameTo(finalTargetDir)) {
+                    throw new IOException("Unable to commit .woamod staging folder");
+                }
+                directCommitted = true;
+                scanMediaFile(finalTargetDir);
+
+                JSONObject res = new JSONObject();
+                res.put("ok", true);
+                res.put("sourceId", safeFolder);
+                res.put("modId", modId);
+                res.put("sourcePath", finalTargetDir.getAbsolutePath());
+                return res.toString();
+            } else if ("saf".equals(mode)) {
+                safTreeUri = getPersistedSafTreeUri();
+                if (safTreeUri != null) {
+                    String rootDocId = resolveSafRootDocId(safTreeUri, true);
+                    String modsDocId = getOrCreateSafDirDocId(safTreeUri, rootDocId, DIR_MODS);
+                    if (findSafChildDocId(safTreeUri, modsDocId, safeFolder) != null) {
+                        return "{\"ok\":false,\"error\":\"TARGET_ALREADY_EXISTS\",\"detail\":" + JSONObject.quote(safeFolder) + "}";
+                    }
+
+                    String stagingName = STAGING_DIR_PREFIX + System.currentTimeMillis();
+                    safStagingDocId = getOrCreateSafDirDocId(safTreeUri, modsDocId, stagingName);
+
+                    for (String relDir : finalDirs) {
+                        getOrCreateSafNestedDir(safTreeUri, safStagingDocId, relDir);
+                    }
+
+                    for (Map.Entry<String, byte[]> entry : finalFiles.entrySet()) {
+                        String relPath = entry.getKey();
+                        int slash = relPath.lastIndexOf('/');
+                        String targetDirDocId = slash >= 0
+                            ? getOrCreateSafNestedDir(safTreeUri, safStagingDocId, relPath.substring(0, slash))
+                            : safStagingDocId;
+                        String fileNameOnly = slash >= 0 ? relPath.substring(slash + 1) : relPath;
+                        writeSafBytes(safTreeUri, targetDirDocId, fileNameOnly, entry.getValue());
+
+                        doneFiles++;
+                        if (doneFiles % 3 == 0 || doneFiles == totalFilesCount) {
+                            int pct = 55 + (int) Math.round((doneFiles * 40.0) / totalFilesCount);
+                            emitInstallProgress(
+                                progressListener, "extracting", safeName, pct,
+                                data.length, data.length, doneFiles, totalFilesCount, relPath, null
+                            );
+                        }
+                    }
+
+                    writeSafBytes(safTreeUri, safStagingDocId, FILE_WOAMOD_META, pkgMetaBytes);
+
+                    Uri renamedUri = DocumentsContract.renameDocument(
+                        appContext.getContentResolver(),
+                        DocumentsContract.buildDocumentUriUsingTree(safTreeUri, safStagingDocId),
+                        safeFolder
+                    );
+                    if (renamedUri == null) {
+                        throw new IOException("SAF rename failed");
+                    }
+                    safCommitted = true;
+
+                    JSONObject res = new JSONObject();
+                    res.put("ok", true);
+                    res.put("sourceId", safeFolder);
+                    res.put("modId", modId);
+                    res.put("sourcePath", VISIBLE_MODS_PATH + safeFolder + "/");
+                    return res.toString();
+                }
+            }
+            return "{\"ok\":false,\"error\":\"STORAGE_UNAVAILABLE\"}";
+        } catch (Exception e) {
+            return "{\"ok\":false,\"error\":\"MOD_IMPORT_FAILED\"}";
+        } finally {
+            if (!directCommitted && directStaging != null && directStaging.exists()) {
+                emitInstallProgress(progressListener, "cleaning_up", safeName, 100, 0L, 0L, 0, 0, null, null);
+                deleteRecursiveDirect(directStaging);
+            }
+            if (!safCommitted && safTreeUri != null && safStagingDocId != null) {
+                emitInstallProgress(progressListener, "cleaning_up", safeName, 100, 0L, 0L, 0, 0, null, null);
+                try {
+                    DocumentsContract.deleteDocument(
+                        appContext.getContentResolver(),
+                        DocumentsContract.buildDocumentUriUsingTree(safTreeUri, safStagingDocId)
+                    );
+                } catch (Exception ignored) {
+                }
             }
         }
     }
