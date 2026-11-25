@@ -42,6 +42,7 @@ import {
 } from '../../game/multiplayer/MultiplayerService';
 import { isSwitchingMultiplayerTransport } from '../../game/multiplayer/MultiplayerTransport';
 import { copyTextToClipboard } from '../../game/multiplayer/inviteUtils';
+import { getModManager } from '../../game/mods';
 import {
   MultiplayerJoinError,
   type IMultiplayerService,
@@ -336,6 +337,9 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
       const resolvedSeed =
         seedPayload?.seed ?? Math.floor(100000 + Math.random() * 899999);
 
+      await getModManager().initialize();
+      const modMetadata = getModManager().getActiveWorldModMetadata();
+
       const hostRes = await startLanHost(
         {
           roomName: resolvedWorldName,
@@ -344,6 +348,7 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
           worldType: resolvedWorldType,
           difficulty: resolvedDifficulty,
           seed: resolvedSeed,
+          modMetadata: modMetadata as unknown as Record<string, unknown>,
           ...(seedPayload
             ? {
                 worldTime: seedPayload.worldTime as any as any,
@@ -380,6 +385,7 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
         worldType: resolvedWorldType,
         difficulty: resolvedDifficulty,
         seed: resolvedSeed,
+        modMetadata,
         ...(seedPayload
           ? {
               worldTime: seedPayload.worldTime as any,

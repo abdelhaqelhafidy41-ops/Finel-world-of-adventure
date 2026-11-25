@@ -156,6 +156,7 @@ export async function startLanHost(
     worldTime?: Record<string, unknown>;
     worldWeather?: Record<string, unknown>;
     savedWorldState?: Record<string, unknown>;
+    modMetadata?: Record<string, unknown>;
   } = {},
   port = DEFAULT_LAN_PORT,
 ): Promise<LanHostStartResult> {

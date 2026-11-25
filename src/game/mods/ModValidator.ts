@@ -1,18 +1,23 @@
 import type { RawDiscoveredModEntry } from '../../utils/platformExit';
 import {
   CURRENT_GAME_VERSION,
+  MOD_API_VERSION,
+  MOD_CONTENT_SCHEMA_VERSION,
   STANDARD_MOD_FOLDERS,
+  SUPPORTED_MOD_SCHEMA_VERSIONS,
   type IncompatibleModAsset,
   type ModAssetIndexEntry,
   type ModDependency,
   type ModDiagnostic,
   type ModManifest,
+  type ModMultiplayerCompatibility,
   type ModRecord,
   type ModStateConfig,
   type ParsedModContentFile,
   type StandardModFolder,
 } from './modTypes';
 import {
+  compareSemver,
   isValidSemverRangeSyntax,
   parseSemver,
   satisfiesSemverRange,
@@ -34,12 +39,20 @@ const GENERAL_SAFE_ASSET_EXTENSIONS = new Set([
 const DATA_CATEGORY_FOLDERS = new Set([
   'items',
   'weapons',
+  'armor',
+  'tools',
+  'consumables',
+  'resources',
+  'recipes',
   'characters',
+  'animals',
   'creatures',
+  'monsters',
   'npcs',
   'buildings',
+  'decorations',
   'quests',
-  'recipes',
+  'loot_tables',
   'localization',
 ]);
 
@@ -368,6 +381,47 @@ function parseManifest(
       ? Math.trunc(parsed.loadPriority)
       : 0;
 
+  const minGameVersion =
+    typeof parsed.minGameVersion === 'string' && parsed.minGameVersion.trim()
+      ? parsed.minGameVersion.trim()
+      : undefined;
+  const maxGameVersion =
+    typeof parsed.maxGameVersion === 'string' && parsed.maxGameVersion.trim()
+      ? parsed.maxGameVersion.trim()
+      : undefined;
+
+  if (minGameVersion && !parseSemver(minGameVersion)) {
+    diagnostics.push({
+      code: 'INCOMPATIBLE_GAME_VERSION',
+      severity: 'error',
+      message: `mod.json has invalid minGameVersion "${minGameVersion}".`,
+    });
+  }
+  if (maxGameVersion && !parseSemver(maxGameVersion)) {
+    diagnostics.push({
+      code: 'INCOMPATIBLE_GAME_VERSION',
+      severity: 'error',
+      message: `mod.json has invalid maxGameVersion "${maxGameVersion}".`,
+    });
+  }
+
+  const modApiVersion =
+    typeof parsed.modApiVersion === 'number' && Number.isFinite(parsed.modApiVersion)
+      ? Math.trunc(parsed.modApiVersion)
+      : MOD_API_VERSION;
+  const schemaVersion =
+    typeof parsed.schemaVersion === 'number' && Number.isFinite(parsed.schemaVersion)
+      ? Math.trunc(parsed.schemaVersion)
+      : MOD_CONTENT_SCHEMA_VERSION;
+  const mpCompatRaw =
+    typeof parsed.multiplayerCompatibility === 'string'
+      ? parsed.multiplayerCompatibility.trim()
+      : '';
+  const multiplayerCompatibility: ModMultiplayerCompatibility | undefined =
+    mpCompatRaw === 'required' || mpCompatRaw === 'optional' || mpCompatRaw === 'client_only'
+      ? mpCompatRaw
+      : undefined;
+
   const manifest: ModManifest = {
     modId: modId || fallback.modId,
     name: name || fallback.name,
@@ -375,6 +429,11 @@ function parseManifest(
     author: author || fallback.author,
     description,
     supportedGameVersion: supportedGameVersion || '',
+    ...(minGameVersion ? { minGameVersion } : {}),
+    ...(maxGameVersion ? { maxGameVersion } : {}),
+    modApiVersion,
+    schemaVersion,
+    ...(multiplayerCompatibility ? { multiplayerCompatibility } : {}),
     modTypes: effectiveTypes,
     categories: effectiveCategories,
     dependencies,
@@ -494,7 +553,7 @@ export function validateDiscoveredMods(
         ? Math.trunc(state.priorityByModId[modId])
         : parsedManifest.manifest.loadPriority;
 
-    const gameCompatible = !(
+    let gameCompatible = !(
       parsedManifest.hasValidManifest &&
       parsedManifest.manifest.supportedGameVersion &&
       !satisfiesSemverRange(gameVersion, parsedManifest.manifest.supportedGameVersion)
@@ -505,6 +564,51 @@ export function validateDiscoveredMods(
         code: 'INCOMPATIBLE_GAME_VERSION',
         severity: 'error',
         message: `Requires game version ${parsedManifest.manifest.supportedGameVersion}, current version is ${gameVersion}.`,
+      });
+    }
+
+    const currentSemver = parseSemver(gameVersion);
+    const minSemver = parsedManifest.manifest.minGameVersion
+      ? parseSemver(parsedManifest.manifest.minGameVersion)
+      : null;
+    const maxSemver = parsedManifest.manifest.maxGameVersion
+      ? parseSemver(parsedManifest.manifest.maxGameVersion)
+      : null;
+    if (currentSemver && minSemver && compareSemver(currentSemver, minSemver) < 0) {
+      gameCompatible = false;
+      diagnostics.push({
+        code: 'INCOMPATIBLE_GAME_VERSION',
+        severity: 'error',
+        message: `Requires game version >= ${parsedManifest.manifest.minGameVersion}, current version is ${gameVersion}.`,
+      });
+    }
+    if (currentSemver && maxSemver && compareSemver(currentSemver, maxSemver) > 0) {
+      gameCompatible = false;
+      diagnostics.push({
+        code: 'INCOMPATIBLE_GAME_VERSION',
+        severity: 'error',
+        message: `Supports game version <= ${parsedManifest.manifest.maxGameVersion}, current version is ${gameVersion}.`,
+      });
+    }
+
+    const reqApiVersion = parsedManifest.manifest.modApiVersion ?? MOD_API_VERSION;
+    if (reqApiVersion > MOD_API_VERSION || reqApiVersion < 1) {
+      gameCompatible = false;
+      diagnostics.push({
+        code: 'INCOMPATIBLE_MOD_API_VERSION',
+        severity: 'error',
+        message: `Mod requires Mod API v${reqApiVersion}, while this game provides Mod API v${MOD_API_VERSION}.`,
+      });
+    }
+
+    const reqSchemaVersion =
+      parsedManifest.manifest.schemaVersion ?? MOD_CONTENT_SCHEMA_VERSION;
+    if (!SUPPORTED_MOD_SCHEMA_VERSIONS.includes(reqSchemaVersion)) {
+      gameCompatible = false;
+      diagnostics.push({
+        code: 'UNSUPPORTED_MOD_SCHEMA_VERSION',
+        severity: 'error',
+        message: `Mod content schemaVersion v${reqSchemaVersion} is not supported (supported: v${SUPPORTED_MOD_SCHEMA_VERSIONS.join(', v')}).`,
       });
     }
 
@@ -593,7 +697,14 @@ export function validateDiscoveredMods(
       rec.status = 'corrupted';
     } else if (rec.diagnostics.some((d) => d.code === 'INCOMPLETE_MOD_STRUCTURE')) {
       rec.status = 'incomplete';
-    } else if (rec.diagnostics.some((d) => d.code === 'INCOMPATIBLE_GAME_VERSION')) {
+    } else if (
+      rec.diagnostics.some(
+        (d) =>
+          d.code === 'INCOMPATIBLE_GAME_VERSION' ||
+          d.code === 'INCOMPATIBLE_MOD_API_VERSION' ||
+          d.code === 'UNSUPPORTED_MOD_SCHEMA_VERSION',
+      )
+    ) {
       rec.status = 'incompatible';
     } else if (!rec.enabled) {
       rec.status = 'disabled';

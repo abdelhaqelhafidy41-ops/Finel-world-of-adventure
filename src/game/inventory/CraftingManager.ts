@@ -51,19 +51,23 @@ export class CraftingManager {
       merged.set(r.id, r);
     }
     for (const r of ext) {
-      merged.set(r.id, r);
+      if (!merged.has(r.id)) {
+        merged.set(r.id, r);
+      }
     }
     return Array.from(merged.values());
   }
 
   public getRecipe(recipeId: string): CraftingRecipe | undefined {
+    const core = this.recipes.find((r) => r.id === recipeId);
+    if (core) return core;
     const ext = CraftingManager.externalRecipeProvider?.();
     if (ext && ext.length > 0) {
       for (let i = ext.length - 1; i >= 0; i--) {
         if (ext[i].id === recipeId) return ext[i];
       }
     }
-    return this.recipes.find((r) => r.id === recipeId);
+    return undefined;
   }
 
   public resetProgression(): void {

@@ -152,6 +152,7 @@ import {
   ALLOWED_WEAPON_IDS,
   SERVER_CRAFTABLE_YIELDS,
   generateNetworkEntityId,
+  isAllowedMultiplayerWeaponId,
   type AuthoritativeWorldTimeState,
   type AuthoritativeWorldWeatherState,
   type BossEncounterState,
@@ -208,6 +209,10 @@ import type {
   MerchantTradeSnapshot,
   VillageDevelopmentSnapshot,
 } from '../village/villageDevTypes';
+import {
+  getModManager,
+  type WorldModMetadataSnapshot,
+} from '../mods';
 
 export interface EngineCallbacks {
   onPhaseChange: (phase: GamePhase) => void;
@@ -844,7 +849,7 @@ export class GameEngine {
       this.multiplayerService &&
       (res.itemId === 'arrow' ||
         res.itemId === 'bed' ||
-        ALLOWED_WEAPON_IDS.has(res.itemId) ||
+        isAllowedMultiplayerWeaponId(res.itemId) ||
         Boolean(SERVER_CRAFTABLE_YIELDS[recipeId]))
     ) {
       this.multiplayerService.sendGameEvent('WORLD_EVENT', {
@@ -4937,6 +4942,7 @@ export class GameEngine {
       audio: {
         footstepVolume: this.footstepVolume,
       },
+      modMetadata: getModManager().getActiveWorldModMetadata(),
     };
   }
 
@@ -7157,11 +7163,16 @@ export class GameEngine {
 
   public async loadFromSlot(slotId: SaveSlotId): Promise<boolean> {
     if (this.multiplayerSessionActive) return false;
+    await getModManager().initialize();
     const res = this.loadManager.loadSlot(slotId);
     if (!res.ok) {
       this.callbacks.onWorldNotice(UI_TEXT[this.language].loadFailedNotice);
       return false;
     }
+
+    const saveCompat = getModManager().evaluateSaveCompatibility(
+      res.data.modMetadata,
+    );
 
     this.sound.unlock();
     this.sound.playUiClick();
@@ -7182,7 +7193,13 @@ export class GameEngine {
       this.input?.requestPointerLock();
     }
     this.callbacks.onWorldNotice(
-      UI_TEXT[this.language].loadedNotice(res.data.meta.worldName || this.getSlotDisplayName(slotId)),
+      saveCompat.hasWarnings
+        ? UI_TEXT[this.language].modsCompatWarningNotice(
+            saveCompat.issues.filter((i) => i.severity !== 'info').length,
+          )
+        : UI_TEXT[this.language].loadedNotice(
+            res.data.meta.worldName || this.getSlotDisplayName(slotId),
+          ),
     );
     return true;
   }
@@ -7206,6 +7223,7 @@ export class GameEngine {
     this.sound.unlock();
     this.sound.playUiClick();
     this.endNpcDialogue();
+    await getModManager().initialize();
 
     const loaded = await this.ensureWorldRuntimeLoaded(seed, { x: 0, z: 4 });
     if (!loaded || !this.controller || !this.world) return false;
@@ -7324,10 +7342,12 @@ export class GameEngine {
     worldWeather?: AuthoritativeWorldWeatherState;
     localPlayerId?: string;
     players?: MultiplayerPlayer[];
+    modMetadata?: WorldModMetadataSnapshot;
     hostWorldSlotId?: SaveSlotId | null;
     savedWorldData?: SaveGameData | null;
   }): Promise<boolean> {
     this.multiplayerSessionActive = true;
+    await getModManager().initialize();
     const room = this.multiplayerService?.getRoomState();
     const localId =
       options.localPlayerId ?? this.multiplayerService?.getLocalPlayerId() ?? null;
@@ -7338,6 +7358,20 @@ export class GameEngine {
         room.hostId === localId,
     );
     const saved = isLanHost ? (options.savedWorldData ?? null) : null;
+    const remoteModMeta = options.modMetadata ?? saved?.modMetadata;
+    const mpMode: 'lan' | 'online' = this.isLanTransportActive() ? 'lan' : 'online';
+    const mpCompat = getModManager().evaluateMultiplayerCompatibility(
+      mpMode,
+      remoteModMeta,
+    );
+    if (mpCompat.hasWarnings) {
+      const warnCount = mpCompat.issues.filter((i) => i.severity !== 'info').length;
+      if (warnCount > 0) {
+        this.callbacks.onWorldNotice(
+          UI_TEXT[this.language].modsCompatWarningNotice(warnCount),
+        );
+      }
+    }
 
     const cleanName =
       saved?.meta.worldName || options.worldName.trim() || 'Oakhollow Co-op';
@@ -9787,7 +9821,7 @@ export class GameEngine {
           hasArrows = true;
           arrowCount += entry.count;
         }
-        if (ALLOWED_WEAPON_IDS.has(entry.itemId)) {
+        if (isAllowedMultiplayerWeaponId(entry.itemId)) {
           lootItemIds.push(entry.itemId);
         }
         if (this.inventoryManager.canAccept(entry.itemId, entry.count)) {

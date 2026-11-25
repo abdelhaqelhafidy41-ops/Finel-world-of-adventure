@@ -19,6 +19,8 @@ import {
   createDefaultExtendedSettings,
   loadExtendedSettings,
 } from '../settings/GameSettingsStore';
+import { AUDIO_CUE_REGISTRY } from './AudioRegistry';
+import type { ModSoundDescriptor } from '../mods/modTypes';
 
 export type AudioSceneMode = 'menu' | 'loading' | 'world' | 'paused';
 
@@ -72,12 +74,22 @@ function normalizeAudioSettings(
  * - Smooth scene/weather/biome/indoor/combat transitions & low-power voice capping
  */
 export class AudioManager {
+  private static externalModSoundProvider:
+    | ((soundId: string) => ModSoundDescriptor | undefined)
+    | null = null;
+
   public readonly sfx: SoundEngine;
   public readonly music: MenuMusicManager;
 
   private settings: AudioSettings;
   private sceneMode: AudioSceneMode = 'menu';
   private disposed = false;
+
+  public static setExternalModSoundProvider(
+    provider: ((soundId: string) => ModSoundDescriptor | undefined) | null,
+  ): void {
+    AudioManager.externalModSoundProvider = provider;
+  }
 
   constructor(initialAudio?: Partial<AudioSettings>) {
     const restored = loadExtendedSettings().audio;
@@ -87,6 +99,14 @@ export class AudioManager {
     this.sfx = new SoundEngine();
     this.music = new MenuMusicManager(this.settings);
     this.syncEngines(true);
+  }
+
+  public getModSoundDescriptor(soundId: string): ModSoundDescriptor | undefined {
+    // Core audio cue IDs cannot be hijacked by mod sound definitions
+    if (soundId in AUDIO_CUE_REGISTRY) {
+      return undefined;
+    }
+    return AudioManager.externalModSoundProvider?.(soundId);
   }
 
   public getSceneMode(): AudioSceneMode {

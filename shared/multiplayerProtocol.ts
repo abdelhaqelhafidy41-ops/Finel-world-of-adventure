@@ -1523,6 +1523,7 @@ export interface RoomWorldSnapshotPayload {
   itemCounts?: Record<string, number>;
   equippedWeaponId?: string | null;
   partyState?: PartyStateSnapshot;
+  modMetadata?: ProtocolWorldModMetadata;
 }
 
 /**
@@ -1581,6 +1582,33 @@ export const ALLOWED_WEAPON_IDS = new Set<string>([
   'bronze-spear',
   'hunter-knife',
 ]);
+
+export const MOD_NAMESPACED_WEAPON_PATTERN =
+  /^[a-z0-9][a-z0-9._-]{1,63}:[a-z0-9][a-z0-9._-]{0,63}$/i;
+
+export function isAllowedMultiplayerWeaponId(weaponId: string): boolean {
+  if (ALLOWED_WEAPON_IDS.has(weaponId)) return true;
+  if (weaponId.length <= 96 && MOD_NAMESPACED_WEAPON_PATTERN.test(weaponId)) {
+    return true;
+  }
+  return false;
+}
+
+export interface ProtocolWorldModEntry {
+  modId: string;
+  name: string;
+  version: string;
+  modApiVersion?: number;
+  schemaVersion?: number;
+  multiplayerCompatibility?: 'required' | 'optional' | 'client_only';
+}
+
+export interface ProtocolWorldModMetadata {
+  modApiVersion: number;
+  schemaVersion: number;
+  savedAtGameVersion: string;
+  mods: ProtocolWorldModEntry[];
+}
 
 export const ALLOWED_ATTACK_ANIM_TYPES = new Set<string>([
   'melee_slash',
@@ -1737,6 +1765,7 @@ export interface RoomGameState {
   hasPassword: boolean;
   startedAt: number | null;
   tick: number;
+  modMetadata?: ProtocolWorldModMetadata;
 }
 
 export interface AuthoritativeRoomSnapshot {
@@ -2122,7 +2151,7 @@ function parseCorePlayerMotionFields(
   if (obj.weaponId === null) {
     state.weaponId = null;
   } else if (typeof obj.weaponId === 'string') {
-    if (!ALLOWED_WEAPON_IDS.has(obj.weaponId)) {
+    if (!isAllowedMultiplayerWeaponId(obj.weaponId)) {
       return { ok: false, reason: `Unknown weaponId "${obj.weaponId}".` };
     }
     state.weaponId = obj.weaponId;

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -10,7 +10,8 @@ import {
 } from 'lucide-react';
 import { UI_TEXT, type Language } from '../../game/i18n/translations';
 import type { SaveGameMeta, SaveSlotId } from '../../game/save/saveTypes';
-import { WorldCard } from './WorldCard';
+import { getModManager, type ModsSnapshot } from '../../game/mods';
+import { WorldCard, type WorldCardModStatus } from './WorldCard';
 
 interface WorldSelectionScreenProps {
   lang: Language;
@@ -21,6 +22,34 @@ interface WorldSelectionScreenProps {
   onDeleteWorld: (slotId: SaveSlotId) => void;
   onCreateNewWorld: () => void;
   onBack: () => void;
+}
+
+const CARD_ERROR_STATUSES = new Set([
+  'incompatible',
+  'corrupted',
+  'incomplete',
+  'unsafe',
+  'duplicate',
+  'missing_dependency',
+  'circular_dependency',
+]);
+
+function computeWorldCardModStatus(
+  world: SaveGameMeta,
+  snapshot: ModsSnapshot,
+): WorldCardModStatus {
+  const summary = world.modSummary;
+  if (!summary || summary.selectionMode === 'vanilla' || summary.modIds.length === 0) {
+    return 'ok';
+  }
+  const byId = new Map(snapshot.mods.map((m) => [m.manifest.modId, m]));
+  for (const modId of summary.modIds) {
+    const rec = byId.get(modId);
+    if (!rec || !rec.hasValidManifest || !rec.gameCompatible || CARD_ERROR_STATUSES.has(rec.status)) {
+      return 'missing_or_incompatible';
+    }
+  }
+  return 'ok';
 }
 
 export const WorldSelectionScreen: React.FC<WorldSelectionScreenProps> = ({
@@ -35,11 +64,21 @@ export const WorldSelectionScreen: React.FC<WorldSelectionScreenProps> = ({
 }) => {
   const t = UI_TEXT[lang];
   const isRtl = lang === 'ar';
+  const modManager = useMemo(() => getModManager(), []);
+  const [modsSnapshot, setModsSnapshot] = useState<ModsSnapshot>(() =>
+    modManager.getSnapshot(),
+  );
 
   const [selectedId, setSelectedId] = useState<SaveSlotId | null>(
     () => worlds[0]?.slotId ?? null,
   );
   const [confirmDeleteId, setConfirmDeleteId] = useState<SaveSlotId | null>(null);
+
+  useEffect(() => {
+    const unsub = modManager.subscribe(setModsSnapshot);
+    void modManager.initialize().then(() => modManager.refreshMods());
+    return unsub;
+  }, [modManager]);
 
   useEffect(() => {
     if (worlds.length === 0) {
@@ -136,6 +175,7 @@ export const WorldSelectionScreen: React.FC<WorldSelectionScreenProps> = ({
                 world={world}
                 selected={selectedId === world.slotId}
                 lang={lang}
+                modStatus={computeWorldCardModStatus(world, modsSnapshot)}
                 onSelect={() => setSelectedId(world.slotId)}
                 onDeleteRequest={() => setConfirmDeleteId(world.slotId)}
               />

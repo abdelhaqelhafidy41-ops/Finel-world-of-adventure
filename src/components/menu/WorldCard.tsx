@@ -1,5 +1,5 @@
 import React from 'react';
-import { Trash2 } from 'lucide-react';
+import { AlertTriangle, Package, Trash2 } from 'lucide-react';
 import {
   BIOME_LABELS,
   UI_TEXT,
@@ -8,10 +8,13 @@ import {
 import type { BiomeType } from '../../game/types';
 import type { DifficultyLevel, SaveGameMeta, WorldType } from '../../game/save/saveTypes';
 
+export type WorldCardModStatus = 'ok' | 'missing_or_incompatible';
+
 interface WorldCardProps {
   world: SaveGameMeta;
   selected: boolean;
   lang: Language;
+  modStatus?: WorldCardModStatus;
   onSelect: () => void;
   onDeleteRequest: () => void;
 }
@@ -135,6 +138,7 @@ export const WorldCard: React.FC<WorldCardProps> = ({
   world,
   selected,
   lang,
+  modStatus = 'ok',
   onSelect,
   onDeleteRequest,
 }) => {
@@ -142,6 +146,11 @@ export const WorldCard: React.FC<WorldCardProps> = ({
   const worldTypeLabel = getWorldTypeLabel(world.worldType, lang);
   const diffLabel = getDifficultyLabel(world.difficulty, lang);
   const biomeLabel = BIOME_LABELS[lang][world.biome];
+  const summary = world.modSummary;
+  const isModdedWorld = Boolean(
+    summary && summary.selectionMode === 'custom' && summary.enabledCount > 0,
+  );
+  const hasModWarning = modStatus === 'missing_or_incompatible';
 
   return (
     <div
@@ -175,9 +184,32 @@ export const WorldCard: React.FC<WorldCardProps> = ({
           {/* Unboxed Metadata Typography */}
           <div className="flex-1 min-w-0">
             <div className="flex items-baseline justify-between gap-2">
-              <h3 className="font-display font-bold text-sm sm:text-base text-[#f7faf5] truncate">
-                {world.worldName}
-              </h3>
+              <div className="flex items-center gap-2 min-w-0">
+                <h3 className="font-display font-bold text-sm sm:text-base text-[#f7faf5] truncate">
+                  {world.worldName}
+                </h3>
+                <span
+                  data-testid={`world-mod-badge-${world.slotId}`}
+                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 border ${
+                    hasModWarning
+                      ? 'bg-[#361c17] border-[#e05a47]/55 text-[#f7b1a6]'
+                      : isModdedWorld
+                        ? 'bg-[#2a2413] border-[#e5a93c]/45 text-[#f5cf7f]'
+                        : 'bg-[#15241c] border-white/10 text-[#9db1a1]'
+                  }`}
+                >
+                  {hasModWarning ? (
+                    <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
+                  ) : isModdedWorld ? (
+                    <Package className="w-2.5 h-2.5 shrink-0" />
+                  ) : null}
+                  <span>
+                    {isModdedWorld && summary
+                      ? t.worldBadgeModded(summary.enabledCount)
+                      : t.worldBadgeVanilla}
+                  </span>
+                </span>
+              </div>
               <span className="font-mono-num text-[11px] sm:text-xs font-semibold text-[#e5a93c] shrink-0">
                 {t.levelShort}
                 {world.level}
@@ -222,3 +254,4 @@ export const WorldCard: React.FC<WorldCardProps> = ({
     </div>
   );
 };
+

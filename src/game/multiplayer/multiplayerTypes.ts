@@ -31,6 +31,8 @@ import type {
   PlayerReportPayload,
   PlayerReportReason,
   PositionCorrectionPayload,
+  ProtocolWorldModEntry,
+  ProtocolWorldModMetadata,
   QuestScope,
   RepairWeaponsPayload,
   ReportAckPayload,
@@ -78,6 +80,8 @@ export type {
   PlayerReportPayload,
   PlayerReportReason,
   PositionCorrectionPayload,
+  ProtocolWorldModEntry,
+  ProtocolWorldModMetadata,
   QuestScope,
   RepairWeaponsPayload,
   ReportAckPayload,
@@ -160,6 +164,7 @@ export interface MultiplayerRoomState extends MultiplayerRoomSummary {
   worldWeather?: AuthoritativeWorldWeatherState;
   serverTimestamp?: number;
   durableObjectId?: string;
+  modMetadata?: ProtocolWorldModMetadata;
 }
 
 export interface MultiplayerGameStartInfo {
@@ -179,6 +184,7 @@ export interface MultiplayerGameStartInfo {
   isHost: boolean;
   localPlayerId: string;
   players: MultiplayerPlayer[];
+  modMetadata?: ProtocolWorldModMetadata;
 }
 
 export interface MultiplayerFriend {
@@ -273,6 +279,7 @@ export interface CreateRoomOptions {
   worldTime?: AuthoritativeWorldTimeState;
   worldWeather?: AuthoritativeWorldWeatherState;
   savedWorldState?: Partial<RoomWorldSnapshotPayload>;
+  modMetadata?: ProtocolWorldModMetadata;
 }
 
 export interface JoinRoomOptions {

@@ -40,6 +40,7 @@ import {
   loadSavedMultiplayerName,
   saveMultiplayerName,
 } from '../../game/multiplayer/MultiplayerService';
+import { getModManager } from '../../game/mods';
 import {
   checkMultiplayerServerHealth,
   formatMultiplayerDiagnosticReport,
@@ -640,6 +641,8 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
     }
     setCreatingRoom(true);
     try {
+      await getModManager().initialize();
+      const modMetadata = getModManager().getActiveWorldModMetadata();
       const created = await service.createRoom({
         roomName: cleanedRoom.slice(0, 36),
         playerName: cleanedPlayer.slice(0, 24),
@@ -653,6 +656,7 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
         requireAllReady,
         friendlyFire,
         password: roomPassword.trim() || undefined,
+        modMetadata,
       });
       setActiveRoom(created);
       setSubView('lobby');

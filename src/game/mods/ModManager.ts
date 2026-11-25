@@ -1,19 +1,36 @@
-import { ItemManager } from '../inventory/ItemManager';
+import { AudioManager } from '../audio/AudioManager';
+import { setExternalBlueprintProvider } from '../building/buildingCatalog';
+import { WeaponRegistry } from '../combat/weapons/WeaponRegistry';
 import { CraftingManager } from '../inventory/CraftingManager';
+import { ItemManager } from '../inventory/ItemManager';
 import type { ModAssetReadResult } from '../../utils/platformExit';
-import { DefaultModContentStore } from './handlers/defaultModHandlers';
+import {
+  DefaultModContentStore,
+  type ModContentRegistryMap,
+} from './handlers/defaultModHandlers';
+import { ModAssetResolver } from './ModAssetResolver';
 import { ModContentRegistry } from './ModContentRegistry';
 import { ModStorageAdapter } from './ModStorageAdapter';
 import { validateDiscoveredMods } from './ModValidator';
 import {
+  captureWorldModMetadata,
+  evaluateMultiplayerModCompatibility,
+  evaluateSaveModCompatibility,
+} from './ModWorldCompatibility';
+import {
   CURRENT_GAME_VERSION,
+  MOD_API_VERSION,
+  MOD_CONTENT_SCHEMA_VERSION,
+  type ModCompatibilityEvaluation,
   type ModContentHandler,
+  type ModContentType,
   type ModInstallProgress,
   type ModLogEntry,
   type ModLogLevel,
   type ModRecord,
   type ModsSnapshot,
   type ModStateConfig,
+  type WorldModMetadataSnapshot,
 } from './modTypes';
 
 const MAX_LOG_ENTRIES = 120;
@@ -24,6 +41,9 @@ export class ModManager {
   public readonly registry = new ModContentRegistry();
   private readonly contentStore = new DefaultModContentStore();
   private readonly storage = new ModStorageAdapter();
+  private readonly assetResolver = new ModAssetResolver((sourceId, relPath) =>
+    this.storage.readAsset(sourceId, relPath),
+  );
 
   private stateConfig: ModStateConfig = {
     version: 1,
@@ -46,6 +66,13 @@ export class ModManager {
     CraftingManager.setExternalRecipeProvider(() =>
       this.contentStore.getAllModRecipes(),
     );
+    setExternalBlueprintProvider(() => this.contentStore.getAllModBlueprints());
+    WeaponRegistry.setExternalWeaponProvider((weaponId) =>
+      this.contentStore.getModWeaponStats(weaponId),
+    );
+    AudioManager.setExternalModSoundProvider((soundId) =>
+      this.contentStore.getModSound(soundId),
+    );
 
     this.snapshot = {
       initialized: false,
@@ -54,6 +81,8 @@ export class ModManager {
       writable: false,
       platform: this.storage.getPlatform(),
       gameVersion: CURRENT_GAME_VERSION,
+      modApiVersion: MOD_API_VERSION,
+      schemaVersion: MOD_CONTENT_SCHEMA_VERSION,
       mods: [],
       activeModIds: [],
       loadOrder: [],
@@ -74,6 +103,41 @@ export class ModManager {
 
   public getSnapshot(): ModsSnapshot {
     return this.snapshot;
+  }
+
+  public getContentStore(): DefaultModContentStore {
+    return this.contentStore;
+  }
+
+  public getContentRegistry<K extends ModContentType>(
+    type: K,
+  ): ModContentRegistryMap[K] {
+    return this.contentStore.getRegistry(type);
+  }
+
+  public getAssetResolver(): ModAssetResolver {
+    return this.assetResolver;
+  }
+
+  public async resolveAssetDataUrl(canonicalRef: string): Promise<string | null> {
+    return this.assetResolver.resolveDataUrl(canonicalRef);
+  }
+
+  public getActiveWorldModMetadata(): WorldModMetadataSnapshot {
+    return captureWorldModMetadata(this.snapshot, CURRENT_GAME_VERSION);
+  }
+
+  public evaluateSaveCompatibility(
+    saveModMeta: WorldModMetadataSnapshot | undefined,
+  ): ModCompatibilityEvaluation {
+    return evaluateSaveModCompatibility(saveModMeta, this.snapshot);
+  }
+
+  public evaluateMultiplayerCompatibility(
+    mode: 'singleplayer' | 'lan' | 'online',
+    remoteMeta: WorldModMetadataSnapshot | undefined,
+  ): ModCompatibilityEvaluation {
+    return evaluateMultiplayerModCompatibility(mode, remoteMeta, this.snapshot);
   }
 
   public subscribe(listener: (snap: ModsSnapshot) => void): () => void {
@@ -156,6 +220,8 @@ export class ModManager {
           const rec = recordByModId.get(modId);
           if (!rec) continue;
 
+          this.assetResolver.setModAssets(modId, rec.sourceId, rec.assets);
+
           const loadRes = this.registry.loadMod({
             modId,
             sourceId: rec.sourceId,
@@ -166,6 +232,7 @@ export class ModManager {
           rec.diagnostics.push(...loadRes.diagnostics);
 
           if (!loadRes.ok) {
+            this.assetResolver.removeModAssets(modId);
             rec.loaded = false;
             rec.loadedEntriesCount = 0;
             rec.status = 'corrupted';
@@ -261,6 +328,7 @@ export class ModManager {
     modId?: string,
   ): Promise<{ ok: boolean; error?: string }> {
     if (modId) {
+      this.assetResolver.removeModAssets(modId);
       this.registry.unloadMod(modId);
       const nextEnabled = { ...this.stateConfig.enabledByModId };
       const nextPriority = { ...this.stateConfig.priorityByModId };
@@ -467,6 +535,7 @@ export class ModManager {
   }
 
   private unloadAllActiveModsInternal(emitAfter: boolean): void {
+    this.assetResolver.clear();
     this.registry.unloadAll();
     if (emitAfter) {
       this.snapshot = {

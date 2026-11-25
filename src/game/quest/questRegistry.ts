@@ -8,7 +8,7 @@ const proceduralQuestIds = new Set<string>();
 const modQuests = new Map<string, { modId: string; quest: QuestDefinition }>();
 
 export function getQuestDefinition(questId: string): QuestDefinition | undefined {
-  return modQuests.get(questId)?.quest ?? questRegistry.get(questId);
+  return questRegistry.get(questId) ?? modQuests.get(questId)?.quest;
 }
 
 export function getAllQuestDefinitions(): QuestDefinition[] {
@@ -17,7 +17,9 @@ export function getAllQuestDefinitions(): QuestDefinition[] {
   }
   const merged = new Map<string, QuestDefinition>(questRegistry);
   for (const [id, entry] of modQuests.entries()) {
-    merged.set(id, entry.quest);
+    if (!merged.has(id)) {
+      merged.set(id, entry.quest);
+    }
   }
   return Array.from(merged.values());
 }
@@ -44,8 +46,12 @@ export function clearProceduralQuests(): void {
 export function registerModQuestDefinition(
   modId: string,
   quest: QuestDefinition,
-): void {
+): boolean {
+  if (questRegistry.has(quest.id)) {
+    return false;
+  }
   modQuests.set(quest.id, { modId, quest });
+  return true;
 }
 
 export function unregisterModQuests(modId: string): void {

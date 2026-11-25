@@ -1,7 +1,20 @@
 import type {
+  BuildingBlueprint,
+  BuildingCategory,
+  StructureMaterialTier,
+} from '../../building/buildingTypes';
+import type { DamageType } from '../../combat/combatTypes';
+import type {
+  WeaponAttackAnimType,
+  WeaponKind,
+  WeaponStats,
+} from '../../combat/weapons/Weapon';
+import type {
   CraftingRecipe,
+  EquipSlot,
   ItemDefinition,
   ItemIconKey,
+  ToolKind,
 } from '../../inventory/inventoryTypes';
 import type { QuestDefinition } from '../../quest/questTypes';
 import {
@@ -9,12 +22,119 @@ import {
   registerModQuestDefinition,
   unregisterModQuests,
 } from '../../quest/questRegistry';
+import { normalizeModAssetPath } from '../ModAssetResolver';
+import {
+  CORE_PROTECTED_IDS,
+  NamespacedContentRegistry,
+  resolveModCrossReference,
+  resolveModObjectIdentifier,
+} from '../ModNamespaceRegistry';
 import type {
   ModContentHandler,
   ModContentHandlerResult,
+  ModContentType,
   ModDiagnostic,
+  ModGenericEntityDescriptor,
   ModLoadContext,
+  ModLootDropEntry,
+  ModLootTableDescriptor,
+  ModMusicDescriptor,
+  ModSoundDescriptor,
+  ModTextureDescriptor,
 } from '../modTypes';
+
+const VALID_ITEM_ICONS = new Set<string>([
+  'compass',
+  'journal',
+  'herb',
+  'loaf',
+  'tonic',
+  'apple',
+  'wheat',
+  'seal',
+  'boots',
+  'cloak',
+  'sword',
+  'axe',
+  'bow',
+  'spear',
+  'crossbow',
+  'knife',
+  'wood',
+  'stone',
+  'ore',
+  'coal',
+  'fiber',
+  'hide',
+  'meat',
+  'cooked_meat',
+  'arrow',
+  'torch',
+  'bed',
+  'armor',
+  'mushroom',
+  'berries',
+  'flower',
+  'sand',
+  'cactus',
+  'shell',
+  'crystal',
+  'pickaxe',
+  'shovel',
+  'shirt',
+  'pants',
+  'gloves',
+  'backpack',
+  'ingot',
+  'plank',
+  'gravel',
+  'station',
+  'cloth',
+  'club',
+  'seed',
+  'corn',
+  'carrot',
+  'potato',
+  'tomato',
+  'egg',
+  'milk',
+  'cheese',
+  'watering_can',
+  'hoe',
+]);
+
+const VALID_EQUIP_SLOTS = new Set<string>([
+  'weapon',
+  'head',
+  'body',
+  'legs',
+  'hands',
+  'boots',
+  'backpack',
+  'accessory',
+]);
+
+const VALID_TOOL_KINDS = new Set<string>(['axe', 'pickaxe', 'shovel']);
+
+const VALID_WEAPON_KINDS = new Set<string>([
+  'sword',
+  'axe',
+  'bow',
+  'spear',
+  'crossbow',
+  'knife',
+]);
+
+const VALID_BUILDING_CATEGORIES = new Set<string>([
+  'structures',
+  'doors_windows',
+  'storage',
+  'crafting',
+  'farming',
+  'furniture',
+]);
+
+const VALID_MATERIAL_TIERS = new Set<string>(['wood', 'stone', 'reinforced']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -27,26 +147,187 @@ function extractEntriesList(data: unknown, containerKeys: string[]): unknown[] {
     const candidate = data[key];
     if (Array.isArray(candidate)) return candidate;
   }
-  // Support single-object JSON definition file
   if (typeof data.id === 'string') return [data];
   return [];
 }
 
-function sanitizeItemDefinition(
+function sanitizeIconKey(raw: unknown, fallback: ItemIconKey): ItemIconKey {
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (VALID_ITEM_ICONS.has(trimmed)) {
+      return trimmed as ItemIconKey;
+    }
+  }
+  return fallback;
+}
+
+function inferWeaponKind(raw: Record<string, unknown>, icon: ItemIconKey): WeaponKind {
+  const explicit =
+    typeof raw.weaponKind === 'string'
+      ? raw.weaponKind.trim().toLowerCase()
+      : isRecord(raw.weaponStats) && typeof raw.weaponStats.kind === 'string'
+        ? raw.weaponStats.kind.trim().toLowerCase()
+        : '';
+  if (VALID_WEAPON_KINDS.has(explicit)) {
+    return explicit as WeaponKind;
+  }
+  if (icon === 'axe') return 'axe';
+  if (icon === 'bow') return 'bow';
+  if (icon === 'spear') return 'spear';
+  if (icon === 'crossbow') return 'crossbow';
+  if (icon === 'knife') return 'knife';
+  return 'sword';
+}
+
+function defaultAnimForKind(kind: WeaponKind): WeaponAttackAnimType {
+  switch (kind) {
+    case 'axe':
+      return 'heavy_chop';
+    case 'bow':
+    case 'crossbow':
+      return 'bow_shot';
+    case 'spear':
+      return 'spear_thrust';
+    case 'knife':
+      return 'knife_slash';
+    default:
+      return 'melee_slash';
+  }
+}
+
+function defaultDamageTypeForKind(kind: WeaponKind): DamageType {
+  switch (kind) {
+    case 'bow':
+    case 'crossbow':
+    case 'spear':
+      return 'pierce';
+    case 'axe':
+      return 'blunt';
+    default:
+      return 'slash';
+  }
+}
+
+function resolveOptionalAssetField(
+  modId: string,
+  raw: Record<string, unknown>,
+  fieldNames: string[],
+  diagnostics: ModDiagnostic[],
+  sourceFile: string,
+): { ok: true; value?: string } | { ok: false } {
+  for (const field of fieldNames) {
+    const rawVal = raw[field];
+    if (typeof rawVal === 'string' && rawVal.trim()) {
+      const normalized = normalizeModAssetPath(modId, rawVal);
+      if (!normalized.ok) {
+        diagnostics.push({
+          code: normalized.code,
+          severity: 'error',
+          message: `Unsafe or invalid asset path "${rawVal}" in "${sourceFile}": ${normalized.message}`,
+        });
+        return { ok: false };
+      }
+      return { ok: true, value: normalized.canonicalRef };
+    }
+  }
+  return { ok: true };
+}
+
+type ItemFlavorMode =
+  | 'items'
+  | 'weapons'
+  | 'armor'
+  | 'tools'
+  | 'consumables'
+  | 'resources';
+
+function sanitizeItemLikeDefinition(
+  modId: string,
   raw: unknown,
-  isWeaponDefault: boolean,
-): ItemDefinition | null {
+  mode: ItemFlavorMode,
+  sourceFile: string,
+  diagnostics: ModDiagnostic[],
+): { item: ItemDefinition; weaponStats?: WeaponStats } | null {
   if (!isRecord(raw)) return null;
-  const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+  const rawId = typeof raw.id === 'string' ? raw.id.trim() : '';
   const name = typeof raw.name === 'string' ? raw.name.trim() : '';
-  if (!id || !name) return null;
+  if (!rawId || !name) return null;
 
-  const category = isWeaponDefault
-    ? 'weapon'
-    : typeof raw.category === 'string'
-      ? (raw.category as ItemDefinition['category'])
-      : 'material';
+  const idRes = resolveModObjectIdentifier(modId, rawId, CORE_PROTECTED_IDS);
+  if (!idRes.ok) {
+    diagnostics.push({
+      code: idRes.code,
+      severity: 'error',
+      message: `${sourceFile}: ${idRes.message}`,
+    });
+    return null;
+  }
 
+  const assetCheck = resolveOptionalAssetField(
+    modId,
+    raw,
+    ['iconTexture', 'texture', 'texturePath'],
+    diagnostics,
+    sourceFile,
+  );
+  if (!assetCheck.ok) return null;
+
+  const id = idRes.fullId;
+
+  let defaultCategory: ItemDefinition['category'] = 'material';
+  let defaultIcon: ItemIconKey = 'stone';
+  let defaultEquipSlot: EquipSlot | undefined;
+  let defaultStackable = true;
+  let defaultMaxStack = 50;
+  let defaultUsable = false;
+
+  if (mode === 'weapons') {
+    defaultCategory = 'weapon';
+    defaultIcon = 'sword';
+    defaultEquipSlot = 'weapon';
+    defaultStackable = false;
+    defaultMaxStack = 1;
+  } else if (mode === 'armor') {
+    defaultCategory = 'equipment';
+    defaultIcon = 'armor';
+    defaultEquipSlot = 'body';
+    defaultStackable = false;
+    defaultMaxStack = 1;
+  } else if (mode === 'tools') {
+    defaultCategory = 'tool';
+    defaultIcon = 'pickaxe';
+    defaultEquipSlot = 'weapon';
+    defaultStackable = false;
+    defaultMaxStack = 1;
+  } else if (mode === 'consumables') {
+    defaultCategory = 'consumable';
+    defaultIcon = 'tonic';
+    defaultUsable = true;
+    defaultStackable = true;
+    defaultMaxStack = 20;
+  } else if (mode === 'resources') {
+    defaultCategory = 'material';
+    defaultIcon = 'ore';
+    defaultStackable = true;
+    defaultMaxStack = 99;
+  }
+
+  const rawCategory =
+    typeof raw.category === 'string' ? raw.category.trim() : '';
+  const validCategories = new Set([
+    'consumable',
+    'quest',
+    'equipment',
+    'weapon',
+    'material',
+    'tool',
+  ]);
+  const category: ItemDefinition['category'] =
+    mode === 'items' && validCategories.has(rawCategory)
+      ? (rawCategory as ItemDefinition['category'])
+      : defaultCategory;
+
+  const icon = sanitizeIconKey(raw.icon, defaultIcon);
   const def: ItemDefinition = {
     id,
     name,
@@ -59,20 +340,14 @@ function sanitizeItemDefinition(
           ? raw.description
           : '',
     category,
-    icon:
-      typeof raw.icon === 'string' && raw.icon.trim()
-        ? (raw.icon.trim() as ItemIconKey)
-        : isWeaponDefault
-          ? 'sword'
-          : 'stone',
-    stackable: typeof raw.stackable === 'boolean' ? raw.stackable : !isWeaponDefault,
+    icon,
+    stackable:
+      typeof raw.stackable === 'boolean' ? raw.stackable : defaultStackable,
     maxStack:
       typeof raw.maxStack === 'number' && raw.maxStack > 0
         ? Math.trunc(raw.maxStack)
-        : isWeaponDefault
-          ? 1
-          : 50,
-    usable: typeof raw.usable === 'boolean' ? raw.usable : false,
+        : defaultMaxStack,
+    usable: typeof raw.usable === 'boolean' ? raw.usable : defaultUsable,
     droppable: typeof raw.droppable === 'boolean' ? raw.droppable : true,
     valueCoins:
       typeof raw.valueCoins === 'number' && Number.isFinite(raw.valueCoins)
@@ -80,54 +355,148 @@ function sanitizeItemDefinition(
         : undefined,
   };
 
-  if (isRecord(raw.weaponStats)) {
-    const dmg = Number(raw.weaponStats.damage);
-    const cd = Number(raw.weaponStats.cooldown);
-    const rng = Number(raw.weaponStats.range);
-    if (Number.isFinite(dmg) && dmg > 0) {
-      def.weaponStats = {
-        damage: dmg,
-        cooldown: Number.isFinite(cd) && cd > 0 ? cd : 0.65,
-        range: Number.isFinite(rng) && rng > 0 ? rng : 2.6,
-        isRanged: Boolean(raw.weaponStats.isRanged),
-        staminaCost:
-          typeof raw.weaponStats.staminaCost === 'number'
-            ? raw.weaponStats.staminaCost
-            : undefined,
-        critChance:
-          typeof raw.weaponStats.critChance === 'number'
-            ? raw.weaponStats.critChance
-            : undefined,
-      };
-      def.equipSlot = 'weapon';
-      def.weaponId = typeof raw.weaponId === 'string' ? raw.weaponId : id;
+  if (typeof raw.equipSlot === 'string' && VALID_EQUIP_SLOTS.has(raw.equipSlot.trim())) {
+    def.equipSlot = raw.equipSlot.trim() as EquipSlot;
+  } else if (defaultEquipSlot) {
+    def.equipSlot = defaultEquipSlot;
+  }
+
+  if (mode === 'tools') {
+    const rawTool = typeof raw.toolKind === 'string' ? raw.toolKind.trim() : 'pickaxe';
+    def.toolKind = VALID_TOOL_KINDS.has(rawTool)
+      ? (rawTool as ToolKind)
+      : 'pickaxe';
+    const tier = Number(raw.toolTier ?? raw.toolPower ?? 2);
+    def.toolTier = Number.isFinite(tier) && tier > 0 ? Math.trunc(tier) : 2;
+    if (typeof raw.maxDurability === 'number' && Number.isFinite(raw.maxDurability) && raw.maxDurability > 0) {
+      def.maxDurability = Math.trunc(raw.maxDurability);
+    }
+  } else if (typeof raw.toolKind === 'string' && VALID_TOOL_KINDS.has(raw.toolKind.trim())) {
+    def.toolKind = raw.toolKind.trim() as ToolKind;
+    const tier = Number(raw.toolTier ?? raw.toolPower);
+    if (Number.isFinite(tier) && tier > 0) {
+      def.toolTier = Math.trunc(tier);
     }
   }
 
-  if (typeof raw.equipSlot === 'string') {
-    def.equipSlot = raw.equipSlot as ItemDefinition['equipSlot'];
-  }
   if (isRecord(raw.equipStats)) {
     def.equipStats = raw.equipStats as ItemDefinition['equipStats'];
+  } else if (mode === 'armor') {
+    const defense = Number(raw.defense ?? raw.armor ?? raw.damageReductionBonus ?? 0);
+    const maxHealthBonus = Number(raw.maxHealthBonus ?? 0);
+    const maxStaminaBonus = Number(raw.maxStaminaBonus ?? 0);
+    const speedBonus = Number(raw.speedBonus ?? 0);
+    const capacityBonus = Number(raw.capacityBonus ?? 0);
+    def.equipStats = {
+      ...(Number.isFinite(defense) && defense > 0
+        ? { damageReductionBonus: defense }
+        : { damageReductionBonus: 0.08 }),
+      ...(Number.isFinite(maxHealthBonus) && maxHealthBonus > 0 ? { maxHealthBonus } : {}),
+      ...(Number.isFinite(maxStaminaBonus) && maxStaminaBonus > 0 ? { maxStaminaBonus } : {}),
+      ...(Number.isFinite(speedBonus) && speedBonus !== 0 ? { speedBonus } : {}),
+      ...(Number.isFinite(capacityBonus) && capacityBonus > 0 ? { capacityBonus } : {}),
+    };
   }
+
   if (isRecord(raw.consumeEffect)) {
     def.consumeEffect = raw.consumeEffect as ItemDefinition['consumeEffect'];
+  } else if (mode === 'consumables') {
+    const health = Number(raw.health ?? raw.healHealth ?? 0);
+    const stamina = Number(raw.stamina ?? raw.restoreStamina ?? 0);
+    if (health > 0 || stamina > 0) {
+      def.consumeEffect = {
+        ...(health > 0 ? { health } : {}),
+        ...(stamina > 0 ? { stamina } : {}),
+      };
+    }
   }
 
-  return def;
+  let builtWeaponStats: WeaponStats | undefined;
+  const rawWStats = isRecord(raw.weaponStats) ? raw.weaponStats : undefined;
+  const dmg = Number(rawWStats?.damage ?? raw.damage ?? (mode === 'weapons' ? 25 : 0));
+  if (mode === 'weapons' || (rawWStats && Number.isFinite(dmg) && dmg > 0)) {
+    const cd = Number(rawWStats?.cooldown ?? raw.cooldown ?? 0.45);
+    const rng = Number(rawWStats?.range ?? raw.range ?? 2.8);
+    const staminaCost = Number(rawWStats?.staminaCost ?? raw.staminaCost ?? 5);
+    const critChance = Number(rawWStats?.critChance ?? raw.critChance ?? 0.16);
+    const critMultiplier = Number(rawWStats?.critMultiplier ?? 1.5);
+    const isRanged = Boolean(rawWStats?.isRanged ?? raw.isRanged ?? false);
+    const kind = inferWeaponKind(raw, icon);
+
+    def.weaponStats = {
+      damage: Number.isFinite(dmg) && dmg > 0 ? dmg : 25,
+      cooldown: Number.isFinite(cd) && cd > 0 ? cd : 0.45,
+      range: Number.isFinite(rng) && rng > 0 ? rng : 2.8,
+      isRanged,
+      staminaCost: Number.isFinite(staminaCost) && staminaCost >= 0 ? staminaCost : 5,
+      critChance:
+        Number.isFinite(critChance) && critChance >= 0 && critChance <= 1
+          ? critChance
+          : 0.16,
+    };
+    def.equipSlot = 'weapon';
+    const rawWeaponId =
+      typeof raw.weaponId === 'string' && raw.weaponId.trim()
+        ? resolveModCrossReference(modId, raw.weaponId)
+        : id;
+    def.weaponId = rawWeaponId;
+
+    builtWeaponStats = {
+      id: rawWeaponId,
+      itemId: id,
+      name: def.name,
+      nameAr: def.nameAr,
+      kind,
+      damage: def.weaponStats.damage,
+      critChance: def.weaponStats.critChance ?? 0.16,
+      critMultiplier: Number.isFinite(critMultiplier) && critMultiplier >= 1 ? critMultiplier : 1.5,
+      cooldown: def.weaponStats.cooldown,
+      hitDelay: 0.09,
+      swingDuration: 0.28,
+      range: def.weaponStats.range,
+      arcAngleRad: kind === 'spear' ? Math.PI * 0.42 : Math.PI * 0.76,
+      knockback: isRanged ? 3.5 : 5.0,
+      staminaCost: def.weaponStats.staminaCost,
+      attackAnim: defaultAnimForKind(kind),
+      damageType: defaultDamageTypeForKind(kind),
+      isRanged,
+      projectileSpeed: isRanged ? 34 : undefined,
+      chargeDuration: isRanged ? 0.55 : undefined,
+    };
+  }
+
+  return { item: def, weaponStats: builtWeaponStats };
 }
 
-function sanitizeRecipe(raw: unknown): CraftingRecipe | null {
+function sanitizeRecipe(
+  modId: string,
+  raw: unknown,
+  sourceFile: string,
+  diagnostics: ModDiagnostic[],
+): CraftingRecipe | null {
   if (!isRecord(raw)) return null;
-  const id = typeof raw.id === 'string' ? raw.id.trim() : '';
-  const resultItemId =
+  const rawId = typeof raw.id === 'string' ? raw.id.trim() : '';
+  const rawResultItemId =
     typeof raw.resultItemId === 'string' ? raw.resultItemId.trim() : '';
-  if (!id || !resultItemId || !Array.isArray(raw.ingredients)) return null;
+  if (!rawId || !rawResultItemId || !Array.isArray(raw.ingredients)) return null;
+
+  const idRes = resolveModObjectIdentifier(modId, rawId, CORE_PROTECTED_IDS);
+  if (!idRes.ok) {
+    diagnostics.push({
+      code: idRes.code,
+      severity: 'error',
+      message: `${sourceFile}: ${idRes.message}`,
+    });
+    return null;
+  }
 
   const ingredients = raw.ingredients
     .filter(isRecord)
     .map((ing) => ({
-      itemId: typeof ing.itemId === 'string' ? ing.itemId.trim() : '',
+      itemId:
+        typeof ing.itemId === 'string' && ing.itemId.trim()
+          ? resolveModCrossReference(modId, ing.itemId)
+          : '',
       count: typeof ing.count === 'number' && ing.count > 0 ? Math.trunc(ing.count) : 1,
     }))
     .filter((ing) => ing.itemId.length > 0);
@@ -135,8 +504,8 @@ function sanitizeRecipe(raw: unknown): CraftingRecipe | null {
   if (ingredients.length === 0) return null;
 
   return {
-    id,
-    resultItemId,
+    id: idRes.fullId,
+    resultItemId: resolveModCrossReference(modId, rawResultItemId),
     resultCount:
       typeof raw.resultCount === 'number' && raw.resultCount > 0
         ? Math.trunc(raw.resultCount)
@@ -152,6 +521,12 @@ function sanitizeRecipe(raw: unknown): CraftingRecipe | null {
         : 'hand',
     requiredLevel:
       typeof raw.requiredLevel === 'number' ? Math.trunc(raw.requiredLevel) : undefined,
+    prerequisiteRecipeId:
+      typeof raw.prerequisiteRecipeId === 'string' && raw.prerequisiteRecipeId.trim()
+        ? resolveModCrossReference(modId, raw.prerequisiteRecipeId)
+        : typeof raw.unlockedByRecipeId === 'string' && raw.unlockedByRecipeId.trim()
+          ? resolveModCrossReference(modId, raw.unlockedByRecipeId)
+          : undefined,
     craftingTimeSec:
       typeof raw.craftingTimeSec === 'number' && raw.craftingTimeSec > 0
         ? raw.craftingTimeSec
@@ -159,31 +534,527 @@ function sanitizeRecipe(raw: unknown): CraftingRecipe | null {
   };
 }
 
-function sanitizeQuest(raw: unknown): QuestDefinition | null {
+function sanitizeQuest(
+  modId: string,
+  raw: unknown,
+  sourceFile: string,
+  diagnostics: ModDiagnostic[],
+): QuestDefinition | null {
   if (!isRecord(raw)) return null;
-  const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+  const rawId = typeof raw.id === 'string' ? raw.id.trim() : '';
   const title = typeof raw.title === 'string' ? raw.title.trim() : '';
   const giverNpcId =
     typeof raw.giverNpcId === 'string' ? raw.giverNpcId.trim() : '';
-  if (!id || !title || !giverNpcId || !Array.isArray(raw.objectives)) return null;
+  if (!rawId || !title || !giverNpcId || !Array.isArray(raw.objectives)) return null;
+
+  const idRes = resolveModObjectIdentifier(modId, rawId, CORE_PROTECTED_IDS);
+  if (!idRes.ok) {
+    diagnostics.push({
+      code: idRes.code,
+      severity: 'error',
+      message: `${sourceFile}: ${idRes.message}`,
+    });
+    return null;
+  }
+
+  const normalizedObjectives = raw.objectives
+    .filter(isRecord)
+    .map((obj) => {
+      const copy: Record<string, unknown> = { ...obj };
+      if (typeof copy.itemId === 'string' && copy.itemId.trim()) {
+        copy.itemId = resolveModCrossReference(modId, copy.itemId);
+      }
+      if (typeof copy.npcId === 'string' && copy.npcId.trim()) {
+        copy.npcId = resolveModCrossReference(modId, copy.npcId);
+      }
+      if (typeof copy.targetNpcId === 'string' && copy.targetNpcId.trim()) {
+        copy.targetNpcId = resolveModCrossReference(modId, copy.targetNpcId);
+      }
+      if (typeof copy.enemyType === 'string' && copy.enemyType.trim()) {
+        copy.enemyType = resolveModCrossReference(modId, copy.enemyType);
+      }
+      return copy;
+    }) as unknown as QuestDefinition['objectives'];
+
+  const rawReward = isRecord(raw.reward) ? { ...raw.reward } : {};
+  if (Array.isArray(rawReward.items)) {
+    rawReward.items = rawReward.items.map((item) => {
+      if (!isRecord(item)) return item;
+      return {
+        ...item,
+        id:
+          typeof item.id === 'string' && item.id.trim()
+            ? resolveModCrossReference(modId, item.id)
+            : item.id,
+      };
+    });
+  }
 
   return {
-    id,
+    id: idRes.fullId,
     title,
     titleAr: typeof raw.titleAr === 'string' ? raw.titleAr : title,
     scope: raw.scope === 'cooperative' ? 'cooperative' : 'personal',
-    giverNpcId,
-    turnInNpcId: typeof raw.turnInNpcId === 'string' ? raw.turnInNpcId : giverNpcId,
+    giverNpcId: resolveModCrossReference(modId, giverNpcId),
+    turnInNpcId:
+      typeof raw.turnInNpcId === 'string' && raw.turnInNpcId.trim()
+        ? resolveModCrossReference(modId, raw.turnInNpcId)
+        : resolveModCrossReference(modId, giverNpcId),
     description: typeof raw.description === 'string' ? raw.description : '',
     descriptionAr:
       typeof raw.descriptionAr === 'string' ? raw.descriptionAr : undefined,
     sequential: typeof raw.sequential === 'boolean' ? raw.sequential : true,
-    objectives: raw.objectives as QuestDefinition['objectives'],
-    reward: isRecord(raw.reward) ? (raw.reward as QuestDefinition['reward']) : {},
+    objectives: normalizedObjectives,
+    reward: rawReward as QuestDefinition['reward'],
     rewardSummary:
       typeof raw.rewardSummary === 'string' ? raw.rewardSummary : 'Reward',
     rewardSummaryAr:
       typeof raw.rewardSummaryAr === 'string' ? raw.rewardSummaryAr : undefined,
+  };
+}
+
+function sanitizeBlueprint(
+  modId: string,
+  raw: unknown,
+  isDecoration: boolean,
+  sourceFile: string,
+  diagnostics: ModDiagnostic[],
+): BuildingBlueprint | null {
+  if (!isRecord(raw)) return null;
+  const rawId = typeof raw.id === 'string' ? raw.id.trim() : '';
+  const nameEn =
+    typeof raw.nameEn === 'string' && raw.nameEn.trim()
+      ? raw.nameEn.trim()
+      : typeof raw.name === 'string' && raw.name.trim()
+        ? raw.name.trim()
+        : '';
+  if (!rawId || !nameEn) return null;
+
+  const idRes = resolveModObjectIdentifier(modId, rawId, CORE_PROTECTED_IDS);
+  if (!idRes.ok) {
+    diagnostics.push({
+      code: idRes.code,
+      severity: 'error',
+      message: `${sourceFile}: ${idRes.message}`,
+    });
+    return null;
+  }
+
+  const assetCheck = resolveOptionalAssetField(
+    modId,
+    raw,
+    ['texture', 'texturePath', 'model', 'modelPath'],
+    diagnostics,
+    sourceFile,
+  );
+  if (!assetCheck.ok) return null;
+
+  const rawCat = typeof raw.category === 'string' ? raw.category.trim() : '';
+  const category: BuildingCategory = VALID_BUILDING_CATEGORIES.has(rawCat)
+    ? (rawCat as BuildingCategory)
+    : isDecoration
+      ? 'furniture'
+      : 'structures';
+
+  const rawTier = typeof raw.tier === 'string' ? raw.tier.trim() : '';
+  const tier: StructureMaterialTier = VALID_MATERIAL_TIERS.has(rawTier)
+    ? (rawTier as StructureMaterialTier)
+    : 'wood';
+
+  const costs = Array.isArray(raw.costs)
+    ? raw.costs
+        .filter(isRecord)
+        .map((c) => ({
+          itemId:
+            typeof c.itemId === 'string' && c.itemId.trim()
+              ? resolveModCrossReference(modId, c.itemId)
+              : 'wood',
+          count:
+            typeof c.count === 'number' && c.count > 0 ? Math.trunc(c.count) : 1,
+        }))
+    : [{ itemId: 'wood', count: 4 }];
+
+  const repairCosts = Array.isArray(raw.repairCosts)
+    ? raw.repairCosts
+        .filter(isRecord)
+        .map((c) => ({
+          itemId:
+            typeof c.itemId === 'string' && c.itemId.trim()
+              ? resolveModCrossReference(modId, c.itemId)
+              : 'wood',
+          count:
+            typeof c.count === 'number' && c.count > 0 ? Math.trunc(c.count) : 1,
+        }))
+    : [{ itemId: 'wood', count: 2 }];
+
+  return {
+    id: idRes.fullId,
+    category,
+    tier,
+    nameEn,
+    nameAr:
+      typeof raw.nameAr === 'string' && raw.nameAr.trim() ? raw.nameAr.trim() : nameEn,
+    descEn:
+      typeof raw.descEn === 'string'
+        ? raw.descEn
+        : typeof raw.description === 'string'
+          ? raw.description
+          : nameEn,
+    descAr:
+      typeof raw.descAr === 'string' && raw.descAr.trim()
+        ? raw.descAr
+        : typeof raw.descriptionAr === 'string' && raw.descriptionAr.trim()
+          ? raw.descriptionAr
+          : nameEn,
+    width: typeof raw.width === 'number' && raw.width > 0 ? raw.width : isDecoration ? 1.0 : 3.2,
+    depth: typeof raw.depth === 'number' && raw.depth > 0 ? raw.depth : isDecoration ? 1.0 : 3.2,
+    height:
+      typeof raw.height === 'number' && raw.height > 0 ? raw.height : isDecoration ? 1.2 : 2.8,
+    waterBuffer:
+      typeof raw.waterBuffer === 'number' && raw.waterBuffer >= 0 ? raw.waterBuffer : 2.0,
+    maxSlope:
+      typeof raw.maxSlope === 'number' && raw.maxSlope > 0 ? raw.maxSlope : 0.45,
+    maxRelief:
+      typeof raw.maxRelief === 'number' && raw.maxRelief > 0 ? raw.maxRelief : 1.5,
+    allowOnFloor:
+      typeof raw.allowOnFloor === 'boolean' ? raw.allowOnFloor : isDecoration,
+    isDecorative:
+      typeof raw.isDecorative === 'boolean' ? raw.isDecorative : isDecoration,
+    costs,
+    maxHealth:
+      typeof raw.maxHealth === 'number' && raw.maxHealth > 0
+        ? Math.round(raw.maxHealth)
+        : isDecoration
+          ? 120
+          : 250,
+    repairCosts,
+  };
+}
+
+function sanitizeLootTable(
+  modId: string,
+  raw: unknown,
+  sourceFile: string,
+  diagnostics: ModDiagnostic[],
+): ModLootTableDescriptor | null {
+  if (!isRecord(raw)) return null;
+  const rawId = typeof raw.id === 'string' ? raw.id.trim() : '';
+  if (!rawId) return null;
+
+  const idRes = resolveModObjectIdentifier(modId, rawId, CORE_PROTECTED_IDS);
+  if (!idRes.ok) {
+    diagnostics.push({
+      code: idRes.code,
+      severity: 'error',
+      message: `${sourceFile}: ${idRes.message}`,
+    });
+    return null;
+  }
+
+  const rawEntries = Array.isArray(raw.entries)
+    ? raw.entries
+    : Array.isArray(raw.drops)
+      ? raw.drops
+      : [];
+
+  const entries: ModLootDropEntry[] = rawEntries
+    .filter(isRecord)
+    .map((entry) => {
+      const rawItem =
+        typeof entry.itemId === 'string' && entry.itemId.trim()
+          ? entry.itemId.trim()
+          : '';
+      const minCount =
+        typeof entry.minCount === 'number' && entry.minCount >= 1
+          ? Math.trunc(entry.minCount)
+          : typeof entry.count === 'number' && entry.count >= 1
+            ? Math.trunc(entry.count)
+            : 1;
+      const maxCount =
+        typeof entry.maxCount === 'number' && entry.maxCount >= minCount
+          ? Math.trunc(entry.maxCount)
+          : minCount;
+      const chance =
+        typeof entry.chance === 'number' && Number.isFinite(entry.chance)
+          ? Math.max(0, Math.min(1, entry.chance))
+          : 1;
+      const weight =
+        typeof entry.weight === 'number' && entry.weight > 0 ? entry.weight : undefined;
+      return {
+        itemId: rawItem ? resolveModCrossReference(modId, rawItem) : '',
+        minCount,
+        maxCount,
+        chance,
+        weight,
+      };
+    })
+    .filter((e) => e.itemId.length > 0);
+
+  if (entries.length === 0) return null;
+
+  return {
+    id: idRes.fullId,
+    modId,
+    sourceFile,
+    rolls: typeof raw.rolls === 'number' && raw.rolls >= 1 ? Math.trunc(raw.rolls) : 1,
+    entries,
+  };
+}
+
+function sanitizeSoundDescriptor(
+  modId: string,
+  raw: unknown,
+  sourceFile: string,
+  diagnostics: ModDiagnostic[],
+): ModSoundDescriptor | null {
+  if (!isRecord(raw)) return null;
+  const rawId = typeof raw.id === 'string' ? raw.id.trim() : '';
+  if (!rawId) return null;
+
+  const idRes = resolveModObjectIdentifier(modId, rawId, CORE_PROTECTED_IDS);
+  if (!idRes.ok) {
+    diagnostics.push({
+      code: idRes.code,
+      severity: 'error',
+      message: `${sourceFile}: ${idRes.message}`,
+    });
+    return null;
+  }
+
+  const audioCheck = resolveOptionalAssetField(
+    modId,
+    raw,
+    ['audioPath', 'sound', 'path', 'file', 'src'],
+    diagnostics,
+    sourceFile,
+  );
+  if (!audioCheck.ok || !audioCheck.value) {
+    if (audioCheck.ok) {
+      diagnostics.push({
+        code: 'MISSING_AUDIO_PATH',
+        severity: 'warning',
+        message: `Sound "${idRes.fullId}" in "${sourceFile}" is missing an audio path.`,
+      });
+    }
+    return null;
+  }
+
+  const busRaw = typeof raw.bus === 'string' ? raw.bus.trim() : 'effects';
+  const bus: ModSoundDescriptor['bus'] =
+    busRaw === 'ambient' || busRaw === 'ui' || busRaw === 'voice'
+      ? busRaw
+      : 'effects';
+
+  return {
+    id: idRes.fullId,
+    modId,
+    sourceFile,
+    audioPath: audioCheck.value,
+    bus,
+    volume:
+      typeof raw.volume === 'number' && Number.isFinite(raw.volume)
+        ? Math.max(0, Math.min(1, raw.volume))
+        : 0.75,
+    pitchVariance:
+      typeof raw.pitchVariance === 'number' && Number.isFinite(raw.pitchVariance)
+        ? Math.max(0, Math.min(0.5, raw.pitchVariance))
+        : 0.05,
+    minIntervalMs:
+      typeof raw.minIntervalMs === 'number' && raw.minIntervalMs >= 0
+        ? Math.trunc(raw.minIntervalMs)
+        : 45,
+    maxDistance:
+      typeof raw.maxDistance === 'number' && raw.maxDistance > 0
+        ? raw.maxDistance
+        : 42,
+    looping: Boolean(raw.looping ?? raw.loop),
+  };
+}
+
+function sanitizeMusicDescriptor(
+  modId: string,
+  raw: unknown,
+  sourceFile: string,
+  diagnostics: ModDiagnostic[],
+): ModMusicDescriptor | null {
+  if (!isRecord(raw)) return null;
+  const rawId = typeof raw.id === 'string' ? raw.id.trim() : '';
+  if (!rawId) return null;
+
+  const idRes = resolveModObjectIdentifier(modId, rawId, CORE_PROTECTED_IDS);
+  if (!idRes.ok) {
+    diagnostics.push({
+      code: idRes.code,
+      severity: 'error',
+      message: `${sourceFile}: ${idRes.message}`,
+    });
+    return null;
+  }
+
+  const audioCheck = resolveOptionalAssetField(
+    modId,
+    raw,
+    ['audioPath', 'track', 'path', 'file', 'src'],
+    diagnostics,
+    sourceFile,
+  );
+  if (!audioCheck.ok || !audioCheck.value) {
+    return null;
+  }
+
+  const title =
+    typeof raw.title === 'string' && raw.title.trim()
+      ? raw.title.trim()
+      : idRes.objectId;
+  const ctxRaw = typeof raw.context === 'string' ? raw.context.trim() : 'explore';
+  const context: ModMusicDescriptor['context'] =
+    ctxRaw === 'menu' ||
+    ctxRaw === 'combat' ||
+    ctxRaw === 'village' ||
+    ctxRaw === 'night' ||
+    ctxRaw === 'boss'
+      ? ctxRaw
+      : 'explore';
+
+  return {
+    id: idRes.fullId,
+    modId,
+    sourceFile,
+    audioPath: audioCheck.value,
+    title,
+    titleAr:
+      typeof raw.titleAr === 'string' && raw.titleAr.trim() ? raw.titleAr.trim() : title,
+    context,
+    biome: typeof raw.biome === 'string' && raw.biome.trim() ? raw.biome.trim() : undefined,
+    volume:
+      typeof raw.volume === 'number' && Number.isFinite(raw.volume)
+        ? Math.max(0, Math.min(1, raw.volume))
+        : 0.6,
+    loop: typeof raw.loop === 'boolean' ? raw.loop : true,
+    fadeSeconds:
+      typeof raw.fadeSeconds === 'number' && raw.fadeSeconds >= 0 ? raw.fadeSeconds : 1.5,
+  };
+}
+
+function sanitizeTextureDescriptor(
+  modId: string,
+  raw: unknown,
+  sourceFile: string,
+  diagnostics: ModDiagnostic[],
+): ModTextureDescriptor | null {
+  if (!isRecord(raw)) return null;
+  const rawId = typeof raw.id === 'string' ? raw.id.trim() : '';
+  if (!rawId) return null;
+
+  const idRes = resolveModObjectIdentifier(modId, rawId, CORE_PROTECTED_IDS);
+  if (!idRes.ok) {
+    diagnostics.push({
+      code: idRes.code,
+      severity: 'error',
+      message: `${sourceFile}: ${idRes.message}`,
+    });
+    return null;
+  }
+
+  const texCheck = resolveOptionalAssetField(
+    modId,
+    raw,
+    ['texturePath', 'texture', 'path', 'file', 'src'],
+    diagnostics,
+    sourceFile,
+  );
+  if (!texCheck.ok || !texCheck.value) {
+    return null;
+  }
+
+  return {
+    id: idRes.fullId,
+    modId,
+    sourceFile,
+    texturePath: texCheck.value,
+    targetCategory:
+      typeof raw.targetCategory === 'string' && raw.targetCategory.trim()
+        ? raw.targetCategory.trim()
+        : 'items',
+    targetId:
+      typeof raw.targetId === 'string' && raw.targetId.trim()
+        ? resolveModCrossReference(modId, raw.targetId)
+        : undefined,
+    repeatX:
+      typeof raw.repeatX === 'number' && raw.repeatX > 0 ? raw.repeatX : 1,
+    repeatY:
+      typeof raw.repeatY === 'number' && raw.repeatY > 0 ? raw.repeatY : 1,
+  };
+}
+
+function sanitizeEntityDescriptor(
+  modId: string,
+  category: ModContentType,
+  raw: unknown,
+  sourceFile: string,
+  diagnostics: ModDiagnostic[],
+): ModGenericEntityDescriptor | null {
+  if (!isRecord(raw)) return null;
+  const rawId = typeof raw.id === 'string' ? raw.id.trim() : '';
+  if (!rawId) return null;
+
+  const idRes = resolveModObjectIdentifier(modId, rawId, CORE_PROTECTED_IDS);
+  if (!idRes.ok) {
+    diagnostics.push({
+      code: idRes.code,
+      severity: 'error',
+      message: `${sourceFile}: ${idRes.message}`,
+    });
+    return null;
+  }
+
+  const texCheck = resolveOptionalAssetField(
+    modId,
+    raw,
+    ['texturePath', 'texture', 'sprite'],
+    diagnostics,
+    sourceFile,
+  );
+  if (!texCheck.ok) return null;
+
+  const modelCheck = resolveOptionalAssetField(
+    modId,
+    raw,
+    ['modelPath', 'model'],
+    diagnostics,
+    sourceFile,
+  );
+  if (!modelCheck.ok) return null;
+
+  const name =
+    typeof raw.name === 'string' && raw.name.trim()
+      ? raw.name.trim()
+      : idRes.objectId;
+
+  const sanitizedRaw: Record<string, unknown> = {
+    ...raw,
+    id: idRes.fullId,
+    ...(texCheck.value ? { texturePath: texCheck.value } : {}),
+    ...(modelCheck.value ? { modelPath: modelCheck.value } : {}),
+  };
+
+  if (typeof raw.lootTableId === 'string' && raw.lootTableId.trim()) {
+    sanitizedRaw.lootTableId = resolveModCrossReference(modId, raw.lootTableId);
+  }
+
+  return {
+    id: idRes.fullId,
+    modId,
+    category,
+    sourceFile,
+    name,
+    nameAr:
+      typeof raw.nameAr === 'string' && raw.nameAr.trim() ? raw.nameAr.trim() : name,
+    texturePath: texCheck.value,
+    modelPath: modelCheck.value,
+    lootTableId:
+      typeof sanitizedRaw.lootTableId === 'string' ? sanitizedRaw.lootTableId : undefined,
+    raw: sanitizedRaw,
   };
 }
 
@@ -193,10 +1064,60 @@ export interface ModDescriptorEntry {
   payload: Record<string, unknown>;
 }
 
+export interface ModLocalizationEntry {
+  id: string;
+  lang: string;
+  key: string;
+  value: string;
+}
+
+export interface ModContentRegistryMap {
+  items: NamespacedContentRegistry<ItemDefinition>;
+  weapons: NamespacedContentRegistry<ItemDefinition>;
+  armor: NamespacedContentRegistry<ItemDefinition>;
+  tools: NamespacedContentRegistry<ItemDefinition>;
+  consumables: NamespacedContentRegistry<ItemDefinition>;
+  resources: NamespacedContentRegistry<ItemDefinition>;
+  recipes: NamespacedContentRegistry<CraftingRecipe>;
+  characters: NamespacedContentRegistry<ModGenericEntityDescriptor>;
+  animals: NamespacedContentRegistry<ModGenericEntityDescriptor>;
+  monsters: NamespacedContentRegistry<ModGenericEntityDescriptor>;
+  npcs: NamespacedContentRegistry<ModGenericEntityDescriptor>;
+  buildings: NamespacedContentRegistry<BuildingBlueprint>;
+  decorations: NamespacedContentRegistry<BuildingBlueprint>;
+  quests: NamespacedContentRegistry<QuestDefinition>;
+  loot_tables: NamespacedContentRegistry<ModLootTableDescriptor>;
+  sounds: NamespacedContentRegistry<ModSoundDescriptor>;
+  music: NamespacedContentRegistry<ModMusicDescriptor>;
+  textures: NamespacedContentRegistry<ModTextureDescriptor>;
+  localization: NamespacedContentRegistry<ModLocalizationEntry>;
+}
+
 export class DefaultModContentStore {
-  private readonly itemsByMod = new Map<string, ItemDefinition[]>();
-  private readonly weaponsByMod = new Map<string, ItemDefinition[]>();
-  private readonly recipesByMod = new Map<string, CraftingRecipe[]>();
+  public readonly registries: ModContentRegistryMap = {
+    items: new NamespacedContentRegistry<ItemDefinition>('items'),
+    weapons: new NamespacedContentRegistry<ItemDefinition>('weapons'),
+    armor: new NamespacedContentRegistry<ItemDefinition>('armor'),
+    tools: new NamespacedContentRegistry<ItemDefinition>('tools'),
+    consumables: new NamespacedContentRegistry<ItemDefinition>('consumables'),
+    resources: new NamespacedContentRegistry<ItemDefinition>('resources'),
+    recipes: new NamespacedContentRegistry<CraftingRecipe>('recipes'),
+    characters: new NamespacedContentRegistry<ModGenericEntityDescriptor>('characters'),
+    animals: new NamespacedContentRegistry<ModGenericEntityDescriptor>('animals'),
+    monsters: new NamespacedContentRegistry<ModGenericEntityDescriptor>('monsters'),
+    npcs: new NamespacedContentRegistry<ModGenericEntityDescriptor>('npcs'),
+    buildings: new NamespacedContentRegistry<BuildingBlueprint>('buildings'),
+    decorations: new NamespacedContentRegistry<BuildingBlueprint>('decorations'),
+    quests: new NamespacedContentRegistry<QuestDefinition>('quests'),
+    loot_tables: new NamespacedContentRegistry<ModLootTableDescriptor>('loot_tables'),
+    sounds: new NamespacedContentRegistry<ModSoundDescriptor>('sounds'),
+    music: new NamespacedContentRegistry<ModMusicDescriptor>('music'),
+    textures: new NamespacedContentRegistry<ModTextureDescriptor>('textures'),
+    localization: new NamespacedContentRegistry<ModLocalizationEntry>('localization'),
+  };
+
+  public readonly weaponStatsRegistry = new NamespacedContentRegistry<WeaponStats>('weapons');
+
   private readonly descriptorsByCategory = new Map<
     string,
     Map<string, ModDescriptorEntry[]>
@@ -206,21 +1127,90 @@ export class DefaultModContentStore {
     Map<string, Record<string, string>>
   >();
 
+  public getRegistry<K extends ModContentType>(type: K): ModContentRegistryMap[K] {
+    return this.registries[type];
+  }
+
   public getAllModItems(): ItemDefinition[] {
-    const out: ItemDefinition[] = [];
-    for (const list of this.itemsByMod.values()) out.push(...list);
-    for (const list of this.weaponsByMod.values()) out.push(...list);
-    return out;
+    return [
+      ...this.registries.items.getAll(),
+      ...this.registries.weapons.getAll(),
+      ...this.registries.armor.getAll(),
+      ...this.registries.tools.getAll(),
+      ...this.registries.consumables.getAll(),
+      ...this.registries.resources.getAll(),
+    ];
   }
 
   public getAllModRecipes(): CraftingRecipe[] {
-    const out: CraftingRecipe[] = [];
-    for (const list of this.recipesByMod.values()) out.push(...list);
-    return out;
+    return this.registries.recipes.getAll();
+  }
+
+  public getAllModBlueprints(): BuildingBlueprint[] {
+    return [
+      ...this.registries.buildings.getAll(),
+      ...this.registries.decorations.getAll(),
+    ];
+  }
+
+  public getModWeaponStats(weaponId: string): WeaponStats | undefined {
+    return this.weaponStatsRegistry.get(weaponId);
+  }
+
+  public getAllModWeaponStats(): WeaponStats[] {
+    return this.weaponStatsRegistry.getAll();
+  }
+
+  public getModSound(soundId: string): ModSoundDescriptor | undefined {
+    return this.registries.sounds.get(soundId);
+  }
+
+  public getAllModSounds(): ModSoundDescriptor[] {
+    return this.registries.sounds.getAll();
+  }
+
+  public getAllModMusic(): ModMusicDescriptor[] {
+    return this.registries.music.getAll();
+  }
+
+  public getModTexture(textureId: string): ModTextureDescriptor | undefined {
+    return this.registries.textures.get(textureId);
+  }
+
+  public getLootTable(tableId: string): ModLootTableDescriptor | undefined {
+    return this.registries.loot_tables.get(tableId);
   }
 
   public getDescriptors(category: string): ModDescriptorEntry[] {
-    const map = this.descriptorsByCategory.get(category);
+    const normalized = category.toLowerCase();
+    if (
+      normalized === 'characters' ||
+      normalized === 'animals' ||
+      normalized === 'monsters' ||
+      normalized === 'npcs'
+    ) {
+      return this.registries[normalized].getAllEntries().map((entry) => ({
+        modId: entry.modId,
+        id: entry.id,
+        payload: entry.data.raw,
+      }));
+    }
+    if (normalized === 'buildings' || normalized === 'decorations') {
+      return this.registries[normalized].getAllEntries().map((entry) => ({
+        modId: entry.modId,
+        id: entry.id,
+        payload: entry.data as unknown as Record<string, unknown>,
+      }));
+    }
+    if (normalized === 'sounds' || normalized === 'music' || normalized === 'textures' || normalized === 'loot_tables') {
+      return this.registries[normalized].getAllEntries().map((entry) => ({
+        modId: entry.modId,
+        id: entry.id,
+        payload: entry.data as unknown as Record<string, unknown>,
+      }));
+    }
+
+    const map = this.descriptorsByCategory.get(normalized);
     if (!map) return [];
     const out: ModDescriptorEntry[] = [];
     for (const list of map.values()) out.push(...list);
@@ -238,61 +1228,146 @@ export class DefaultModContentStore {
     return resolved;
   }
 
+  private hasItemInOtherItemRegistries(
+    id: string,
+    excludeMode: ItemFlavorMode,
+  ): boolean {
+    const itemRegistries: Array<[ItemFlavorMode, NamespacedContentRegistry<ItemDefinition>]> = [
+      ['items', this.registries.items],
+      ['weapons', this.registries.weapons],
+      ['armor', this.registries.armor],
+      ['tools', this.registries.tools],
+      ['consumables', this.registries.consumables],
+      ['resources', this.registries.resources],
+    ];
+    for (const [mode, reg] of itemRegistries) {
+      if (mode !== excludeMode && reg.has(id)) return true;
+    }
+    return false;
+  }
+
   public createHandlers(): ModContentHandler[] {
     return [
-      this.createItemsHandler('items', false, this.itemsByMod),
-      this.createItemsHandler('weapons', true, this.weaponsByMod),
+      this.createItemLikeHandler('items', ['items'], this.registries.items),
+      this.createItemLikeHandler('weapons', ['weapons', 'items'], this.registries.weapons),
+      this.createItemLikeHandler('armor', ['armor', 'items'], this.registries.armor),
+      this.createItemLikeHandler('tools', ['tools', 'items'], this.registries.tools),
+      this.createItemLikeHandler(
+        'consumables',
+        ['consumables', 'food', 'potions', 'items'],
+        this.registries.consumables,
+      ),
+      this.createItemLikeHandler(
+        'resources',
+        ['resources', 'materials', 'items'],
+        this.registries.resources,
+      ),
       this.createRecipesHandler(),
       this.createQuestsHandler(),
+      this.createBlueprintsHandler('buildings', false, ['buildings', 'structures'], this.registries.buildings),
+      this.createBlueprintsHandler('decorations', true, ['decorations', 'furniture', 'buildings'], this.registries.decorations),
+      this.createLootTablesHandler('loot_tables'),
+      this.createLootTablesHandler('loottables'),
+      this.createSoundsHandler(),
+      this.createMusicHandler(),
+      this.createTexturesHandler(),
       this.createLocalizationHandler(),
-      this.createDescriptorHandler('characters', ['characters']),
-      this.createDescriptorHandler('creatures', ['creatures', 'wildlife']),
-      this.createDescriptorHandler('npcs', ['npcs']),
-      this.createDescriptorHandler('buildings', ['buildings', 'structures']),
+      this.createEntityHandler('characters', ['characters'], this.registries.characters),
+      this.createEntityHandler('animals', ['animals', 'creatures', 'wildlife'], this.registries.animals),
+      this.createEntityHandler('creatures', ['creatures', 'animals', 'wildlife'], this.registries.animals),
+      this.createEntityHandler('monsters', ['monsters', 'enemies'], this.registries.monsters),
+      this.createEntityHandler('npcs', ['npcs'], this.registries.npcs),
       this.createDescriptorHandler('assets', ['assets']),
       this.createDescriptorHandler('models', ['models']),
-      this.createDescriptorHandler('textures', ['textures']),
-      this.createDescriptorHandler('sounds', ['sounds']),
-      this.createDescriptorHandler('music', ['music']),
     ];
   }
 
-  private createItemsHandler(
-    contentType: string,
-    isWeaponDefault: boolean,
-    targetMap: Map<string, ItemDefinition[]>,
+  private createItemLikeHandler(
+    mode: ItemFlavorMode,
+    containerKeys: string[],
+    targetRegistry: NamespacedContentRegistry<ItemDefinition>,
   ): ModContentHandler {
     return {
-      contentType,
+      contentType: mode,
       validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
         const diagnostics: ModDiagnostic[] = [];
-        const loaded: ItemDefinition[] = [];
-        const containerKeys = isWeaponDefault ? ['weapons', 'items'] : ['items'];
+        targetRegistry.unloadMod(ctx.modId);
+        if (mode === 'weapons') {
+          this.weaponStatsRegistry.unloadMod(ctx.modId);
+        }
 
+        let loadedCount = 0;
         for (const file of ctx.files) {
           const entries = extractEntriesList(file.data, containerKeys);
           for (const rawEntry of entries) {
-            const def = sanitizeItemDefinition(rawEntry, isWeaponDefault);
-            if (!def) {
+            const parsed = sanitizeItemLikeDefinition(
+              ctx.modId,
+              rawEntry,
+              mode,
+              file.relativePath,
+              diagnostics,
+            );
+            if (!parsed) {
               diagnostics.push({
                 code: 'INVALID_ITEM_DEFINITION',
                 severity: 'warning',
-                message: `Skipped invalid ${contentType} entry in "${file.relativePath}" (requires "id" and "name").`,
+                message: `Skipped invalid ${mode} entry in "${file.relativePath}" (requires "id" and "name").`,
               });
               continue;
             }
-            loaded.push(def);
+
+            if (this.hasItemInOtherItemRegistries(parsed.item.id, mode)) {
+              diagnostics.push({
+                code: 'DUPLICATE_OBJECT_ID',
+                severity: 'error',
+                message: `Duplicate item ID "${parsed.item.id}" across item categories in "${file.relativePath}".`,
+              });
+              continue;
+            }
+
+            const regRes = targetRegistry.register(ctx.modId, parsed.item.id, parsed.item);
+            if (!regRes.ok) {
+              diagnostics.push({
+                code: regRes.code,
+                severity: 'error',
+                message: `${file.relativePath}: ${regRes.message}`,
+              });
+              continue;
+            }
+
+            if (parsed.weaponStats) {
+              const wRes = this.weaponStatsRegistry.register(
+                ctx.modId,
+                parsed.weaponStats.id,
+                parsed.weaponStats,
+              );
+              if (!wRes.ok) {
+                diagnostics.push({
+                  code: wRes.code,
+                  severity: 'error',
+                  message: `${file.relativePath}: ${wRes.message}`,
+                });
+                continue;
+              }
+            }
+
+            loadedCount += 1;
           }
         }
 
-        targetMap.set(ctx.modId, loaded);
-        return { loadedCount: loaded.length, diagnostics };
+        return { loadedCount, diagnostics };
       },
       unloadMod: (modId: string) => {
-        targetMap.delete(modId);
+        targetRegistry.unloadMod(modId);
+        if (mode === 'weapons') {
+          this.weaponStatsRegistry.unloadMod(modId);
+        }
       },
       clearAll: () => {
-        targetMap.clear();
+        targetRegistry.clear();
+        if (mode === 'weapons') {
+          this.weaponStatsRegistry.clear();
+        }
       },
     };
   }
@@ -302,12 +1377,18 @@ export class DefaultModContentStore {
       contentType: 'recipes',
       validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
         const diagnostics: ModDiagnostic[] = [];
-        const loaded: CraftingRecipe[] = [];
+        this.registries.recipes.unloadMod(ctx.modId);
+        let loadedCount = 0;
 
         for (const file of ctx.files) {
           const entries = extractEntriesList(file.data, ['recipes']);
           for (const rawEntry of entries) {
-            const recipe = sanitizeRecipe(rawEntry);
+            const recipe = sanitizeRecipe(
+              ctx.modId,
+              rawEntry,
+              file.relativePath,
+              diagnostics,
+            );
             if (!recipe) {
               diagnostics.push({
                 code: 'INVALID_RECIPE_DEFINITION',
@@ -316,18 +1397,26 @@ export class DefaultModContentStore {
               });
               continue;
             }
-            loaded.push(recipe);
+            const regRes = this.registries.recipes.register(ctx.modId, recipe.id, recipe);
+            if (!regRes.ok) {
+              diagnostics.push({
+                code: regRes.code,
+                severity: 'error',
+                message: `${file.relativePath}: ${regRes.message}`,
+              });
+              continue;
+            }
+            loadedCount += 1;
           }
         }
 
-        this.recipesByMod.set(ctx.modId, loaded);
-        return { loadedCount: loaded.length, diagnostics };
+        return { loadedCount, diagnostics };
       },
       unloadMod: (modId: string) => {
-        this.recipesByMod.delete(modId);
+        this.registries.recipes.unloadMod(modId);
       },
       clearAll: () => {
-        this.recipesByMod.clear();
+        this.registries.recipes.clear();
       },
     };
   }
@@ -337,12 +1426,19 @@ export class DefaultModContentStore {
       contentType: 'quests',
       validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
         const diagnostics: ModDiagnostic[] = [];
+        this.registries.quests.unloadMod(ctx.modId);
+        unregisterModQuests(ctx.modId);
         let loadedCount = 0;
 
         for (const file of ctx.files) {
           const entries = extractEntriesList(file.data, ['quests']);
           for (const rawEntry of entries) {
-            const quest = sanitizeQuest(rawEntry);
+            const quest = sanitizeQuest(
+              ctx.modId,
+              rawEntry,
+              file.relativePath,
+              diagnostics,
+            );
             if (!quest) {
               diagnostics.push({
                 code: 'INVALID_QUEST_DEFINITION',
@@ -351,7 +1447,26 @@ export class DefaultModContentStore {
               });
               continue;
             }
-            registerModQuestDefinition(ctx.modId, quest);
+
+            const regRes = this.registries.quests.register(ctx.modId, quest.id, quest);
+            if (!regRes.ok) {
+              diagnostics.push({
+                code: regRes.code,
+                severity: 'error',
+                message: `${file.relativePath}: ${regRes.message}`,
+              });
+              continue;
+            }
+
+            const qAdded = registerModQuestDefinition(ctx.modId, quest);
+            if (!qAdded) {
+              diagnostics.push({
+                code: 'CORE_OVERRIDE_FORBIDDEN',
+                severity: 'error',
+                message: `${file.relativePath}: Quest "${quest.id}" conflicts with core quest content.`,
+              });
+              continue;
+            }
             loadedCount += 1;
           }
         }
@@ -359,10 +1474,322 @@ export class DefaultModContentStore {
         return { loadedCount, diagnostics };
       },
       unloadMod: (modId: string) => {
+        this.registries.quests.unloadMod(modId);
         unregisterModQuests(modId);
       },
       clearAll: () => {
+        this.registries.quests.clear();
         clearAllModQuests();
+      },
+    };
+  }
+
+  private createBlueprintsHandler(
+    contentType: 'buildings' | 'decorations',
+    isDecoration: boolean,
+    containerKeys: string[],
+    targetRegistry: NamespacedContentRegistry<BuildingBlueprint>,
+  ): ModContentHandler {
+    return {
+      contentType,
+      validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
+        const diagnostics: ModDiagnostic[] = [];
+        targetRegistry.unloadMod(ctx.modId);
+        let loadedCount = 0;
+
+        for (const file of ctx.files) {
+          const entries = extractEntriesList(file.data, containerKeys);
+          for (const rawEntry of entries) {
+            const bp = sanitizeBlueprint(
+              ctx.modId,
+              rawEntry,
+              isDecoration,
+              file.relativePath,
+              diagnostics,
+            );
+            if (!bp) {
+              diagnostics.push({
+                code: 'INVALID_BUILDING_DEFINITION',
+                severity: 'warning',
+                message: `Skipped invalid ${contentType} entry in "${file.relativePath}" (requires "id" and "nameEn"/"name").`,
+              });
+              continue;
+            }
+
+            const other =
+              contentType === 'buildings'
+                ? this.registries.decorations
+                : this.registries.buildings;
+            if (other.has(bp.id)) {
+              diagnostics.push({
+                code: 'DUPLICATE_OBJECT_ID',
+                severity: 'error',
+                message: `Duplicate blueprint ID "${bp.id}" across buildings/decorations in "${file.relativePath}".`,
+              });
+              continue;
+            }
+
+            const regRes = targetRegistry.register(ctx.modId, bp.id, bp);
+            if (!regRes.ok) {
+              diagnostics.push({
+                code: regRes.code,
+                severity: 'error',
+                message: `${file.relativePath}: ${regRes.message}`,
+              });
+              continue;
+            }
+            loadedCount += 1;
+          }
+        }
+
+        return { loadedCount, diagnostics };
+      },
+      unloadMod: (modId: string) => {
+        targetRegistry.unloadMod(modId);
+      },
+      clearAll: () => {
+        targetRegistry.clear();
+      },
+    };
+  }
+
+  private createLootTablesHandler(contentType: string): ModContentHandler {
+    return {
+      contentType,
+      validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
+        const diagnostics: ModDiagnostic[] = [];
+        let loadedCount = 0;
+
+        for (const file of ctx.files) {
+          const entries = extractEntriesList(file.data, ['loot_tables', 'lootTables', 'tables']);
+          for (const rawEntry of entries) {
+            const table = sanitizeLootTable(
+              ctx.modId,
+              rawEntry,
+              file.relativePath,
+              diagnostics,
+            );
+            if (!table) {
+              diagnostics.push({
+                code: 'INVALID_LOOT_TABLE_DEFINITION',
+                severity: 'warning',
+                message: `Skipped invalid loot table entry in "${file.relativePath}".`,
+              });
+              continue;
+            }
+
+            const regRes = this.registries.loot_tables.register(
+              ctx.modId,
+              table.id,
+              table,
+            );
+            if (!regRes.ok) {
+              diagnostics.push({
+                code: regRes.code,
+                severity: 'error',
+                message: `${file.relativePath}: ${regRes.message}`,
+              });
+              continue;
+            }
+            loadedCount += 1;
+          }
+        }
+
+        return { loadedCount, diagnostics };
+      },
+      unloadMod: (modId: string) => {
+        this.registries.loot_tables.unloadMod(modId);
+      },
+      clearAll: () => {
+        this.registries.loot_tables.clear();
+      },
+    };
+  }
+
+  private createSoundsHandler(): ModContentHandler {
+    return {
+      contentType: 'sounds',
+      validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
+        const diagnostics: ModDiagnostic[] = [];
+        this.registries.sounds.unloadMod(ctx.modId);
+        let loadedCount = 0;
+
+        for (const file of ctx.files) {
+          const entries = extractEntriesList(file.data, ['sounds']);
+          for (const rawEntry of entries) {
+            const sound = sanitizeSoundDescriptor(
+              ctx.modId,
+              rawEntry,
+              file.relativePath,
+              diagnostics,
+            );
+            if (!sound) continue;
+
+            const regRes = this.registries.sounds.register(ctx.modId, sound.id, sound);
+            if (!regRes.ok) {
+              diagnostics.push({
+                code: regRes.code,
+                severity: 'error',
+                message: `${file.relativePath}: ${regRes.message}`,
+              });
+              continue;
+            }
+            loadedCount += 1;
+          }
+        }
+
+        return { loadedCount, diagnostics };
+      },
+      unloadMod: (modId: string) => {
+        this.registries.sounds.unloadMod(modId);
+      },
+      clearAll: () => {
+        this.registries.sounds.clear();
+      },
+    };
+  }
+
+  private createMusicHandler(): ModContentHandler {
+    return {
+      contentType: 'music',
+      validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
+        const diagnostics: ModDiagnostic[] = [];
+        this.registries.music.unloadMod(ctx.modId);
+        let loadedCount = 0;
+
+        for (const file of ctx.files) {
+          const entries = extractEntriesList(file.data, ['music', 'tracks']);
+          for (const rawEntry of entries) {
+            const track = sanitizeMusicDescriptor(
+              ctx.modId,
+              rawEntry,
+              file.relativePath,
+              diagnostics,
+            );
+            if (!track) continue;
+
+            const regRes = this.registries.music.register(ctx.modId, track.id, track);
+            if (!regRes.ok) {
+              diagnostics.push({
+                code: regRes.code,
+                severity: 'error',
+                message: `${file.relativePath}: ${regRes.message}`,
+              });
+              continue;
+            }
+            loadedCount += 1;
+          }
+        }
+
+        return { loadedCount, diagnostics };
+      },
+      unloadMod: (modId: string) => {
+        this.registries.music.unloadMod(modId);
+      },
+      clearAll: () => {
+        this.registries.music.clear();
+      },
+    };
+  }
+
+  private createTexturesHandler(): ModContentHandler {
+    return {
+      contentType: 'textures',
+      validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
+        const diagnostics: ModDiagnostic[] = [];
+        this.registries.textures.unloadMod(ctx.modId);
+        let loadedCount = 0;
+
+        for (const file of ctx.files) {
+          const entries = extractEntriesList(file.data, ['textures']);
+          for (const rawEntry of entries) {
+            const tex = sanitizeTextureDescriptor(
+              ctx.modId,
+              rawEntry,
+              file.relativePath,
+              diagnostics,
+            );
+            if (!tex) continue;
+
+            const regRes = this.registries.textures.register(ctx.modId, tex.id, tex);
+            if (!regRes.ok) {
+              diagnostics.push({
+                code: regRes.code,
+                severity: 'error',
+                message: `${file.relativePath}: ${regRes.message}`,
+              });
+              continue;
+            }
+            loadedCount += 1;
+          }
+        }
+
+        return { loadedCount, diagnostics };
+      },
+      unloadMod: (modId: string) => {
+        this.registries.textures.unloadMod(modId);
+      },
+      clearAll: () => {
+        this.registries.textures.clear();
+      },
+    };
+  }
+
+  private createEntityHandler(
+    contentType: string,
+    containerKeys: string[],
+    targetRegistry: NamespacedContentRegistry<ModGenericEntityDescriptor>,
+  ): ModContentHandler {
+    const logicalCategory: ModContentType =
+      contentType === 'creatures'
+        ? 'animals'
+        : (contentType as ModContentType);
+
+    return {
+      contentType,
+      validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
+        const diagnostics: ModDiagnostic[] = [];
+        let loadedCount = 0;
+
+        for (const file of ctx.files) {
+          const list = extractEntriesList(file.data, containerKeys);
+          for (const rawEntry of list) {
+            const entity = sanitizeEntityDescriptor(
+              ctx.modId,
+              logicalCategory,
+              rawEntry,
+              file.relativePath,
+              diagnostics,
+            );
+            if (!entity) {
+              diagnostics.push({
+                code: 'INVALID_ENTITY_DEFINITION',
+                severity: 'warning',
+                message: `Skipped invalid ${contentType} entry in "${file.relativePath}" (requires "id").`,
+              });
+              continue;
+            }
+
+            const regRes = targetRegistry.register(ctx.modId, entity.id, entity);
+            if (!regRes.ok) {
+              diagnostics.push({
+                code: regRes.code,
+                severity: 'error',
+                message: `${file.relativePath}: ${regRes.message}`,
+              });
+              continue;
+            }
+            loadedCount += 1;
+          }
+        }
+
+        return { loadedCount, diagnostics };
+      },
+      unloadMod: (modId: string) => {
+        targetRegistry.unloadMod(modId);
+      },
+      clearAll: () => {
+        targetRegistry.clear();
       },
     };
   }
@@ -372,41 +1799,75 @@ export class DefaultModContentStore {
       contentType: 'localization',
       validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
         const diagnostics: ModDiagnostic[] = [];
+        this.registries.localization.unloadMod(ctx.modId);
         const langMap = new Map<string, Record<string, string>>();
         let loadedCount = 0;
+
+        const registerLocPair = (
+          cleanLang: string,
+          rawKey: string,
+          val: string,
+          sourceFile: string,
+        ) => {
+          const existingDict = langMap.get(cleanLang) ?? {};
+          existingDict[rawKey] = val;
+          langMap.set(cleanLang, existingDict);
+
+          const rawObjId = `${cleanLang}.${rawKey}`;
+          const sanitizedSeg = rawObjId.replace(/[^a-z0-9._:-]/gi, '_');
+          const idRes = resolveModObjectIdentifier(
+            ctx.modId,
+            sanitizedSeg.includes(':') ? sanitizedSeg : `${ctx.modId}:${sanitizedSeg}`,
+            CORE_PROTECTED_IDS,
+          );
+          if (!idRes.ok) {
+            diagnostics.push({
+              code: idRes.code,
+              severity: 'error',
+              message: `${sourceFile}: ${idRes.message}`,
+            });
+            return;
+          }
+          const regRes = this.registries.localization.register(ctx.modId, idRes.fullId, {
+            id: idRes.fullId,
+            lang: cleanLang,
+            key: rawKey,
+            value: val,
+          });
+          if (!regRes.ok) {
+            diagnostics.push({
+              code: regRes.code,
+              severity: 'error',
+              message: `${sourceFile}: ${regRes.message}`,
+            });
+            return;
+          }
+          loadedCount += 1;
+        };
 
         for (const file of ctx.files) {
           if (!isRecord(file.data)) continue;
           const fileBase =
             file.relativePath.split('/').pop()?.replace(/\.json$/i, '').toLowerCase() || '';
 
-          // Either { "en": { ... }, "ar": { ... } } OR per-language file localization/en.json
           const isSingleLangFile = fileBase === 'en' || fileBase === 'ar';
           if (isSingleLangFile && !isRecord(file.data[fileBase])) {
-            const dict: Record<string, string> = {};
             for (const [k, v] of Object.entries(file.data)) {
               if (typeof v === 'string') {
-                dict[k] = v;
-                loadedCount += 1;
+                registerLocPair(fileBase, k, v, file.relativePath);
               }
             }
-            const existing = langMap.get(fileBase) ?? {};
-            langMap.set(fileBase, { ...existing, ...dict });
             continue;
           }
 
           for (const [langCode, block] of Object.entries(file.data)) {
             if (!isRecord(block)) continue;
-            const dict: Record<string, string> = {};
+            const cleanLang = langCode.trim().toLowerCase();
             for (const [k, v] of Object.entries(block)) {
               if (typeof v === 'string') {
-                dict[k] = v;
-                loadedCount += 1;
+                registerLocPair(cleanLang, k, v, file.relativePath);
               }
             }
-            const cleanLang = langCode.trim().toLowerCase();
-            const existing = langMap.get(cleanLang) ?? {};
-            langMap.set(cleanLang, { ...existing, ...dict });
           }
         }
 
@@ -414,9 +1875,11 @@ export class DefaultModContentStore {
         return { loadedCount, diagnostics };
       },
       unloadMod: (modId: string) => {
+        this.registries.localization.unloadMod(modId);
         this.localizationByMod.delete(modId);
       },
       clearAll: () => {
+        this.registries.localization.clear();
         this.localizationByMod.clear();
       },
     };
@@ -438,11 +1901,11 @@ export class DefaultModContentStore {
         for (const file of ctx.files) {
           const list = extractEntriesList(file.data, containerKeys);
           if (list.length === 0 && isRecord(file.data)) {
-            const fallbackId =
+            const rawId =
               typeof file.data.id === 'string' ? file.data.id : file.relativePath;
             entries.push({
               modId: ctx.modId,
-              id: fallbackId,
+              id: rawId.includes(':') ? rawId : `${ctx.modId}:${rawId}`,
               payload: file.data,
             });
             continue;
@@ -450,13 +1913,13 @@ export class DefaultModContentStore {
 
           for (const item of list) {
             if (!isRecord(item)) continue;
-            const id =
+            const rawId =
               typeof item.id === 'string' && item.id.trim()
                 ? item.id.trim()
                 : `${file.relativePath}#${entries.length}`;
             entries.push({
               modId: ctx.modId,
-              id,
+              id: rawId.includes(':') ? rawId : `${ctx.modId}:${rawId}`,
               payload: item,
             });
           }

@@ -28,6 +28,11 @@ import {
   getBaseMaxStaminaForMode,
   isInfiniteStaminaMode,
 } from '../player/staminaConfig';
+import type {
+  ModMultiplayerCompatibility,
+  WorldModMetadataEntry,
+  WorldModMetadataSnapshot,
+} from '../mods/modTypes';
 
 const VALID_BIOMES = new Set<BiomeType>([
   'Plains',
@@ -80,6 +85,42 @@ function inferDefaultWorldName(slotId: string): string {
   if (slotId === 'slot-2') return 'Explorer Chronicle II';
   if (slotId === 'slot-3') return 'Explorer Chronicle III';
   return 'Oakhollow World';
+}
+
+function sanitizeWorldModMetadata(raw: unknown): WorldModMetadataSnapshot | undefined {
+  if (!isRecord(raw)) return undefined;
+  const modsRaw = Array.isArray(raw.mods) ? raw.mods : [];
+  const mods: WorldModMetadataEntry[] = [];
+  for (const item of modsRaw) {
+    if (!isRecord(item)) continue;
+    const modId = asString(item.modId).trim();
+    const version = asString(item.version).trim();
+    if (!modId || !version) continue;
+    const compatRaw = asString(item.multiplayerCompatibility).trim();
+    const multiplayerCompatibility: ModMultiplayerCompatibility | undefined =
+      compatRaw === 'required' || compatRaw === 'optional' || compatRaw === 'client_only'
+        ? compatRaw
+        : undefined;
+    mods.push({
+      modId,
+      name: asString(item.name, modId),
+      version,
+      ...(typeof item.modApiVersion === 'number' && Number.isFinite(item.modApiVersion)
+        ? { modApiVersion: Math.trunc(item.modApiVersion) }
+        : {}),
+      ...(typeof item.schemaVersion === 'number' && Number.isFinite(item.schemaVersion)
+        ? { schemaVersion: Math.trunc(item.schemaVersion) }
+        : {}),
+      ...(multiplayerCompatibility ? { multiplayerCompatibility } : {}),
+    });
+  }
+
+  return {
+    modApiVersion: Math.max(1, Math.trunc(asFiniteNumber(raw.modApiVersion, 1))),
+    schemaVersion: Math.max(1, Math.trunc(asFiniteNumber(raw.schemaVersion, 1))),
+    savedAtGameVersion: asString(raw.savedAtGameVersion, '1.0.0'),
+    mods,
+  };
 }
 
 /**
@@ -874,6 +915,10 @@ export function migrateSaveData(
           },
         }
       : {}),
+    ...(() => {
+      const modMetadata = sanitizeWorldModMetadata(working.modMetadata);
+      return modMetadata ? { modMetadata } : {};
+    })(),
   };
 
   return { data: normalized, migratedFromVersion: detectedVersion };

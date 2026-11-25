@@ -1,10 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
+  CheckCircle2,
   Compass,
   Dices,
   Flame,
   Hammer,
+  Package,
   Shield,
   Sparkles,
 } from 'lucide-react';
@@ -14,6 +19,12 @@ import type {
   NewWorldOptions,
   WorldType,
 } from '../../game/save/saveTypes';
+import {
+  getModManager,
+  type ModRecord,
+  type ModsSnapshot,
+  type WorldModSelectionEntry,
+} from '../../game/mods';
 import { DEFAULT_WORLD_SEED } from '../../game/math/noise';
 import {
   STAMINA_BY_MODE,
@@ -25,6 +36,51 @@ interface CreateWorldScreenProps {
   defaultDifficulty?: DifficultyLevel;
   onCreateWorld: (options: NewWorldOptions) => void;
   onBack: () => void;
+}
+
+const HARD_INCOMPATIBLE_STATUSES = new Set<ModRecord['status']>([
+  'incompatible',
+  'corrupted',
+  'incomplete',
+  'unsafe',
+  'duplicate',
+  'missing_dependency',
+  'circular_dependency',
+]);
+
+function isModSelectableForWorld(rec: ModRecord): boolean {
+  return (
+    rec.hasValidManifest &&
+    rec.gameCompatible &&
+    !HARD_INCOMPATIBLE_STATUSES.has(rec.status)
+  );
+}
+
+function deduplicateModsForSelection(mods: ReadonlyArray<ModRecord>): ModRecord[] {
+  const byId = new Map<string, ModRecord>();
+  for (const rec of mods) {
+    const id = rec.manifest.modId;
+    if (!id) continue;
+    const prev = byId.get(id);
+    if (
+      !prev ||
+      (!isModSelectableForWorld(prev) && isModSelectableForWorld(rec)) ||
+      (!prev.loaded && rec.loaded)
+    ) {
+      byId.set(id, rec);
+    }
+  }
+  return Array.from(byId.values()).sort(
+    (a, b) =>
+      (a.effectivePriority ?? a.manifest.loadPriority ?? 100) -
+        (b.effectivePriority ?? b.manifest.loadPriority ?? 100) ||
+      a.manifest.modId.localeCompare(b.manifest.modId),
+  );
+}
+
+interface OrderedWorldModRow {
+  modId: string;
+  enabled: boolean;
 }
 
 function generateRandomSeed(): number {
@@ -54,6 +110,7 @@ export const CreateWorldScreen: React.FC<CreateWorldScreenProps> = ({
 }) => {
   const t = UI_TEXT[lang];
   const isRtl = lang === 'ar';
+  const modManager = useMemo(() => getModManager(), []);
 
   const [worldName, setWorldName] = useState(() =>
     lang === 'ar' ? 'وادي أوكهولو' : 'Oakhollow Chronicle',
@@ -66,6 +123,66 @@ export const CreateWorldScreen: React.FC<CreateWorldScreenProps> = ({
     useState<DifficultyLevel>(defaultDifficulty);
   const [nameError, setNameError] = useState<string | null>(null);
 
+  const [modsSnapshot, setModsSnapshot] = useState<ModsSnapshot>(() =>
+    modManager.getSnapshot(),
+  );
+  const availableMods = useMemo(
+    () => deduplicateModsForSelection(modsSnapshot.mods),
+    [modsSnapshot.mods],
+  );
+  const userChoseModeRef = useRef(false);
+  const [modMode, setModMode] = useState<'vanilla' | 'modded'>(() => {
+    const initial = deduplicateModsForSelection(modManager.getSnapshot().mods);
+    return initial.some((m) => isModSelectableForWorld(m) && m.status === 'active')
+      ? 'modded'
+      : 'vanilla';
+  });
+  const [orderedMods, setOrderedMods] = useState<OrderedWorldModRow[]>(() =>
+    deduplicateModsForSelection(modManager.getSnapshot().mods).map((m) => ({
+      modId: m.manifest.modId,
+      enabled: isModSelectableForWorld(m) && m.status === 'active',
+    })),
+  );
+
+  useEffect(() => {
+    const unsub = modManager.subscribe((next) => setModsSnapshot(next));
+    void modManager.initialize().then(() => modManager.refreshMods());
+    return unsub;
+  }, [modManager]);
+
+  useEffect(() => {
+    const recordMap = new Map(availableMods.map((m) => [m.manifest.modId, m]));
+    setOrderedMods((prev) => {
+      const seen = new Set<string>();
+      const next: OrderedWorldModRow[] = [];
+      for (const row of prev) {
+        const rec = recordMap.get(row.modId);
+        if (!rec) continue;
+        seen.add(row.modId);
+        next.push({
+          modId: row.modId,
+          enabled: isModSelectableForWorld(rec) ? row.enabled : false,
+        });
+      }
+      for (const rec of availableMods) {
+        const id = rec.manifest.modId;
+        if (seen.has(id)) continue;
+        next.push({
+          modId: id,
+          enabled: isModSelectableForWorld(rec) && rec.status === 'active',
+        });
+      }
+      return next;
+    });
+
+    if (!userChoseModeRef.current) {
+      const hasAnyActiveReady = availableMods.some(
+        (m) => isModSelectableForWorld(m) && m.status === 'active',
+      );
+      setModMode(hasAnyActiveReady ? 'modded' : 'vanilla');
+    }
+  }, [availableMods]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -77,6 +194,53 @@ export const CreateWorldScreen: React.FC<CreateWorldScreenProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onBack]);
 
+  const recordById = useMemo(
+    () => new Map(availableMods.map((m) => [m.manifest.modId, m])),
+    [availableMods],
+  );
+
+  const selectedModCount = useMemo(
+    () => orderedMods.filter((m) => m.enabled && Boolean(recordById.get(m.modId))).length,
+    [orderedMods, recordById],
+  );
+
+  const handleToggleModEntry = (modId: string) => {
+    const rec = recordById.get(modId);
+    if (!rec || !isModSelectableForWorld(rec)) return;
+    setOrderedMods((prev) =>
+      prev.map((row) =>
+        row.modId === modId ? { ...row, enabled: !row.enabled } : row,
+      ),
+    );
+  };
+
+  const handleMoveMod = (index: number, delta: -1 | 1) => {
+    const target = index + delta;
+    if (target < 0 || target >= orderedMods.length) return;
+    setOrderedMods((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(target, 0, moved);
+      return next;
+    });
+  };
+
+  const handleEnableReadyMods = () => {
+    setOrderedMods((prev) =>
+      prev.map((row) => {
+        const rec = recordById.get(row.modId);
+        return {
+          ...row,
+          enabled: Boolean(rec && isModSelectableForWorld(rec)),
+        };
+      }),
+    );
+  };
+
+  const handleDisableAllMods = () => {
+    setOrderedMods((prev) => prev.map((row) => ({ ...row, enabled: false })));
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const cleaned = worldName.trim();
@@ -85,11 +249,23 @@ export const CreateWorldScreen: React.FC<CreateWorldScreenProps> = ({
       return;
     }
     setNameError(null);
+
+    const selectedMods: WorldModSelectionEntry[] =
+      modMode === 'vanilla'
+        ? []
+        : orderedMods.map((row, idx) => ({
+            modId: row.modId,
+            enabled: row.enabled,
+            loadOrder: idx,
+          }));
+
     onCreateWorld({
       worldName: cleaned.slice(0, 40),
       seed: parseSeedInput(seedInput),
       worldType,
       difficulty,
+      modMode,
+      selectedMods,
     });
   };
 
@@ -321,6 +497,186 @@ export const CreateWorldScreen: React.FC<CreateWorldScreenProps> = ({
               })}
             </div>
           </div>
+
+          {/* World Mods & Isolation */}
+          <div data-testid="create-world-mods-section">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-[#e6eee4]">
+                <Package className="w-4 h-4 text-[#e5a93c]" />
+                <span>{t.worldModsSectionTitle}</span>
+              </div>
+              <span className="text-[11px] font-mono-num text-[#9db1a1]">
+                {modMode === 'vanilla'
+                  ? t.worldBadgeVanilla
+                  : t.worldBadgeModded(selectedModCount)}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                data-testid="world-mods-mode-vanilla"
+                aria-pressed={modMode === 'vanilla'}
+                onClick={() => {
+                  userChoseModeRef.current = true;
+                  setModMode('vanilla');
+                }}
+                className={`p-3 rounded-xl border text-start transition-colors cursor-pointer ${
+                  modMode === 'vanilla'
+                    ? 'bg-[#20382b] border-[#e5a93c] text-[#ffffff]'
+                    : 'bg-[#0c1712] hover:bg-[#15251d] border-[#294034] text-[#dce5d8]'
+                }`}
+              >
+                <div className="font-display font-bold text-xs sm:text-sm">
+                  {t.worldModsModeVanilla}
+                </div>
+                <div className="text-[11px] text-[#9cb0a0] mt-0.5 leading-snug">
+                  {t.worldModsModeVanillaDesc}
+                </div>
+              </button>
+
+              <button
+                type="button"
+                data-testid="world-mods-mode-modded"
+                aria-pressed={modMode === 'modded'}
+                onClick={() => {
+                  userChoseModeRef.current = true;
+                  setModMode('modded');
+                }}
+                className={`p-3 rounded-xl border text-start transition-colors cursor-pointer ${
+                  modMode === 'modded'
+                    ? 'bg-[#20382b] border-[#e5a93c] text-[#ffffff]'
+                    : 'bg-[#0c1712] hover:bg-[#15251d] border-[#294034] text-[#dce5d8]'
+                }`}
+              >
+                <div className="font-display font-bold text-xs sm:text-sm">
+                  {t.worldModsModeModded}
+                </div>
+                <div className="text-[11px] text-[#9cb0a0] mt-0.5 leading-snug">
+                  {t.worldModsModeModdedDesc}
+                </div>
+              </button>
+            </div>
+
+            {modMode === 'modded' && (
+              <div className="mt-2.5 rounded-xl bg-[#0a140f] border border-[#294034] p-3 space-y-2">
+                {orderedMods.length === 0 ? (
+                  <p className="text-xs text-[#9cb0a0] leading-relaxed">
+                    {t.worldModsEmptyInstalledHint}
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-white/8">
+                      <span className="text-[11px] font-medium text-[#b5c7b7]">
+                        {t.worldBadgeModded(selectedModCount)}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          data-testid="world-mods-enable-all"
+                          onClick={handleEnableReadyMods}
+                          className="px-2.5 py-1 rounded-lg bg-[#192c22] hover:bg-[#233d2f] border border-[#345443] text-[11px] font-medium text-[#dce5d8] cursor-pointer"
+                        >
+                          {t.worldModsEnableAllBtn}
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="world-mods-clear-all"
+                          onClick={handleDisableAllMods}
+                          className="px-2.5 py-1 rounded-lg bg-[#16231c] hover:bg-[#1f3127] border border-white/10 text-[11px] font-medium text-[#b5c7b7] cursor-pointer"
+                        >
+                          {t.worldModsClearAllBtn}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 max-h-52 overflow-y-auto pr-0.5">
+                      {orderedMods.map((row, idx) => {
+                        const rec = recordById.get(row.modId);
+                        if (!rec) return null;
+                        const selectable = isModSelectableForWorld(rec);
+                        const depCount = rec.manifest.dependencies.length;
+                        return (
+                          <div
+                            key={row.modId}
+                            data-testid={`create-world-mod-row-${row.modId}`}
+                            className={`flex items-center gap-2 p-2 rounded-lg border ${
+                              row.enabled && selectable
+                                ? 'bg-[#172b20] border-[#e5a93c]/55'
+                                : 'bg-[#0e1b14] border-white/10'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={row.enabled && selectable}
+                              disabled={!selectable}
+                              aria-label={rec.manifest.name}
+                              data-testid={`create-world-mod-toggle-${row.modId}`}
+                              onChange={() => handleToggleModEntry(row.modId)}
+                              className="w-4 h-4 accent-[#e5a93c] cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-display font-semibold text-xs text-[#f2f6ef] truncate">
+                                  {rec.manifest.name}
+                                </span>
+                                <span
+                                  dir="ltr"
+                                  className="text-[10px] font-mono-num text-[#9db1a1]"
+                                >
+                                  v{rec.manifest.version}
+                                </span>
+                                {selectable ? (
+                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-[#7fe094]">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    #{idx + 1}
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-[#f28b7d]">
+                                    <AlertTriangle className="w-3 h-3" />
+                                    {t.worldRecoveryStatusIncompatible}
+                                  </span>
+                                )}
+                              </div>
+                              <div
+                                dir="ltr"
+                                className="text-[10px] font-mono-num text-[#7f9483] truncate"
+                              >
+                                {rec.manifest.modId}
+                                {depCount > 0 ? ` · ${depCount} dep(s)` : ''}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                disabled={idx === 0}
+                                title={t.worldModsMoveUp}
+                                aria-label={t.worldModsMoveUp}
+                                onClick={() => handleMoveMod(idx, -1)}
+                                className="p-1 rounded bg-[#16261d] hover:bg-[#22392d] disabled:opacity-35 text-[#dce5d8] cursor-pointer disabled:cursor-not-allowed"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={idx === orderedMods.length - 1}
+                                title={t.worldModsMoveDown}
+                                aria-label={t.worldModsMoveDown}
+                                onClick={() => handleMoveMod(idx, 1)}
+                                className="p-1 rounded bg-[#16261d] hover:bg-[#22392d] disabled:opacity-35 text-[#dce5d8] cursor-pointer disabled:cursor-not-allowed"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Footer Actions */}
@@ -345,3 +701,4 @@ export const CreateWorldScreen: React.FC<CreateWorldScreenProps> = ({
     </div>
   );
 };
+

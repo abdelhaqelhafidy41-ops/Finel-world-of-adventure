@@ -18,6 +18,7 @@ import {
   Pause,
   Play,
   ScrollText,
+  ShieldAlert,
   Sun,
   Sunrise,
   Sunset,
@@ -316,6 +317,24 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
             {t.biomeDebugPrefix}: {biomeLabel.toUpperCase()} · {hud.biomeMaterialId ?? 'unknown'}
           </div>
         )}
+      {hud.safeRecoveryMode && (
+        <div
+          data-testid="hud-safe-recovery-badge"
+          dir={isRtl ? 'rtl' : 'ltr'}
+          className="absolute px-3 py-1 rounded-lg bg-[#2c1c0f]/92 border border-[#e5a93c]/65 text-[11px] font-semibold text-[#ffd782] inline-flex items-center gap-1.5 whitespace-nowrap shadow-lg"
+          style={{
+            top:
+              showFps || showBiomeDebug
+                ? 'max(70px, calc(env(safe-area-inset-top, 0px) + 58px))'
+                : 'max(12px, env(safe-area-inset-top, 0px))',
+            left: '50%',
+            transform: 'translateX(-50%)',
+          }}
+        >
+          <ShieldAlert className="w-3.5 h-3.5 text-[#e5a93c] shrink-0" />
+          <span>{t.hudSafeRecoveryBadge}</span>
+        </div>
+      )}
         {!showMobileControls && (
           <button
             type="button"
@@ -397,6 +416,24 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
           }}
         >
           {t.biomeDebugPrefix}: {biomeLabel.toUpperCase()} · {hud.biomeMaterialId ?? 'unknown'}
+        </div>
+      )}
+      {hud.safeRecoveryMode && (
+        <div
+          data-testid="hud-safe-recovery-badge"
+          dir={isRtl ? 'rtl' : 'ltr'}
+          className="absolute px-3 py-1 rounded-lg bg-[#2c1c0f]/92 border border-[#e5a93c]/65 text-[11px] font-semibold text-[#ffd782] inline-flex items-center gap-1.5 whitespace-nowrap shadow-lg"
+          style={{
+            top:
+              showFps || showBiomeDebug
+                ? 'max(70px, calc(env(safe-area-inset-top, 0px) + 58px))'
+                : 'max(12px, env(safe-area-inset-top, 0px))',
+            left: '50%',
+            transform: 'translateX(-50%)',
+          }}
+        >
+          <ShieldAlert className="w-3.5 h-3.5 text-[#e5a93c] shrink-0" />
+          <span>{t.hudSafeRecoveryBadge}</span>
         </div>
       )}
       {/* Top-Left Shared Container: Left HUD Panel + Attached Room Chat & Team Buttons */}

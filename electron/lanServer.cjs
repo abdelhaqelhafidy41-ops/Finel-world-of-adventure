@@ -73,6 +73,45 @@ const LAN_WEAPON_SPECS = {
   },
 };
 
+const MOD_WEAPON_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,63}:[a-z0-9][a-z0-9._-]{0,63}$/i;
+
+function resolveLanWeaponSpec(weaponId) {
+  if (typeof weaponId !== 'string' || !weaponId) return null;
+  if (Object.prototype.hasOwnProperty.call(LAN_WEAPON_SPECS, weaponId)) {
+    return LAN_WEAPON_SPECS[weaponId];
+  }
+  if (weaponId.length <= 96 && MOD_WEAPON_ID_PATTERN.test(weaponId)) {
+    const isBow = /bow|crossbow/i.test(weaponId);
+    if (isBow) {
+      return {
+        id: weaponId,
+        baseDamage: 32,
+        minDamage: 10,
+        maxDamage: 50,
+        range: 52,
+        cooldownMs: 420,
+        isRanged: true,
+        critMult: 1.6,
+        critChance: 0.2,
+        headshotMult: 2.0,
+        minSpeed: 15,
+        maxSpeed: 45,
+        gravity: 9.8,
+      };
+    }
+    return {
+      id: weaponId,
+      baseDamage: 28,
+      range: 3.1,
+      cooldownMs: 380,
+      isRanged: false,
+      critMult: 1.5,
+      critChance: 0.16,
+    };
+  }
+  return null;
+}
+
 const LAN_ENEMY_MAX_HP = {
   bandit_scout: 65,
   thorn_stalker: 50,
@@ -937,6 +976,7 @@ class OfflineLanServer {
         },
         locked: false,
         hasPassword: false,
+        ...(this.room.modMetadata ? { modMetadata: this.room.modMetadata } : {}),
       },
     };
   }
@@ -1192,6 +1232,10 @@ class OfflineLanServer {
       createdAt: now,
       worldSettingsPermission: 'HOST_ONLY',
       friendlyFire: false,
+      modMetadata:
+        options.modMetadata && typeof options.modMetadata === 'object'
+          ? options.modMetadata
+          : null,
       players: new Map([[hostId, hostPlayer]]),
       parties: new Map(),
       partyInvites: new Map(),
@@ -2023,7 +2067,7 @@ class OfflineLanServer {
         if (payload.weaponId === null) {
           flatState.weaponId = null;
         } else if (typeof payload.weaponId === 'string' && payload.weaponId.length > 0) {
-          flatState.weaponId = payload.weaponId.slice(0, 48);
+          flatState.weaponId = payload.weaponId.slice(0, 96);
         }
         if (typeof payload.bowCharging === 'boolean') {
           flatState.bowCharging = payload.bowCharging;
@@ -2498,7 +2542,7 @@ class OfflineLanServer {
             typeof eventData.weaponId === 'string' && eventData.weaponId.length > 0
               ? eventData.weaponId
               : 'hunter-bow';
-          const spec = LAN_WEAPON_SPECS[weaponId];
+          const spec = resolveLanWeaponSpec(weaponId);
           if (!spec || !spec.isRanged) {
             this.sendTo(playerId, 'ERROR', {
               code: 'INVALID_WEAPON',
@@ -2637,7 +2681,7 @@ class OfflineLanServer {
             this.room.activeArrows.delete(arrowId);
             return;
           }
-          const spec = LAN_WEAPON_SPECS[arrow.weaponId];
+          const spec = resolveLanWeaponSpec(arrow.weaponId);
           if (!spec) {
             this.room.activeArrows.delete(arrowId);
             return;
@@ -2757,7 +2801,7 @@ class OfflineLanServer {
             typeof eventData.weaponId === 'string' && eventData.weaponId.length > 0
               ? eventData.weaponId
               : 'unarmed';
-          const spec = LAN_WEAPON_SPECS[weaponId];
+          const spec = resolveLanWeaponSpec(weaponId);
           if (!spec || spec.isRanged) {
             this.sendTo(playerId, 'ERROR', {
               code: 'INVALID_WEAPON',

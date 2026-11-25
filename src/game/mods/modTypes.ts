@@ -1,7 +1,35 @@
 export const CURRENT_GAME_VERSION = '1.0.0';
+export const MOD_API_VERSION = 1;
+export const MOD_CONTENT_SCHEMA_VERSION = 1;
+export const SUPPORTED_MOD_SCHEMA_VERSIONS: readonly number[] = [1];
 export const MOD_PACKAGE_EXTENSION = '.woamod';
 
 export type ModInstallKind = 'development' | 'woamod';
+export type ModMultiplayerCompatibility = 'required' | 'optional' | 'client_only';
+
+export const MOD_CONTENT_TYPES = [
+  'items',
+  'weapons',
+  'armor',
+  'tools',
+  'consumables',
+  'resources',
+  'recipes',
+  'characters',
+  'animals',
+  'monsters',
+  'npcs',
+  'buildings',
+  'decorations',
+  'quests',
+  'loot_tables',
+  'sounds',
+  'music',
+  'textures',
+  'localization',
+] as const;
+
+export type ModContentType = (typeof MOD_CONTENT_TYPES)[number];
 
 export const STANDARD_MOD_FOLDERS = [
   'assets',
@@ -11,12 +39,20 @@ export const STANDARD_MOD_FOLDERS = [
   'music',
   'items',
   'weapons',
+  'armor',
+  'tools',
+  'consumables',
+  'resources',
+  'recipes',
   'characters',
+  'animals',
   'creatures',
+  'monsters',
   'npcs',
   'buildings',
+  'decorations',
   'quests',
-  'recipes',
+  'loot_tables',
   'localization',
 ] as const;
 
@@ -37,6 +73,11 @@ export interface ModManifest {
   author: string;
   description: string;
   supportedGameVersion: string;
+  minGameVersion?: string;
+  maxGameVersion?: string;
+  modApiVersion?: number;
+  schemaVersion?: number;
+  multiplayerCompatibility?: ModMultiplayerCompatibility;
   modTypes: string[];
   categories: string[];
   dependencies: ModDependency[];
@@ -178,6 +219,44 @@ export interface ModInstallProgress {
   message?: string;
 }
 
+export interface WorldModMetadataEntry {
+  modId: string;
+  name: string;
+  version: string;
+  modApiVersion?: number;
+  schemaVersion?: number;
+  multiplayerCompatibility?: ModMultiplayerCompatibility;
+}
+
+export interface WorldModMetadataSnapshot {
+  modApiVersion: number;
+  schemaVersion: number;
+  savedAtGameVersion: string;
+  mods: WorldModMetadataEntry[];
+}
+
+export interface ModCompatibilityIssue {
+  modId: string;
+  modName?: string;
+  code:
+    | 'missing_mod'
+    | 'disabled_mod'
+    | 'version_mismatch'
+    | 'api_version_mismatch'
+    | 'schema_version_mismatch'
+    | 'extra_active_mod';
+  severity: 'error' | 'warning' | 'info';
+  expectedVersion?: string;
+  actualVersion?: string;
+  message: string;
+}
+
+export interface ModCompatibilityEvaluation {
+  compatible: boolean;
+  hasWarnings: boolean;
+  issues: ModCompatibilityIssue[];
+}
+
 export interface ModsSnapshot {
   initialized: boolean;
   scanning: boolean;
@@ -185,6 +264,8 @@ export interface ModsSnapshot {
   writable: boolean;
   platform: 'electron' | 'android' | 'web';
   gameVersion: string;
+  modApiVersion: number;
+  schemaVersion: number;
   mods: ModRecord[];
   activeModIds: string[];
   loadOrder: string[];
@@ -193,4 +274,71 @@ export interface ModsSnapshot {
   reloadedAtMs: number | null;
   lastError: string | null;
   installProgress: ModInstallProgress | null;
+}
+
+export interface ModLootDropEntry {
+  itemId: string;
+  minCount: number;
+  maxCount: number;
+  chance: number;
+  weight?: number;
+}
+
+export interface ModLootTableDescriptor {
+  id: string;
+  modId: string;
+  sourceFile: string;
+  rolls: number;
+  entries: ModLootDropEntry[];
+}
+
+export interface ModSoundDescriptor {
+  id: string;
+  modId: string;
+  sourceFile: string;
+  audioPath: string;
+  bus: 'effects' | 'ambient' | 'ui' | 'voice';
+  volume: number;
+  pitchVariance: number;
+  minIntervalMs: number;
+  maxDistance: number;
+  looping: boolean;
+}
+
+export interface ModMusicDescriptor {
+  id: string;
+  modId: string;
+  sourceFile: string;
+  audioPath: string;
+  title: string;
+  titleAr: string;
+  context: 'menu' | 'explore' | 'combat' | 'village' | 'night' | 'boss';
+  biome?: string;
+  volume: number;
+  loop: boolean;
+  fadeSeconds: number;
+}
+
+export interface ModTextureDescriptor {
+  id: string;
+  modId: string;
+  sourceFile: string;
+  texturePath: string;
+  targetCategory: string;
+  targetId?: string;
+  repeatX: number;
+  repeatY: number;
+}
+
+export interface ModGenericEntityDescriptor {
+  id: string;
+  modId: string;
+  category: ModContentType;
+  sourceFile: string;
+  name: string;
+  nameAr: string;
+  texturePath?: string;
+  modelPath?: string;
+  lootTableId?: string;
+  raw: Record<string, unknown>;
 }

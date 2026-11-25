@@ -18,6 +18,7 @@ import {
 import type { SavedStoryState } from '../story/storyTypes';
 import type { SavedSideQuestState } from '../sidequest/sideQuestTypes';
 import type { SavedVillageDevelopmentState } from '../village/villageDevTypes';
+import type { WorldModMetadataSnapshot } from '../mods/modTypes';
 import { getBiomeAt } from '../math/noise';
 import {
   deletePersistentWorldBundle,
@@ -64,6 +65,7 @@ export interface SaveSourceState {
   audio?: {
     footstepVolume?: number;
   };
+  modMetadata?: WorldModMetadataSnapshot;
 }
 
 export interface SaveResult {
@@ -181,6 +183,7 @@ export class SaveManager {
       world: source.world,
       ...(source.camera ? { camera: source.camera } : {}),
       ...(source.audio ? { audio: source.audio } : {}),
+      ...(source.modMetadata ? { modMetadata: source.modMetadata } : {}),
     };
   }
 

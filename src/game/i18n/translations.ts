@@ -718,6 +718,7 @@ export interface UiStrings {
   deletedNotice: (slotLabel: string) => string;
   saveFailedNotice: string;
   loadFailedNotice: string;
+  modsCompatWarningNotice: (count: number) => string;
   questsCountLabel: (completed: number, active: number) => string;
   seedLabel: string;
   playTimeLabel: string;
@@ -1645,6 +1646,48 @@ export interface UiStrings {
   modsErrorMissingDependency: string;
   modsErrorDepMismatch: string;
   modsErrorTargetExists: string;
+  worldModsSectionTitle: string;
+  worldModsModeVanilla: string;
+  worldModsModeVanillaDesc: string;
+  worldModsModeModded: string;
+  worldModsModeModdedDesc: string;
+  worldModsEmptyInstalledHint: string;
+  worldModsEnableAllBtn: string;
+  worldModsClearAllBtn: string;
+  worldModsMoveUp: string;
+  worldModsMoveDown: string;
+  worldBadgeVanilla: string;
+  worldBadgeModded: (count: number) => string;
+  worldRecoveryTitle: string;
+  worldRecoverySubtitle: (worldName: string) => string;
+  worldRecoveryWarningBanner: string;
+  worldRecoveryResolvedBanner: string;
+  worldRecoveryStatusMissing: string;
+  worldRecoveryStatusVersionChanged: (saved: string, installed: string) => string;
+  worldRecoveryStatusIncompatible: string;
+  worldRecoveryStatusReady: string;
+  worldRecoveryStatusDisabledWorld: string;
+  worldRecoveryStatusDisabledGlobally: string;
+  worldRecoverySavedVersion: (v: string) => string;
+  worldRecoveryInstalledVersion: (v: string) => string;
+  worldRecoveryOrphanedTitle: string;
+  worldRecoveryOrphanedDesc: (
+    items: number,
+    quests: number,
+    buildings: number,
+    recipes: number,
+  ) => string;
+  worldRecoveryManageModsBtn: string;
+  worldRecoveryRefreshBtn: string;
+  worldRecoverySaveConfigBtn: string;
+  worldRecoveryConfigSavedNotice: string;
+  worldRecoveryEnterSafeBtn: string;
+  worldRecoverySafeModeDesc: string;
+  worldRecoveryLoadAnywayBtn: string;
+  worldRecoveryRemoveMissingBtn: string;
+  modsSafeRecoveryEnteredNotice: string;
+  modsSafeRecoveryReadOnlyNotice: string;
+  hudSafeRecoveryBadge: string;
 }
 
 export const UI_TEXT: Record<Language, UiStrings> = {
@@ -1926,6 +1969,8 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     deletedNotice: (slotLabel) => `Deleted ${slotLabel}.`,
     saveFailedNotice: 'Could not save game (storage unavailable).',
     loadFailedNotice: 'Save data could not be loaded.',
+    modsCompatWarningNotice: (count) =>
+      `Loaded world with ${count} mod compatibility notice(s).`,
     questsCountLabel: (completed, active) =>
       `${completed} Done · ${active} Active`,
     seedLabel: 'Seed',
@@ -2934,6 +2979,50 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     modsErrorMissingDependency: 'Missing dependency: install and enable required dependency mods first.',
     modsErrorDepMismatch: 'Dependency conflict: an installed dependency does not match the required version.',
     modsErrorTargetExists: 'Target folder already exists inside Mods/. Remove the existing mod before reinstalling.',
+    worldModsSectionTitle: 'World Mods & Isolation',
+    worldModsModeVanilla: 'Vanilla World',
+    worldModsModeVanillaDesc: 'No mods enabled. Completely isolated from your modded worlds.',
+    worldModsModeModded: 'Select Mods',
+    worldModsModeModdedDesc: 'Choose active mods and load order saved specifically with this world.',
+    worldModsEmptyInstalledHint: 'No local mods installed yet. This world will start in isolated Vanilla mode.',
+    worldModsEnableAllBtn: 'Enable Ready',
+    worldModsClearAllBtn: 'Disable All',
+    worldModsMoveUp: 'Move mod earlier in load order',
+    worldModsMoveDown: 'Move mod later in load order',
+    worldBadgeVanilla: 'Vanilla',
+    worldBadgeModded: (count) => `${count} ${count === 1 ? 'Mod' : 'Mods'}`,
+    worldRecoveryTitle: 'World Mod Check & Safe Recovery',
+    worldRecoverySubtitle: (worldName) => `${worldName}`,
+    worldRecoveryWarningBanner:
+      'Mod configuration issues were detected before loading. Your modded items, quests, and buildings are preserved intact.',
+    worldRecoveryResolvedBanner:
+      'All required mods for this world are ready. You can save the updated config or launch normally.',
+    worldRecoveryStatusMissing: 'Missing Mod',
+    worldRecoveryStatusVersionChanged: (saved, installed) =>
+      `Version Changed (Saved v${saved} -> Installed v${installed})`,
+    worldRecoveryStatusIncompatible: 'Incompatible Mod',
+    worldRecoveryStatusReady: 'Ready',
+    worldRecoveryStatusDisabledWorld: 'Disabled for World',
+    worldRecoveryStatusDisabledGlobally: 'World-Scoped (Enable on Load)',
+    worldRecoverySavedVersion: (v) => `Saved v${v}`,
+    worldRecoveryInstalledVersion: (v) => `Installed v${v}`,
+    worldRecoveryOrphanedTitle: 'Preserved Modded Content in Save',
+    worldRecoveryOrphanedDesc: (items, quests, buildings, recipes) =>
+      `${items} item(s), ${quests} quest(s), ${buildings} building(s), ${recipes} recipe(s) preserved safely without deletion.`,
+    worldRecoveryManageModsBtn: 'Manage / Import Mods',
+    worldRecoveryRefreshBtn: 'Refresh Mods',
+    worldRecoverySaveConfigBtn: 'Save World Mod Config',
+    worldRecoveryConfigSavedNotice: 'Updated world mod configuration saved without altering world data.',
+    worldRecoveryEnterSafeBtn: 'Safe Recovery Mode',
+    worldRecoverySafeModeDesc:
+      'Opens the world for inspection with autosave and destructive overwrites disabled.',
+    worldRecoveryLoadAnywayBtn: 'Load World',
+    worldRecoveryRemoveMissingBtn: 'Disable Entry',
+    modsSafeRecoveryEnteredNotice:
+      'Safe Recovery Mode active: autosave and overwrite saves are disabled to protect modded content.',
+    modsSafeRecoveryReadOnlyNotice:
+      'Safe Recovery Mode prevents overwriting this save slot. Use another slot to save a copy.',
+    hudSafeRecoveryBadge: 'Safe Recovery (Autosave Off)',
   },
   ar: {
     gameTitle: 'عالم المغامرة',
@@ -3212,6 +3301,8 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     deletedNotice: (slotLabel) => `تم حذف ${slotLabel}.`,
     saveFailedNotice: 'تعذر حفظ اللعبة (مساحة التخزين غير متاحة).',
     loadFailedNotice: 'تعذر تحميل بيانات الحفظ.',
+    modsCompatWarningNotice: (count) =>
+      `تم تحميل العالم مع ${count} تنبيه(ات) لتوافق المودات.`,
     questsCountLabel: (completed, active) =>
       `${completed} مكتملة · ${active} نشطة`,
     seedLabel: 'البذرة',
@@ -4220,5 +4311,49 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     modsErrorMissingDependency: 'اعتمادية مفقودة: قم بتثبيت وتفعيل المودات المطلوبة أولاً.',
     modsErrorDepMismatch: 'تعارض اعتمادية: إصدار المود المعتمد لا يطابق النطاق المطلوب.',
     modsErrorTargetExists: 'مجلد الهدف موجود بالفعل داخل Mods/. احذف المود الحالي قبل إعادة التثبيت.',
+    worldModsSectionTitle: 'مودات العالم والعزل',
+    worldModsModeVanilla: 'عالم أصلي (بدون مودات)',
+    worldModsModeVanillaDesc: 'لا توجد مودات مفعلة. معزول تماماً عن العوالم المعدلة.',
+    worldModsModeModded: 'اختيار المودات',
+    worldModsModeModdedDesc: 'اختر المودات المفعلة وترتيب التحميل المحفوظ مع هذا العالم فقط.',
+    worldModsEmptyInstalledHint: 'لا توجد مودات محلية مثبتة بعد. سيبدأ هذا العالم في الوضع الأصلي المعزول.',
+    worldModsEnableAllBtn: 'تفعيل المتوافق',
+    worldModsClearAllBtn: 'تعطيل الكل',
+    worldModsMoveUp: 'تقديم المود في ترتيب التحميل',
+    worldModsMoveDown: 'تأخير المود في ترتيب التحميل',
+    worldBadgeVanilla: 'أصلي',
+    worldBadgeModded: (count) => (count === 1 ? 'مود واحد' : `${count} مودات`),
+    worldRecoveryTitle: 'فحص مودات العالم والاسترداد الآمن',
+    worldRecoverySubtitle: (worldName) => `${worldName}`,
+    worldRecoveryWarningBanner:
+      'تم اكتشاف تغييرات أو نقص في مودات هذا العالم قبل التحميل. جميع العناصر والمهام والمباني المعدلة محفوظة بأمان.',
+    worldRecoveryResolvedBanner:
+      'جميع مودات هذا العالم جاهزة الآن. يمكنك حفظ الإعدادات المحدثة أو تشغيل العالم بشكل طبيعي.',
+    worldRecoveryStatusMissing: 'مود مفقود',
+    worldRecoveryStatusVersionChanged: (saved, installed) =>
+      `تغير الإصدار (المحفوظ v${saved} -> المثبت v${installed})`,
+    worldRecoveryStatusIncompatible: 'مود غير متوافق',
+    worldRecoveryStatusReady: 'جاهز',
+    worldRecoveryStatusDisabledWorld: 'معطل لهذا العالم',
+    worldRecoveryStatusDisabledGlobally: 'مخصص للعالم (سيُفعل عند التشغيل)',
+    worldRecoverySavedVersion: (v) => `المحفوظ v${v}`,
+    worldRecoveryInstalledVersion: (v) => `المثبت v${v}`,
+    worldRecoveryOrphanedTitle: 'محتوى مودات محفوظ داخل الحفظ',
+    worldRecoveryOrphanedDesc: (items, quests, buildings, recipes) =>
+      `تم الحفاظ على ${items} عنصر، ${quests} مهمة، ${buildings} مبنى، و${recipes} وصفة بأمان دون حذف.`,
+    worldRecoveryManageModsBtn: 'إدارة / استيراد المودات',
+    worldRecoveryRefreshBtn: 'تحديث المودات',
+    worldRecoverySaveConfigBtn: 'حفظ إعدادات مودات العالم',
+    worldRecoveryConfigSavedNotice: 'تم حفظ إعدادات مودات العالم المحدثة دون تعديل بيانات العالم.',
+    worldRecoveryEnterSafeBtn: 'وضع الاسترداد الآمن',
+    worldRecoverySafeModeDesc:
+      'يفتح العالم للمعاينة مع تعطيل الحفظ التلقائي والكتابة فوق الحفظ الأصلي.',
+    worldRecoveryLoadAnywayBtn: 'تحميل العالم',
+    worldRecoveryRemoveMissingBtn: 'تعطيل القيد',
+    modsSafeRecoveryEnteredNotice:
+      'وضع الاسترداد الآمن مفعل: الحفظ التلقائي والكتابة فوق الحفظ الأصلي معطلان لحماية محتوى المودات.',
+    modsSafeRecoveryReadOnlyNotice:
+      'يمنع وضع الاسترداد الآمن الكتابة فوق خانة الحفظ هذه. اختر خانة أخرى لحفظ نسخة.',
+    hudSafeRecoveryBadge: 'الاسترداد الآمن (الحفظ التلقائي معطل)',
   },
 };

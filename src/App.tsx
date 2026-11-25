@@ -31,7 +31,11 @@ import {
   flushPendingWorldSaves,
   hydratePersistentWorldStorage,
 } from './game/save/LocalWorldStorage';
-import { getModManager } from './game/mods';
+import {
+  getModManager,
+  type WorldModInspectionResult,
+  type WorldModSelectionEntry,
+} from './game/mods';
 import {
   UI_TEXT,
   loadSavedLanguage,
@@ -65,6 +69,7 @@ import {
   SettingsScreen,
   type SettingsTabId,
 } from './components/menu/SettingsScreen';
+import { WorldModRecoveryModal } from './components/menu/WorldModRecoveryModal';
 import { UpdateNotificationModal } from './components/menu/UpdateNotificationModal';
 import {
   checkForAppUpdate,
@@ -264,6 +269,11 @@ export default function App() {
     );
   });
   const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
+  const [pendingWorldRecovery, setPendingWorldRecovery] = useState<{
+    slotId: SaveSlotId;
+    saveData: SaveGameData;
+    initialInspection: WorldModInspectionResult;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -924,6 +934,77 @@ export default function App() {
     });
   }, [playUiClick]);
 
+  const launchWorldSlotDirect = useCallback(
+    (
+      slotId: SaveSlotId,
+      loadOptions?: {
+        safeRecoveryMode?: boolean;
+        overrideModSelection?: {
+          selectionMode: 'vanilla' | 'custom';
+          selectedMods: WorldModSelectionEntry[];
+        };
+      },
+    ) => {
+      setPendingWorldRecovery(null);
+      setActiveModal('none');
+      setTitleSubScreen('main');
+      setPhase('loading');
+      setLoadProgress(4);
+      setLoadLabel(UI_TEXT[languageRef.current].loadingDefault);
+
+      void (async () => {
+        const engine = await ensureEngine();
+        if (!engine) {
+          setPhase('title');
+          showNotice(UI_TEXT[languageRef.current].loadFailedNotice);
+          return;
+        }
+        engine.setModalOpen(false);
+        const ok = await engine.loadFromSlot(slotId, loadOptions);
+        if (!ok) {
+          setPhase('title');
+        } else {
+          setWaypoint(engine.getWaypoint());
+        }
+        refreshSaveSlots();
+      })();
+    },
+    [ensureEngine, refreshSaveSlots, showNotice],
+  );
+
+  const initiateWorldLoad = useCallback(
+    (slotId: SaveSlotId) => {
+      playUiClick();
+      void (async () => {
+        try {
+          const modMgr = getModManager();
+          await modMgr.initialize();
+          await modMgr.refreshMods();
+          const loader = menuLoadManagerRef.current ?? new LoadManager();
+          const res = await loader.loadSlotAsync(slotId);
+          if (!res.ok) {
+            showNotice(UI_TEXT[languageRef.current].loadFailedNotice);
+            return;
+          }
+          const inspection = modMgr.inspectSaveMods(res.data);
+          if (inspection.requiresWarningBeforeLoad) {
+            setPendingWorldRecovery({
+              slotId,
+              saveData: res.data,
+              initialInspection: inspection,
+            });
+            return;
+          }
+          launchWorldSlotDirect(slotId);
+        } catch (err) {
+          console.error('[App] Failed pre-load mod inspection:', err);
+          launchWorldSlotDirect(slotId);
+        }
+      })();
+    },
+    [launchWorldSlotDirect, playUiClick, showNotice],
+  );
+
   const handleContinue = useCallback(() => {
     const latest = engineRef.current
       ? engineRef.current.getMostRecentSaveMeta()
@@ -934,31 +1015,8 @@ export default function App() {
       return;
     }
 
-    playUiClick();
-    setActiveModal('none');
-    setTitleSubScreen('main');
-    setPhase('loading');
-    setLoadProgress(4);
-    setLoadLabel(UI_TEXT[languageRef.current].loadingDefault);
-
-    void (async () => {
-      const engine = await ensureEngine();
-      if (!engine) {
-        setPhase('title');
-        showNotice(UI_TEXT[languageRef.current].loadFailedNotice);
-        return;
-      }
-      engine.setModalOpen(false);
-      const ok = await engine.continueLatestSave();
-      if (!ok) {
-        setPhase('title');
-        setTitleSubScreen('newWorld');
-      } else {
-        setWaypoint(engine.getWaypoint());
-      }
-      refreshSaveSlots();
-    })();
-  }, [ensureEngine, playUiClick, refreshSaveSlots, showNotice]);
+    initiateWorldLoad(latest.slotId);
+  }, [initiateWorldLoad, playUiClick]);
 
   const handleCreateWorld = useCallback(
     (options: NewWorldOptions) => {
@@ -1039,6 +1097,7 @@ export default function App() {
             worldWeather: info.worldWeather,
             localPlayerId: info.localPlayerId,
             players: info.players,
+            modMetadata: info.modMetadata,
             hostWorldSlotId: isLanHost ? pendingHost.hostWorldSlotId : null,
             savedWorldData: isLanHost ? pendingHost.savedWorldData : null,
           });
@@ -1184,31 +1243,9 @@ export default function App() {
 
   const handleLoadSlot = useCallback(
     (slotId: SaveSlotId) => {
-      playUiClick();
-      setActiveModal('none');
-      setTitleSubScreen('main');
-      setPhase('loading');
-      setLoadProgress(4);
-      setLoadLabel(UI_TEXT[languageRef.current].loadingDefault);
-
-      void (async () => {
-        const engine = await ensureEngine();
-        if (!engine) {
-          setPhase('title');
-          showNotice(UI_TEXT[languageRef.current].loadFailedNotice);
-          return;
-        }
-        engine.setModalOpen(false);
-        const ok = await engine.loadFromSlot(slotId);
-        if (!ok) {
-          setPhase('title');
-        } else {
-          setWaypoint(engine.getWaypoint());
-        }
-        refreshSaveSlots();
-      })();
+      initiateWorldLoad(slotId);
     },
-    [ensureEngine, playUiClick, refreshSaveSlots, showNotice],
+    [initiateWorldLoad],
   );
 
   const handleDeleteSlot = useCallback(
@@ -2300,7 +2337,11 @@ export default function App() {
           slots={saveSlots}
           allowSave={
             (phase === 'paused' || phase === 'playing') &&
-            (engineRef.current?.canPersistLocalWorld() ?? false)
+            Boolean(
+              engineRef.current?.canPersistLocalWorld() ||
+                (engineRef.current?.isSafeRecoveryMode() &&
+                  !engineRef.current?.isMultiplayerSession()),
+            )
           }
           lang={language}
           onSaveSlot={handleSaveSlot}
@@ -2513,6 +2554,29 @@ export default function App() {
             refreshSaveSlots();
             if (msg) showNotice(msg);
           }}
+        />
+      )}
+
+      {pendingWorldRecovery && (
+        <WorldModRecoveryModal
+          lang={language}
+          slotId={pendingWorldRecovery.slotId}
+          saveData={pendingWorldRecovery.saveData}
+          initialInspection={pendingWorldRecovery.initialInspection}
+          onSaveConfigUpdated={(updatedSave) => {
+            setPendingWorldRecovery((prev) =>
+              prev ? { ...prev, saveData: updatedSave } : null,
+            );
+            refreshSaveSlots();
+          }}
+          onLaunch={(overrideModSelection, safeRecoveryMode) => {
+            const slotId = pendingWorldRecovery.slotId;
+            launchWorldSlotDirect(slotId, {
+              safeRecoveryMode,
+              overrideModSelection,
+            });
+          }}
+          onClose={() => setPendingWorldRecovery(null)}
         />
       )}
 

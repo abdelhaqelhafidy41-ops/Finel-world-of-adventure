@@ -1,13 +1,18 @@
 import {
   CURRENT_GAME_VERSION,
+  MOD_API_VERSION,
+  MOD_CONTENT_SCHEMA_VERSION,
   MOD_PACKAGE_EXTENSION,
   STANDARD_MOD_FOLDERS,
+  SUPPORTED_MOD_SCHEMA_VERSIONS,
   type ModDependency,
   type ModInstallProgress,
   type ModManifest,
+  type ModMultiplayerCompatibility,
   type ModRecord,
 } from './modTypes';
 import {
+  compareSemver,
   isValidSemverRangeSyntax,
   parseSemver,
   satisfiesSemverRange,
@@ -71,12 +76,23 @@ const STANDARD_FOLDER_SET = new Set<string>(STANDARD_MOD_FOLDERS);
 const MOD_CONTENT_FOLDERS = new Set<string>([
   'items',
   'weapons',
+  'armor',
+  'tools',
+  'consumables',
+  'resources',
+  'recipes',
   'characters',
+  'animals',
   'creatures',
+  'monsters',
   'npcs',
   'buildings',
+  'decorations',
   'quests',
-  'recipes',
+  'loot_tables',
+  'sounds',
+  'music',
+  'textures',
   'localization',
 ]);
 
@@ -471,6 +487,31 @@ function normalizeManifestFromObject(
     }
   }
 
+  const minGameVersion =
+    typeof parsed.minGameVersion === 'string' && parsed.minGameVersion.trim()
+      ? parsed.minGameVersion.trim()
+      : undefined;
+  const maxGameVersion =
+    typeof parsed.maxGameVersion === 'string' && parsed.maxGameVersion.trim()
+      ? parsed.maxGameVersion.trim()
+      : undefined;
+  const modApiVersion =
+    typeof parsed.modApiVersion === 'number' && Number.isFinite(parsed.modApiVersion)
+      ? Math.trunc(parsed.modApiVersion)
+      : MOD_API_VERSION;
+  const schemaVersion =
+    typeof parsed.schemaVersion === 'number' && Number.isFinite(parsed.schemaVersion)
+      ? Math.trunc(parsed.schemaVersion)
+      : MOD_CONTENT_SCHEMA_VERSION;
+  const mpRaw =
+    typeof parsed.multiplayerCompatibility === 'string'
+      ? parsed.multiplayerCompatibility.trim()
+      : '';
+  const multiplayerCompatibility: ModMultiplayerCompatibility | undefined =
+    mpRaw === 'required' || mpRaw === 'optional' || mpRaw === 'client_only'
+      ? mpRaw
+      : undefined;
+
   return {
     manifest: {
       modId,
@@ -479,6 +520,11 @@ function normalizeManifestFromObject(
       author,
       description,
       supportedGameVersion,
+      ...(minGameVersion ? { minGameVersion } : {}),
+      ...(maxGameVersion ? { maxGameVersion } : {}),
+      modApiVersion,
+      schemaVersion,
+      ...(multiplayerCompatibility ? { multiplayerCompatibility } : {}),
       modTypes: modTypes.length > 0 ? modTypes : categories,
       categories: categories.length > 0 ? categories : modTypes,
       dependencies,
@@ -692,12 +738,52 @@ export async function validateWoamodArchiveBytes(
     };
   }
 
-  // Validate supported game version
+  // Validate supported game version, schemaVersion, and modApiVersion
   if (!satisfiesSemverRange(gameVersion, manifest.supportedGameVersion)) {
     return {
       ok: false,
       errorCode: 'UNSUPPORTED_GAME_VERSION',
       message: `Requires game version ${manifest.supportedGameVersion} (current version is ${gameVersion}).`,
+      detail: `modId=${manifest.modId}`,
+      manifest,
+    };
+  }
+
+  const curSemver = parseSemver(gameVersion);
+  const minSemver = manifest.minGameVersion ? parseSemver(manifest.minGameVersion) : null;
+  const maxSemver = manifest.maxGameVersion ? parseSemver(manifest.maxGameVersion) : null;
+  if (
+    (manifest.minGameVersion && !minSemver) ||
+    (manifest.maxGameVersion && !maxSemver) ||
+    (curSemver && minSemver && compareSemver(curSemver, minSemver) < 0) ||
+    (curSemver && maxSemver && compareSemver(curSemver, maxSemver) > 0)
+  ) {
+    return {
+      ok: false,
+      errorCode: 'UNSUPPORTED_GAME_VERSION',
+      message: `Game version ${gameVersion} is outside supported bounds (${manifest.minGameVersion ?? '*'} .. ${manifest.maxGameVersion ?? '*'}).`,
+      detail: `modId=${manifest.modId}`,
+      manifest,
+    };
+  }
+
+  const reqApi = manifest.modApiVersion ?? MOD_API_VERSION;
+  if (reqApi < 1 || reqApi > MOD_API_VERSION) {
+    return {
+      ok: false,
+      errorCode: 'UNSUPPORTED_GAME_VERSION',
+      message: `Requires Mod API v${reqApi} (current Mod API is v${MOD_API_VERSION}).`,
+      detail: `modId=${manifest.modId}`,
+      manifest,
+    };
+  }
+
+  const reqSchema = manifest.schemaVersion ?? MOD_CONTENT_SCHEMA_VERSION;
+  if (!SUPPORTED_MOD_SCHEMA_VERSIONS.includes(reqSchema)) {
+    return {
+      ok: false,
+      errorCode: 'UNSUPPORTED_GAME_VERSION',
+      message: `Mod schemaVersion v${reqSchema} is unsupported by this version of World of Adventure.`,
       detail: `modId=${manifest.modId}`,
       manifest,
     };

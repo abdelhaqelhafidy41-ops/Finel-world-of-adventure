@@ -1192,10 +1192,40 @@ const BLUEPRINT_MAP = new Map<string, BuildingBlueprint>(
   BUILDING_BLUEPRINTS.map((bp) => [bp.id, bp]),
 );
 
+let externalBlueprintProvider: (() => BuildingBlueprint[]) | null = null;
+
+export function setExternalBlueprintProvider(
+  provider: (() => BuildingBlueprint[]) | null,
+): void {
+  externalBlueprintProvider = provider;
+}
+
+export function getAllBlueprints(): BuildingBlueprint[] {
+  const ext = externalBlueprintProvider?.();
+  if (!ext || ext.length === 0) {
+    return [...BUILDING_BLUEPRINTS];
+  }
+  const merged = new Map<string, BuildingBlueprint>(BLUEPRINT_MAP);
+  for (const bp of ext) {
+    if (!merged.has(bp.id)) {
+      merged.set(bp.id, bp);
+    }
+  }
+  return Array.from(merged.values());
+}
+
 export function getBlueprintById(id: string): BuildingBlueprint | undefined {
-  return BLUEPRINT_MAP.get(id);
+  const core = BLUEPRINT_MAP.get(id);
+  if (core) return core;
+  const ext = externalBlueprintProvider?.();
+  if (ext) {
+    for (let i = 0; i < ext.length; i++) {
+      if (ext[i].id === id) return ext[i];
+    }
+  }
+  return undefined;
 }
 
 export function getBlueprintsByCategory(category: BuildingCategory): BuildingBlueprint[] {
-  return BUILDING_BLUEPRINTS.filter((bp) => bp.category === category);
+  return getAllBlueprints().filter((bp) => bp.category === category);
 }

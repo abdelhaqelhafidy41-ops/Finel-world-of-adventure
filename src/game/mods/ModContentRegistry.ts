@@ -5,6 +5,42 @@ import type {
   ModLoadContext,
 } from './modTypes';
 
+const CATEGORY_LOAD_PRIORITY: ReadonlyArray<string> = [
+  'textures',
+  'sounds',
+  'music',
+  'localization',
+  'items',
+  'resources',
+  'weapons',
+  'armor',
+  'tools',
+  'consumables',
+  'loot_tables',
+  'loottables',
+  'recipes',
+  'characters',
+  'animals',
+  'creatures',
+  'monsters',
+  'npcs',
+  'buildings',
+  'decorations',
+  'quests',
+  'assets',
+  'models',
+];
+
+function sortModCategories(categories: string[]): string[] {
+  return [...categories].sort((a, b) => {
+    const ia = CATEGORY_LOAD_PRIORITY.indexOf(a);
+    const ib = CATEGORY_LOAD_PRIORITY.indexOf(b);
+    const pa = ia >= 0 ? ia : 999;
+    const pb = ib >= 0 ? ib : 999;
+    return pa !== pb ? pa - pb : a.localeCompare(b);
+  });
+}
+
 /**
  * Central modular ModContentRegistry decoupling content ingestion from concrete
  * game subsystems so new mod types can register cleanly without changing core loaders.
@@ -41,7 +77,7 @@ export class ModContentRegistry {
     // Index declared binary/static assets for this mod
     this.assetsByModId.set(context.modId, [...context.assets]);
 
-    // Group parsed JSON files by category
+    // Group parsed JSON files by category and load in deterministic dependency order
     const filesByCategory = new Map<string, ModLoadContext['files']>();
     for (const file of context.files) {
       const cat = file.category.toLowerCase();
@@ -50,7 +86,9 @@ export class ModContentRegistry {
       filesByCategory.set(cat, list);
     }
 
-    for (const [category, files] of filesByCategory.entries()) {
+    const orderedCategories = sortModCategories(Array.from(filesByCategory.keys()));
+    for (const category of orderedCategories) {
+      const files = filesByCategory.get(category) ?? [];
       const handler = this.handlers.get(category);
       if (!handler) {
         diagnostics.push({

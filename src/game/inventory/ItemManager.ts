@@ -31,7 +31,7 @@ export class ItemManager {
   }
 
   public getItem(itemId: string): ItemDefinition | undefined {
-    return this.findExternalItem(itemId) ?? this.items.get(itemId);
+    return this.items.get(itemId) ?? this.findExternalItem(itemId);
   }
 
   public getAllItems(): ItemDefinition[] {
@@ -41,7 +41,9 @@ export class ItemManager {
     }
     const merged = new Map<string, ItemDefinition>(this.items);
     for (const item of ext) {
-      merged.set(item.id, item);
+      if (!merged.has(item.id)) {
+        merged.set(item.id, item);
+      }
     }
     return Array.from(merged.values());
   }

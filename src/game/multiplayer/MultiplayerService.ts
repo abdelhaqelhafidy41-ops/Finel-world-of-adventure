@@ -308,6 +308,7 @@ function toRoomState(
     ...(snap.worldTime ? { worldTime: snap.worldTime } : {}),
     ...(snap.worldWeather ? { worldWeather: snap.worldWeather } : {}),
     ...(snap.serverTimestamp !== undefined ? { serverTimestamp: snap.serverTimestamp } : {}),
+    ...(snap.gameState.modMetadata ? { modMetadata: snap.gameState.modMetadata } : {}),
     players: snap.players.map((p) => ({
       id: p.playerId,
       ...(p.publicProfileId ? { publicProfileId: p.publicProfileId } : {}),
@@ -2201,6 +2202,7 @@ export class MultiplayerService implements IMultiplayerService {
           isHost: Boolean(room && this.localPlayerId && room.hostId === this.localPlayerId),
           localPlayerId: this.localPlayerId ?? '',
           players: this.currentRoom?.players ?? room?.players ?? [],
+          ...(room?.modMetadata ? { modMetadata: room.modMetadata } : {}),
         };
         this.authoritativeStartInfo = startInfo;
         this.emit({

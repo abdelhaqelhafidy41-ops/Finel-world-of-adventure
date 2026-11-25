@@ -5,6 +5,7 @@ import type { BiomeType, CameraPerspective, NpcRoutinePeriod } from '../types';
 import type { WeatherQuality, WeatherState } from '../world/WeatherManager';
 import type { SavedPlayerBuilding } from '../building/buildingTypes';
 import type { SavedVillageDevelopmentState } from '../village/villageDevTypes';
+import type { WorldModMetadataSnapshot } from '../mods/modTypes';
 
 export const CURRENT_SAVE_VERSION = 6;
 
@@ -261,6 +262,7 @@ export interface SaveGameData {
   audio?: {
     footstepVolume?: number;
   };
+  modMetadata?: WorldModMetadataSnapshot;
 }
 
 export interface SaveSlotSummary {

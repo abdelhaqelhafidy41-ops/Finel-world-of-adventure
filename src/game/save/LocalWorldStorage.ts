@@ -19,6 +19,7 @@ export interface WorldSaveBundle {
     saveVersion: number;
     version: number;
     meta: SaveGameData['meta'];
+    modMetadata?: SaveGameData['modMetadata'];
   };
   settings: {
     worldType: SaveGameData['meta']['worldType'];
@@ -83,6 +84,7 @@ export function splitSaveDataToBundle(data: SaveGameData): WorldSaveBundle {
       saveVersion: WORLD_BUNDLE_SAVE_VERSION,
       version: data.version || CURRENT_SAVE_VERSION,
       meta: { ...data.meta },
+      ...(data.modMetadata ? { modMetadata: data.modMetadata } : {}),
     },
     settings: {
       worldType: data.meta.worldType,
@@ -186,6 +188,7 @@ export function assembleSaveDataFromBundle(
     ...(settings.camera ? { camera: settings.camera } : {}),
     ...(settings.audio ? { audio: settings.audio } : {}),
     ...(worldState.villageDev ? { villageDev: worldState.villageDev } : {}),
+    ...(worldData.modMetadata ? { modMetadata: worldData.modMetadata } : {}),
   };
 
   const migrated = migrateSaveData(assembled);
