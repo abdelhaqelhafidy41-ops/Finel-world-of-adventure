@@ -73,6 +73,7 @@ export interface ModManifest {
   author: string;
   description: string;
   supportedGameVersion: string;
+  compatibilityVersion?: string;
   minGameVersion?: string;
   maxGameVersion?: string;
   modApiVersion?: number;
@@ -219,10 +220,22 @@ export interface ModInstallProgress {
   message?: string;
 }
 
+export interface WorldModSelectionEntry {
+  modId: string;
+  enabled: boolean;
+  loadOrder: number;
+}
+
 export interface WorldModMetadataEntry {
   modId: string;
   name: string;
   version: string;
+  loadOrder?: number;
+  enabled?: boolean;
+  supportedGameVersion?: string;
+  compatibilityVersion?: string;
+  dependencies?: ModDependency[];
+  compatible?: boolean;
   modApiVersion?: number;
   schemaVersion?: number;
   multiplayerCompatibility?: ModMultiplayerCompatibility;
@@ -232,6 +245,7 @@ export interface WorldModMetadataSnapshot {
   modApiVersion: number;
   schemaVersion: number;
   savedAtGameVersion: string;
+  selectionMode?: 'vanilla' | 'custom';
   mods: WorldModMetadataEntry[];
 }
 
@@ -242,12 +256,15 @@ export interface ModCompatibilityIssue {
     | 'missing_mod'
     | 'disabled_mod'
     | 'version_mismatch'
+    | 'missing_dependency'
+    | 'unsupported_mod'
     | 'api_version_mismatch'
     | 'schema_version_mismatch'
     | 'extra_active_mod';
   severity: 'error' | 'warning' | 'info';
   expectedVersion?: string;
   actualVersion?: string;
+  dependencyModId?: string;
   message: string;
 }
 
@@ -255,6 +272,39 @@ export interface ModCompatibilityEvaluation {
   compatible: boolean;
   hasWarnings: boolean;
   issues: ModCompatibilityIssue[];
+}
+
+export type WorldSaveModInspectStatus =
+  | 'ready'
+  | 'missing'
+  | 'incompatible'
+  | 'version_changed'
+  | 'disabled_globally'
+  | 'disabled_world';
+
+export interface WorldSaveModInspectEntry {
+  modId: string;
+  name: string;
+  savedVersion: string;
+  installedVersion?: string;
+  savedEnabled: boolean;
+  status: WorldSaveModInspectStatus;
+  diagnosticMessages: string[];
+}
+
+export interface OrphanedModContentSummary {
+  unknownItemIds: string[];
+  unknownQuestIds: string[];
+  unknownBuildingIds: string[];
+  unknownRecipeIds: string[];
+  totalUnknownReferences: number;
+}
+
+export interface WorldModInspectionResult {
+  evaluation: ModCompatibilityEvaluation;
+  entries: WorldSaveModInspectEntry[];
+  requiresWarningBeforeLoad: boolean;
+  orphanedContent: OrphanedModContentSummary;
 }
 
 export interface ModsSnapshot {

@@ -405,6 +405,18 @@ function parseManifest(
     });
   }
 
+  const compatibilityVersion =
+    typeof parsed.compatibilityVersion === 'string' && parsed.compatibilityVersion.trim()
+      ? parsed.compatibilityVersion.trim()
+      : undefined;
+  if (compatibilityVersion && !isValidSemverRangeSyntax(compatibilityVersion)) {
+    diagnostics.push({
+      code: 'INVALID_COMPATIBILITY_VERSION',
+      severity: 'error',
+      message: `mod.json has invalid "compatibilityVersion" range "${compatibilityVersion}".`,
+    });
+  }
+
   const modApiVersion =
     typeof parsed.modApiVersion === 'number' && Number.isFinite(parsed.modApiVersion)
       ? Math.trunc(parsed.modApiVersion)
@@ -429,6 +441,7 @@ function parseManifest(
     author: author || fallback.author,
     description,
     supportedGameVersion: supportedGameVersion || '',
+    ...(compatibilityVersion ? { compatibilityVersion } : {}),
     ...(minGameVersion ? { minGameVersion } : {}),
     ...(maxGameVersion ? { maxGameVersion } : {}),
     modApiVersion,

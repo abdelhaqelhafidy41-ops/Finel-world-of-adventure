@@ -1688,6 +1688,33 @@ export interface UiStrings {
   modsSafeRecoveryEnteredNotice: string;
   modsSafeRecoveryReadOnlyNotice: string;
   hudSafeRecoveryBadge: string;
+  // Multiplayer Mod Compatibility Verification
+  mpModCompatMismatchTitle: string;
+  mpModsVanillaBadge: string;
+  mpModsRequiredCountBadge: (count: number) => string;
+  mpModCompatOkBadge: string;
+  mpModCompatBlockedHint: string;
+  mpModPresetAppliedNotice: string;
+  mpRefreshModsBtn: string;
+  mpMatchRoomModsBtn: string;
+  mpHostRequiredModsLabel: string;
+  mpModIssueMissing: string;
+  mpModIssueDisabled: string;
+  mpModIssueVersionMismatch: string;
+  mpModIssueApiMismatch: string;
+  mpModIssueExtraActive: string;
+  mpModIssueMissingDependency: string;
+  mpModIssueUnsupported: string;
+  mpModHostSavedMismatchHint: string;
+  mpModExpectedLabel: (version: string) => string;
+  mpModLocalLabel: (version: string) => string;
+  mpDismissBtn: string;
+  mpLanModStatusTitle: string;
+  mpLanRequiredModsTitle: string;
+  mpLanCompatiblePlayersTitle: string;
+  mpLanIncompatiblePlayersTitle: string;
+  mpLanNoIncompatiblePlayers: string;
+  mpLanVanillaNoMods: string;
 }
 
 export const UI_TEXT: Record<Language, UiStrings> = {
@@ -3023,6 +3050,32 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     modsSafeRecoveryReadOnlyNotice:
       'Safe Recovery Mode prevents overwriting this save slot. Use another slot to save a copy.',
     hudSafeRecoveryBadge: 'Safe Recovery (Autosave Off)',
+    mpModCompatMismatchTitle: 'Mod Compatibility Required',
+    mpModsVanillaBadge: 'Vanilla',
+    mpModsRequiredCountBadge: (count) => `${count} ${count === 1 ? 'Mod' : 'Mods'}`,
+    mpModCompatOkBadge: 'Mods Ready',
+    mpModCompatBlockedHint: 'Resolve the mod differences below before entering this multiplayer world.',
+    mpModPresetAppliedNotice: 'Active local mods aligned with the host configuration.',
+    mpRefreshModsBtn: 'Refresh Mods',
+    mpMatchRoomModsBtn: 'Match Room Mods',
+    mpHostRequiredModsLabel: 'Host Mod Configuration',
+    mpModIssueMissing: 'Missing Mod',
+    mpModIssueDisabled: 'Installed (Disabled)',
+    mpModIssueVersionMismatch: 'Version Mismatch',
+    mpModIssueApiMismatch: 'API / Schema Mismatch',
+    mpModIssueExtraActive: 'Extra Gameplay Mod Active',
+    mpModIssueMissingDependency: 'Missing Dependency',
+    mpModIssueUnsupported: 'Unsupported Version',
+    mpModHostSavedMismatchHint: 'This saved world uses a different mod configuration than your currently active local mods.',
+    mpModExpectedLabel: (version) => `Host: ${version}`,
+    mpModLocalLabel: (version) => `Yours: ${version}`,
+    mpDismissBtn: 'Dismiss',
+    mpLanModStatusTitle: 'LAN Mod Compatibility',
+    mpLanRequiredModsTitle: 'Required Mods',
+    mpLanCompatiblePlayersTitle: 'Compatible Players',
+    mpLanIncompatiblePlayersTitle: 'Incompatible Players',
+    mpLanNoIncompatiblePlayers: 'No rejected join attempts.',
+    mpLanVanillaNoMods: 'None (Vanilla World)',
   },
   ar: {
     gameTitle: 'عالم المغامرة',
@@ -4355,5 +4408,31 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     modsSafeRecoveryReadOnlyNotice:
       'يمنع وضع الاسترداد الآمن الكتابة فوق خانة الحفظ هذه. اختر خانة أخرى لحفظ نسخة.',
     hudSafeRecoveryBadge: 'الاسترداد الآمن (الحفظ التلقائي معطل)',
+    mpModCompatMismatchTitle: 'يتطلب توافق المودات',
+    mpModsVanillaBadge: 'أصلي (بدون مودات)',
+    mpModsRequiredCountBadge: (count) => (count === 1 ? 'مود واحد' : `${count} مودات`),
+    mpModCompatOkBadge: 'المودات متوافقة',
+    mpModCompatBlockedHint: 'يرجى معالجة اختلافات المودات أدناه قبل دخول عالم اللعب الجماعي.',
+    mpModPresetAppliedNotice: 'تمت مطابقة المودات النشطة محليًا مع إعدادات المضيف.',
+    mpRefreshModsBtn: 'تحديث المودات',
+    mpMatchRoomModsBtn: 'مطابقة مودات الغرفة',
+    mpHostRequiredModsLabel: 'مودات المضيف المطلوبة',
+    mpModIssueMissing: 'مود مفقود',
+    mpModIssueDisabled: 'مثبّت (معطّل)',
+    mpModIssueVersionMismatch: 'اختلاف الإصدار',
+    mpModIssueApiMismatch: 'عدم توافق API / المخطط',
+    mpModIssueExtraActive: 'مود لعب إضافي مفعّل',
+    mpModIssueMissingDependency: 'اعتمادية مفقودة',
+    mpModIssueUnsupported: 'إصدار غير مدعوم',
+    mpModHostSavedMismatchHint: 'يستخدم هذا العالم المحفوظ إعدادات مودات مختلفة عن المودات المفعلة محليًا حاليًا.',
+    mpModExpectedLabel: (version) => `المضيف: ${version}`,
+    mpModLocalLabel: (version) => `لديك: ${version}`,
+    mpDismissBtn: 'إغلاق',
+    mpLanModStatusTitle: 'توافق مودات الشبكة المحلية',
+    mpLanRequiredModsTitle: 'المودات المطلوبة',
+    mpLanCompatiblePlayersTitle: 'اللاعبون المتوافقون',
+    mpLanIncompatiblePlayersTitle: 'اللاعبون غير المتوافقين',
+    mpLanNoIncompatiblePlayers: 'لا توجد محاولات انضمام مرفوضة.',
+    mpLanVanillaNoMods: 'لا شيء (عالم أصلي)',
   },
 };

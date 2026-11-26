@@ -5,7 +5,10 @@ import type { BiomeType, CameraPerspective, NpcRoutinePeriod } from '../types';
 import type { WeatherQuality, WeatherState } from '../world/WeatherManager';
 import type { SavedPlayerBuilding } from '../building/buildingTypes';
 import type { SavedVillageDevelopmentState } from '../village/villageDevTypes';
-import type { WorldModMetadataSnapshot } from '../mods/modTypes';
+import type {
+  WorldModMetadataSnapshot,
+  WorldModSelectionEntry,
+} from '../mods/modTypes';
 
 export const CURRENT_SAVE_VERSION = 6;
 
@@ -20,6 +23,14 @@ export interface NewWorldOptions {
   seed: number;
   worldType: WorldType;
   difficulty: DifficultyLevel;
+  modMode?: 'vanilla' | 'modded';
+  selectedMods?: WorldModSelectionEntry[];
+}
+
+export interface WorldSaveModSummary {
+  selectionMode: 'vanilla' | 'custom';
+  enabledCount: number;
+  modIds: string[];
 }
 
 export const MANUAL_SAVE_SLOTS: LegacySaveSlotId[] = [
@@ -243,6 +254,7 @@ export interface SaveGameMeta {
   activeQuestsCount: number;
   worldSeed: number;
   thumbnailDataUrl?: string;
+  modSummary?: WorldSaveModSummary;
 }
 
 export interface SaveGameData {

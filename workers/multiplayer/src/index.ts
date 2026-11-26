@@ -1,6 +1,8 @@
 import {
   isValidRoomCode,
   isValidRoomId,
+  sanitizeProtocolWorldModMetadata,
+  validateUntrustedProtocolModMetadata,
 } from '../../../shared/multiplayerProtocol';
 import { isValidPublicPlayerId } from '../../../shared/profileTypes';
 import type { CfEnv, CfExecutionContext } from './cfTypes';
@@ -27,7 +29,7 @@ const friendRequestRateLimiter = new IpRateLimiter(15, 60_000);
 const inviteRateLimiter = new IpRateLimiter(20, 60_000);
 const expensiveApiRateLimiter = new IpRateLimiter(30, 60_000);
 const wsUpgradeRateLimiter = new IpRateLimiter(30, 60_000);
-const MAX_HTTP_BODY_BYTES = 16_384;
+const MAX_HTTP_BODY_BYTES = 32_768;
 const MAX_PROFILE_HTTP_BODY_BYTES = 64_000;
 
 function parseAllowedOrigins(env: CfEnv): string[] | null {
@@ -829,12 +831,40 @@ export default {
       delete body.verifiedIdentity;
       const verifiedIdentity = await resolveVerifiedProfileIdentity(request, body, env);
 
+      const modCheck = validateUntrustedProtocolModMetadata(body.clientModMetadata);
+      if (!modCheck.ok) {
+        workerSecurityLogger.record({
+          category: 'PAYLOAD_TAMPER',
+          code: modCheck.error,
+          severity: 'medium',
+          detail: 'quick-join',
+        });
+        return withCors(
+          Response.json(
+            { ok: false, error: modCheck.error, message: modCheck.message },
+            { status: modCheck.status },
+          ),
+          cors,
+        );
+      }
+      const clientModMetadata = modCheck.value;
       const quickRes = await directoryStub.fetch(
         'https://directory.internal/quick-join',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            ...(clientModMetadata ? { clientModMetadata } : {}),
+          }),
+        },
       );
       if (!quickRes.ok) {
+        const quickErr = (await quickRes.json().catch(() => ({
+          ok: false,
+          error: 'NO_OPEN_ROOMS',
+        }))) as Record<string, unknown>;
         return withCors(
-          Response.json({ ok: false, error: 'NO_OPEN_ROOMS' }, { status: 404 }),
+          Response.json(quickErr, { status: quickRes.status || 404 }),
           cors,
         );
       }
@@ -949,6 +979,7 @@ export default {
             locked: boolean;
             privacy?: string;
             allowFriends?: boolean;
+            modMetadata?: unknown;
           };
           status: string;
         };
@@ -1026,6 +1057,9 @@ export default {
         typeof body.partyId === 'string' && body.partyId.trim().length > 0
           ? body.partyId.trim().slice(0, 64)
           : '';
+      const sanitizedInviteModMetadata = sanitizeProtocolWorldModMetadata(
+        memberData.room.gameState?.modMetadata,
+      );
       const sendRes = await directoryStub.fetch('https://directory.internal/invites/send', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -1046,6 +1080,7 @@ export default {
           worldType: memberData.room.gameState.worldType,
           playerCount: memberData.room.players.length,
           maxPlayers: memberData.room.maxPlayers,
+          ...(sanitizedInviteModMetadata ? { modMetadata: sanitizedInviteModMetadata } : {}),
         }),
       });
       return withCors(sendRes, cors);
@@ -1089,21 +1124,16 @@ export default {
           cors,
         );
       }
-      const consumeRes = await directoryStub.fetch(
-        'https://directory.internal/invites/consume',
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ inviteId }),
-        },
+      const peekRes = await directoryStub.fetch(
+        `https://directory.internal/invites/peek?inviteId=${encodeURIComponent(inviteId)}`,
       );
-      if (!consumeRes.ok) {
-        return withCors(consumeRes, cors);
+      if (!peekRes.ok) {
+        return withCors(peekRes, cors);
       }
-      const consumed = (await consumeRes.json()) as {
+      const peeked = (await peekRes.json()) as {
         invite?: { roomId: string; partyId?: string };
       };
-      const targetRoomId = consumed.invite?.roomId ?? '';
+      const targetRoomId = peeked.invite?.roomId ?? '';
       if (!isValidRoomId(targetRoomId)) {
         return withCors(
           Response.json(
@@ -1114,6 +1144,25 @@ export default {
         );
       }
 
+      const inviteModCheck = validateUntrustedProtocolModMetadata(
+        parsed.data.clientModMetadata,
+      );
+      if (!inviteModCheck.ok) {
+        workerSecurityLogger.record({
+          category: 'PAYLOAD_TAMPER',
+          code: inviteModCheck.error,
+          severity: 'medium',
+          detail: 'invites-accept',
+        });
+        return withCors(
+          Response.json(
+            { ok: false, error: inviteModCheck.error, message: inviteModCheck.message },
+            { status: inviteModCheck.status },
+          ),
+          cors,
+        );
+      }
+      const clientModMetadata = inviteModCheck.value;
       const roomStub = env.MULTIPLAYER_ROOMS.get(
         env.MULTIPLAYER_ROOMS.idFromName(targetRoomId),
       );
@@ -1122,14 +1171,23 @@ export default {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           playerName: playerName || 'Adventurer',
-          ...(consumed.invite?.partyId ? { partyId: consumed.invite.partyId } : {}),
+          ...(peeked.invite?.partyId ? { partyId: peeked.invite.partyId } : {}),
           ...(verifiedIdentity ? { verifiedIdentity } : {}),
+          ...(clientModMetadata ? { clientModMetadata } : {}),
         }),
       });
       const data = (await joinRes.json()) as Record<string, unknown>;
       if (!joinRes.ok) {
         return withCors(Response.json(data, { status: joinRes.status }), cors);
       }
+
+      await directoryStub
+        .fetch('https://directory.internal/invites/consume', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ inviteId }),
+        })
+        .catch(() => {});
 
       return withCors(
         Response.json({

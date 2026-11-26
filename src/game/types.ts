@@ -207,6 +207,7 @@ export interface PlayerHudSnapshot {
   biomeValidationOk?: boolean;
   buildMode?: BuildModeHudSnapshot;
   nearbyPlayerStructureId?: string | null;
+  safeRecoveryMode?: boolean;
 }
 
 export interface GameSettings {

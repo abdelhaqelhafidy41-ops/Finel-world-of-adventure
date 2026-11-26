@@ -1,3 +1,7 @@
+import {
+  sanitizeProtocolWorldModMetadata,
+  type ProtocolWorldModMetadata,
+} from '../../../shared/multiplayerProtocol';
 import { detectRuntimePlatform, type RuntimePlatform } from '../../utils/platformExit';
 import type { DifficultyLevel, WorldType } from '../save/saveTypes';
 
@@ -29,6 +33,7 @@ export interface DiscoveredLanHost {
   maxPlayers: number;
   status: 'waiting' | 'in-game' | 'closed';
   lastSeenAt: number;
+  modMetadata?: ProtocolWorldModMetadata;
 }
 
 export interface LanHostStartResult {
@@ -61,6 +66,7 @@ export interface LanProbeResult {
   playerCount?: number;
   maxPlayers?: number;
   status?: string;
+  modMetadata?: ProtocolWorldModMetadata;
   error?: string;
 }
 
@@ -382,6 +388,9 @@ function normalizeDiscoveredHost(raw: Record<string, unknown>): DiscoveredLanHos
     ),
     status,
     lastSeenAt: typeof raw.lastSeenAt === 'number' ? raw.lastSeenAt : Date.now(),
+    ...(sanitizeProtocolWorldModMetadata(raw.modMetadata)
+      ? { modMetadata: sanitizeProtocolWorldModMetadata(raw.modMetadata)! }
+      : {}),
   };
 }
 
@@ -448,6 +457,9 @@ export async function probeLanHost(
       maxPlayers:
         typeof data?.maxPlayers === 'number' ? data.maxPlayers : MAX_LAN_PLAYERS,
       status: typeof data?.status === 'string' ? data.status : undefined,
+      ...(sanitizeProtocolWorldModMetadata(data?.modMetadata)
+        ? { modMetadata: sanitizeProtocolWorldModMetadata(data?.modMetadata)! }
+        : {}),
     };
   } catch (err) {
     return {

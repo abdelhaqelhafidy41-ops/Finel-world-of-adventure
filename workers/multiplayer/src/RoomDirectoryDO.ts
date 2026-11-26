@@ -10,8 +10,11 @@ import {
   isValidRoomId,
   sanitizeDisplayName,
   sanitizeRoomName,
+  validateUntrustedProtocolModMetadata,
+  verifyMultiplayerModCompatibility,
   type DifficultyLevel,
   type MultiplayerInviteRecord,
+  type ProtocolWorldModMetadata,
   type RoomPrivacy,
   type RoomStatus,
   type WorldType,
@@ -39,6 +42,7 @@ export interface DirectoryRoomEntry {
   updatedAt: number;
   lastActivityAt?: number;
   expiresAt?: number;
+  modMetadata?: ProtocolWorldModMetadata;
 }
 
 const DIRECTORY_STORAGE_KEY = 'room_directory_v1';
@@ -178,8 +182,23 @@ export class RoomDirectoryDO {
       );
     }
 
-    if (request.method === 'GET' && url.pathname === '/quick-join') {
-      const openRoom = Array.from(this.rooms.values())
+    if ((request.method === 'GET' || request.method === 'POST') && url.pathname === '/quick-join') {
+      let clientModMetadata: ProtocolWorldModMetadata | null = null;
+      if (request.method === 'POST') {
+        const body = (await request.json().catch(() => null)) as {
+          clientModMetadata?: unknown;
+        } | null;
+        const modCheck = validateUntrustedProtocolModMetadata(body?.clientModMetadata);
+        if (!modCheck.ok) {
+          return Response.json(
+            { ok: false, error: modCheck.error, message: modCheck.message },
+            { status: modCheck.status },
+          );
+        }
+        clientModMetadata = modCheck.value;
+      }
+
+      const candidates = Array.from(this.rooms.values())
         .filter(
           (r) =>
             !this.isEntryExpired(r, now) &&
@@ -189,12 +208,35 @@ export class RoomDirectoryDO {
             !r.hasPassword &&
             r.playerCount < r.maxPlayers,
         )
-        .sort((a, b) => b.playerCount - a.playerCount || b.updatedAt - a.updatedAt)[0];
+        .sort((a, b) => b.playerCount - a.playerCount || b.updatedAt - a.updatedAt);
 
-      if (!openRoom) {
+      if (candidates.length === 0) {
         return Response.json({ ok: false, error: 'NO_OPEN_ROOMS' }, { status: 404 });
       }
-      return Response.json({ ok: true, roomId: openRoom.roomId });
+
+      const compatibleRoom = candidates.find(
+        (r) => verifyMultiplayerModCompatibility(r.modMetadata, clientModMetadata).compatible,
+      );
+
+      if (!compatibleRoom) {
+        const sample = candidates[0];
+        const report = verifyMultiplayerModCompatibility(
+          sample.modMetadata,
+          clientModMetadata,
+        );
+        return Response.json(
+          {
+            ok: false,
+            error: 'MOD_INCOMPATIBLE',
+            message: report.summary,
+            modCompatibility: report,
+            ...(sample.modMetadata ? { hostModMetadata: sample.modMetadata } : {}),
+          },
+          { status: 409 },
+        );
+      }
+
+      return Response.json({ ok: true, roomId: compatibleRoom.roomId });
     }
 
     if (request.method === 'POST' && url.pathname === '/upsert') {
@@ -232,8 +274,17 @@ export class RoomDirectoryDO {
         typeof body.expiresAt === 'number' && Number.isFinite(body.expiresAt)
           ? body.expiresAt
           : lastActivityAt + ROOM_INACTIVE_TIMEOUT_MS;
+      const modCheck = validateUntrustedProtocolModMetadata(body.modMetadata);
+      if (!modCheck.ok) {
+        return Response.json(
+          { ok: false, error: modCheck.error, message: modCheck.message },
+          { status: modCheck.status },
+        );
+      }
+      const sanitizedModMeta = modCheck.value;
+      const { modMetadata: _rawModMeta, ...restBody } = body;
       const entry: DirectoryRoomEntry = {
-        ...body,
+        ...restBody,
         roomCode: body.roomCode.trim().toUpperCase(),
         roomName: sanitizeRoomName(body.roomName, 'World of Adventure'),
         hostName: body.hostName ? sanitizeDisplayName(body.hostName, 'Open') : '',
@@ -243,6 +294,7 @@ export class RoomDirectoryDO {
         updatedAt,
         lastActivityAt,
         expiresAt,
+        ...(sanitizedModMeta ? { modMetadata: sanitizedModMeta } : {}),
       };
       this.rooms.set(entry.roomId, entry);
       this.codeToRoomId.set(entry.roomCode, entry.roomId);
@@ -313,6 +365,14 @@ export class RoomDirectoryDO {
           this.invites.delete(oldestInvite.inviteId);
         }
       }
+      const inviteModsCheck = validateUntrustedProtocolModMetadata(body.modMetadata);
+      if (!inviteModsCheck.ok) {
+        return Response.json(
+          { ok: false, error: inviteModsCheck.error, message: inviteModsCheck.message },
+          { status: inviteModsCheck.status },
+        );
+      }
+      const sanitizedInviteMods = inviteModsCheck.value;
       const invite: MultiplayerInviteRecord = {
         inviteId: generateInviteId(),
         roomId: body.roomId,
@@ -340,6 +400,7 @@ export class RoomDirectoryDO {
         playerCount: Math.max(0, Math.min(MAX_PLAYERS_PER_ROOM, Number(body.playerCount) || 1)),
         maxPlayers: Math.max(MIN_PLAYERS_PER_ROOM, Math.min(MAX_PLAYERS_PER_ROOM, Number(body.maxPlayers) || 8)),
         sentAt: now,
+        ...(sanitizedInviteMods ? { modMetadata: sanitizedInviteMods } : {}),
       };
       this.invites.set(invite.inviteId, invite);
       await this.persistInvites();
@@ -376,10 +437,20 @@ export class RoomDirectoryDO {
           ...inv,
           playerCount: room.playerCount,
           maxPlayers: room.maxPlayers,
+          ...(room.modMetadata ? { modMetadata: room.modMetadata } : inv.modMetadata ? { modMetadata: inv.modMetadata } : {}),
         });
       }
       matching.sort((a, b) => b.sentAt - a.sentAt);
       return Response.json({ ok: true, invites: matching });
+    }
+
+    if (request.method === 'GET' && url.pathname === '/invites/peek') {
+      const inviteId = (url.searchParams.get('inviteId') ?? '').trim();
+      const inv = inviteId ? this.invites.get(inviteId) : undefined;
+      if (!inv || now - inv.sentAt >= INVITE_TTL_MS) {
+        return Response.json({ ok: false, error: 'INVITE_NOT_FOUND' }, { status: 404 });
+      }
+      return Response.json({ ok: true, invite: inv });
     }
 
     if (request.method === 'POST' && url.pathname === '/invites/consume') {

@@ -15,10 +15,12 @@ import {
   parseRelayedPlayerStatePayload,
   pickAvatarColor,
   sanitizeChatText,
+  sanitizeProtocolWorldModMetadata,
   validateEntitySyncBatchPayload,
   validateGameEventPayload,
   validatePlayerReportPayload,
   validatePlayerStatePayload,
+  verifyMultiplayerModCompatibility,
   type AuthoritativePlayerVitals,
   type AuthoritativeProgressionState,
   type AuthoritativeRoomSnapshot,
@@ -46,6 +48,8 @@ import {
   type PlayerNetworkState,
   type PlayerReportReason,
   type PositionCorrectionPayload,
+  type ProtocolModCompatibilityReport,
+  type ProtocolWorldModMetadata,
   type ReportAckPayload,
   type RoomChatMessage,
   type RoomClosedPayload,
@@ -53,6 +57,7 @@ import {
   type WorldSettingsPermission,
   type WorldSettingsUpdatePayload,
 } from '../../../shared/multiplayerProtocol';
+import { getModManager } from '../mods';
 import {
   MultiplayerJoinError,
   MultiplayerServiceUnavailableError,
@@ -152,6 +157,12 @@ function mapJoinErrorCode(rawError?: string): MultiplayerJoinErrorCode {
       return 'PASSWORD_REQUIRED';
     case 'INVALID_PASSWORD':
       return 'INVALID_PASSWORD';
+    case 'MOD_INCOMPATIBLE':
+      return 'MOD_INCOMPATIBLE';
+    case 'INVALID_MOD_METADATA':
+      return 'INVALID_MOD_METADATA';
+    case 'MOD_METADATA_TOO_LARGE':
+      return 'MOD_METADATA_TOO_LARGE';
     default:
       return 'UNKNOWN';
   }
@@ -257,6 +268,8 @@ interface RoomSessionResponse {
   sessionToken?: string;
   resumeToken?: string;
   wsPath?: string;
+  modCompatibility?: ProtocolModCompatibilityReport;
+  hostModMetadata?: ProtocolWorldModMetadata;
 }
 
 function defaultWorldSettings(
@@ -309,6 +322,9 @@ function toRoomState(
     ...(snap.worldWeather ? { worldWeather: snap.worldWeather } : {}),
     ...(snap.serverTimestamp !== undefined ? { serverTimestamp: snap.serverTimestamp } : {}),
     ...(snap.gameState.modMetadata ? { modMetadata: snap.gameState.modMetadata } : {}),
+    ...(snap.gameState.modCompatibilityStatus
+      ? { modCompatibilityStatus: snap.gameState.modCompatibilityStatus }
+      : {}),
     players: snap.players.map((p) => ({
       id: p.playerId,
       ...(p.publicProfileId ? { publicProfileId: p.publicProfileId } : {}),
@@ -869,6 +885,41 @@ export class MultiplayerService implements IMultiplayerService {
     return toRoomState(data.room, this.localPlayerId);
   }
 
+  private async resolveSanitizedClientModMetadata(
+    overrideMeta?: ProtocolWorldModMetadata,
+  ): Promise<ProtocolWorldModMetadata | undefined> {
+    if (overrideMeta) {
+      return sanitizeProtocolWorldModMetadata(overrideMeta) ?? undefined;
+    }
+    const mm = getModManager();
+    await mm.initialize();
+    return (
+      sanitizeProtocolWorldModMetadata(mm.getActiveWorldModMetadata()) ?? undefined
+    );
+  }
+
+  private enrichLocalCompatibilityReport(
+    report: ProtocolModCompatibilityReport,
+  ): ProtocolModCompatibilityReport {
+    const localMods = getModManager().getSnapshot().mods;
+    const discoveredIds = new Set(localMods.map((m) => m.manifest.modId));
+    return {
+      ...report,
+      issues: report.issues.map((issue) =>
+        issue.code === 'missing_mod' && discoveredIds.has(issue.modId)
+          ? {
+              ...issue,
+              code: 'disabled_mod' as const,
+              actualVersion:
+                localMods.find((m) => m.manifest.modId === issue.modId)?.manifest.version ??
+                issue.actualVersion,
+              message: `Host requires mod "${issue.modName ?? issue.modId}" (${issue.modId} v${issue.expectedVersion ?? '?'}), which is installed locally but disabled.`,
+            }
+          : issue,
+      ),
+    };
+  }
+
   public async joinRoom(options: JoinRoomOptions): Promise<MultiplayerRoomState> {
     if (!this.workerBaseUrl) {
       throw new MultiplayerServiceUnavailableError(
@@ -876,11 +927,24 @@ export class MultiplayerService implements IMultiplayerService {
       );
     }
 
-    // 1. Explicitly verify room existence, capacity, and lock status before joining
+    // 1. Explicitly verify room existence, capacity, and host mod requirements before joining
     const verified = await this.verifyRoom(options.roomCodeOrId);
+    const clientModMetadata = await this.resolveSanitizedClientModMetadata(
+      options.clientModMetadata,
+    );
+    const preCheck = this.enrichLocalCompatibilityReport(
+      verifyMultiplayerModCompatibility(verified.modMetadata, clientModMetadata),
+    );
+    if (!preCheck.compatible) {
+      throw new MultiplayerJoinError('MOD_INCOMPATIBLE', preCheck.summary, {
+        modCompatibility: preCheck,
+        hostModMetadata: verified.modMetadata,
+      });
+    }
+
     const resumeToken = options.resumeToken ?? loadRoomResumeToken(verified.roomId);
 
-    // 2. Join the Durable Object room & obtain authenticated WebSocket ticket
+    // 2. Join the room & obtain authenticated WebSocket ticket
     const res = await fetch(`${this.workerBaseUrl}/api/multiplayer/rooms/join`, {
       method: 'POST',
       headers: {
@@ -889,6 +953,7 @@ export class MultiplayerService implements IMultiplayerService {
       },
       body: JSON.stringify({
         ...options,
+        ...(clientModMetadata ? { clientModMetadata } : {}),
         ...(resumeToken ? { resumeToken } : {}),
       }),
     });
@@ -902,6 +967,12 @@ export class MultiplayerService implements IMultiplayerService {
       throw new MultiplayerJoinError(
         errCode,
         data?.message || data?.error || 'ROOM NOT FOUND',
+        {
+          modCompatibility: data?.modCompatibility
+            ? this.enrichLocalCompatibilityReport(data.modCompatibility)
+            : undefined,
+          hostModMetadata: data?.hostModMetadata ?? verified.modMetadata,
+        },
       );
     }
 
@@ -919,7 +990,7 @@ export class MultiplayerService implements IMultiplayerService {
     this.emit({ type: 'chat-history', messages: [] });
     this.emit({ type: 'room-updated', room: roomState });
 
-    // 3. Connect WebSocket to Durable Object room so player is live in the player list
+    // 3. Connect WebSocket to room so player is live in the player list
     await this.connect({
       roomId: roomState.roomId,
       playerId: data.playerId,
@@ -937,6 +1008,7 @@ export class MultiplayerService implements IMultiplayerService {
       );
     }
 
+    const clientModMetadata = await this.resolveSanitizedClientModMetadata();
     const res = await fetch(
       `${this.workerBaseUrl}/api/multiplayer/rooms/quick-join`,
       {
@@ -945,12 +1017,32 @@ export class MultiplayerService implements IMultiplayerService {
           'content-type': 'application/json',
           ...AuthService.getBearerHeaders(),
         },
-        body: JSON.stringify({ playerName }),
+        body: JSON.stringify({
+          playerName,
+          ...(clientModMetadata ? { clientModMetadata } : {}),
+        }),
       },
     );
     const data = (await res.json().catch(() => null)) as RoomSessionResponse | null;
 
     if (!res.ok || !data?.ok || !data.room || !data.playerId || !data.sessionToken) {
+      const mappedErr = mapJoinErrorCode(data?.error);
+      if (
+        mappedErr === 'MOD_INCOMPATIBLE' ||
+        mappedErr === 'INVALID_MOD_METADATA' ||
+        mappedErr === 'MOD_METADATA_TOO_LARGE'
+      ) {
+        throw new MultiplayerJoinError(
+          mappedErr,
+          data?.message || 'No mod-compatible public rooms are available.',
+          {
+            modCompatibility: data?.modCompatibility
+              ? this.enrichLocalCompatibilityReport(data.modCompatibility)
+              : undefined,
+            hostModMetadata: data?.hostModMetadata,
+          },
+        );
+      }
       throw new Error(data?.message || data?.error || 'No open rooms available.');
     }
 
@@ -1665,13 +1757,18 @@ export class MultiplayerService implements IMultiplayerService {
     }
 
     const cleanedName = (playerName ?? loadSavedMultiplayerName('Adventurer')).trim() || 'Adventurer';
+    const clientModMetadata = await this.resolveSanitizedClientModMetadata();
     const res = await fetch(`${this.workerBaseUrl}/api/multiplayer/invites/accept`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         ...AuthService.getBearerHeaders(),
       },
-      body: JSON.stringify({ inviteId, playerName: cleanedName }),
+      body: JSON.stringify({
+        inviteId,
+        playerName: cleanedName,
+        ...(clientModMetadata ? { clientModMetadata } : {}),
+      }),
     });
     const data = (await res.json().catch(() => null)) as RoomSessionResponse | null;
 
@@ -1679,6 +1776,12 @@ export class MultiplayerService implements IMultiplayerService {
       throw new MultiplayerJoinError(
         mapJoinErrorCode(data?.error),
         data?.message || data?.error || 'ROOM NOT FOUND',
+        {
+          modCompatibility: data?.modCompatibility
+            ? this.enrichLocalCompatibilityReport(data.modCompatibility)
+            : undefined,
+          hostModMetadata: data?.hostModMetadata,
+        },
       );
     }
 
@@ -2096,6 +2199,7 @@ export class MultiplayerService implements IMultiplayerService {
               ...(snap.serverTimestamp !== undefined
                 ? { serverTimestamp: snap.serverTimestamp }
                 : {}),
+              ...(snap.modMetadata ? { modMetadata: snap.modMetadata } : {}),
             };
           }
           if (snap.partyState) {
@@ -2140,6 +2244,7 @@ export class MultiplayerService implements IMultiplayerService {
               worldTime?: AuthoritativeWorldTimeState;
               worldWeather?: AuthoritativeWorldWeatherState;
               requireAllReady?: boolean;
+              modMetadata?: ProtocolWorldModMetadata;
             }
           | undefined;
         const room = this.currentRoom;
@@ -2167,6 +2272,7 @@ export class MultiplayerService implements IMultiplayerService {
           typeof payload?.requireAllReady === 'boolean'
             ? payload.requireAllReady
             : (room?.requireAllReady ?? true);
+        const resolvedModMetadata = payload?.modMetadata ?? room?.modMetadata;
 
         if (this.currentRoom) {
           this.currentRoom = {
@@ -2180,6 +2286,7 @@ export class MultiplayerService implements IMultiplayerService {
             worldSettings,
             ...(worldTime ? { worldTime } : {}),
             ...(worldWeather ? { worldWeather } : {}),
+            ...(resolvedModMetadata ? { modMetadata: resolvedModMetadata } : {}),
             requireAllReady,
           };
           this.emit({ type: 'room-updated', room: this.currentRoom });
@@ -2202,7 +2309,7 @@ export class MultiplayerService implements IMultiplayerService {
           isHost: Boolean(room && this.localPlayerId && room.hostId === this.localPlayerId),
           localPlayerId: this.localPlayerId ?? '',
           players: this.currentRoom?.players ?? room?.players ?? [],
-          ...(room?.modMetadata ? { modMetadata: room.modMetadata } : {}),
+          ...(resolvedModMetadata ? { modMetadata: resolvedModMetadata } : {}),
         };
         this.authoritativeStartInfo = startInfo;
         this.emit({

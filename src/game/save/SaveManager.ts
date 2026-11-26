@@ -13,6 +13,7 @@ import {
   type SavedTimeState,
   type SavedWeatherState,
   type SavedWorldState,
+  type WorldSaveModSummary,
   type WorldType,
 } from './saveTypes';
 import type { SavedStoryState } from '../story/storyTypes';
@@ -25,6 +26,26 @@ import {
   persistWorldBundle,
 } from './LocalWorldStorage';
 import { migrateSaveData } from './saveMigrations';
+
+function deriveWorldModSummary(
+  modMetadata?: WorldModMetadataSnapshot,
+): WorldSaveModSummary {
+  if (!modMetadata) {
+    return { selectionMode: 'vanilla', enabledCount: 0, modIds: [] };
+  }
+  const enabledMods = (modMetadata.mods ?? []).filter((m) => m.enabled !== false);
+  const selectionMode: 'vanilla' | 'custom' =
+    modMetadata.selectionMode === 'vanilla' && enabledMods.length === 0
+      ? 'vanilla'
+      : modMetadata.selectionMode === 'custom' || (modMetadata.mods ?? []).length > 0
+        ? 'custom'
+        : 'vanilla';
+  return {
+    selectionMode,
+    enabledCount: enabledMods.length,
+    modIds: enabledMods.map((m) => m.modId),
+  };
+}
 
 const STORAGE_PREFIX = 'woa_save_v1_';
 const WORLD_INDEX_KEY = 'woa_world_ids_v1';
@@ -166,6 +187,7 @@ export class SaveManager {
       activeQuestsCount: source.quests.active.length,
       worldSeed: source.world.worldSeed,
       thumbnailDataUrl: source.thumbnailDataUrl,
+      modSummary: deriveWorldModSummary(source.modMetadata),
     };
 
     return {
@@ -260,5 +282,51 @@ export class SaveManager {
       // Ignore storage access errors
     }
     return null;
+  }
+
+  /**
+   * Updates only a world save's mod configuration & summary metadata without
+   * altering or dropping any player, inventory, quest, or building state.
+   */
+  public static updateSavedWorldModMetadata(
+    slotId: SaveSlotId,
+    nextMeta: WorldModMetadataSnapshot,
+  ): SaveGameData | null {
+    try {
+      const raw = localStorage.getItem(getSaveStorageKey(slotId));
+      if (!raw) return null;
+      const parsed: unknown = JSON.parse(raw);
+      const migrated = migrateSaveData(parsed);
+      if (!migrated) return null;
+
+      const updated: SaveGameData = {
+        ...migrated.data,
+        meta: {
+          ...migrated.data.meta,
+          modSummary: deriveWorldModSummary(nextMeta),
+        },
+        modMetadata: nextMeta,
+      };
+
+      const revalidated = migrateSaveData(updated);
+      if (!revalidated) return null;
+      const finalData = revalidated.data;
+
+      try {
+        localStorage.setItem(getSaveStorageKey(slotId), JSON.stringify(finalData));
+      } catch {
+        const leanData: SaveGameData = {
+          ...finalData,
+          meta: { ...finalData.meta, thumbnailDataUrl: undefined },
+        };
+        localStorage.setItem(getSaveStorageKey(slotId), JSON.stringify(leanData));
+      }
+
+      void persistWorldBundle(slotId, finalData);
+      SaveManager.cloudHooks.onSave?.(slotId);
+      return finalData;
+    } catch {
+      return null;
+    }
   }
 }

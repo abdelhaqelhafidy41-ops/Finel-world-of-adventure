@@ -43,6 +43,10 @@ import {
   sanitizeDisplayName,
   sanitizeRoomName,
   serverEnemyTypeMatches,
+  validateUntrustedProtocolModMetadata,
+  verifyMultiplayerModCompatibility,
+  type ProtocolRoomIncompatiblePlayerAttempt,
+  type ProtocolRoomModCompatibilityStatus,
   type AuthoritativePlayerVitals,
   type AuthoritativeProgressionState,
   type AuthoritativeRoomSnapshot,
@@ -71,6 +75,7 @@ import {
   type PlayerReportReason,
   type PlayerStatisticsRecord,
   type PositionCorrectionPayload,
+  type ProtocolWorldModMetadata,
   type ReportAckPayload,
   type RoomBuildingState,
   type RoomChatMessage,
@@ -149,6 +154,7 @@ interface StoredRoomLayer {
   lastPlayerJoinedAt: number | null;
   lastPlayerLeftAt: number | null;
   expiresAt: number;
+  modMetadata?: ProtocolWorldModMetadata;
 }
 
 interface ServerTrackedEntity {
@@ -213,6 +219,7 @@ interface StoredWorldLayer {
   >;
   buildingStates: Record<string, RoomBuildingState>;
   discoveredLandmarks: string[];
+  modMetadata?: ProtocolWorldModMetadata;
 }
 
 /**
@@ -574,6 +581,7 @@ export class MultiplayerRoomDO {
   private readonly lastCoopProgressAtByPlayer = new Map<string, number>();
   private readonly lastDistantPlayerRelayAt = new Map<string, number>();
   private readonly lastEntityTimeHeartbeatAt = new Map<string, number>();
+  private readonly incompatibleJoinAttempts: ProtocolRoomIncompatiblePlayerAttempt[] = [];
   private readonly securityLogger = new SecurityAuditLogger();
 
   constructor(ctx: CfDurableObjectState, env: CfEnv) {
@@ -1695,6 +1703,9 @@ export class MultiplayerRoomDO {
       itemCounts: { ...(pData.inventory.itemCounts ?? {}) },
       equippedWeaponId: pData.weapons.equippedWeaponId,
       partyState: this.buildPartyStateForPlayer(playerId),
+      ...((this.roomLayer?.modMetadata ?? world.modMetadata)
+        ? { modMetadata: this.roomLayer?.modMetadata ?? world.modMetadata }
+        : {}),
     };
   }
 
@@ -1702,6 +1713,7 @@ export class MultiplayerRoomDO {
     const rl = this.roomLayer!;
     const wl = this.ensureWorldLayer();
     const now = Date.now();
+    const resolvedMods = rl.modMetadata ?? wl.modMetadata;
     return {
       roomId: rl.roomId,
       roomCode: rl.roomCode,
@@ -1717,6 +1729,7 @@ export class MultiplayerRoomDO {
       worldWeather: this.materializeWorldWeather(now),
       locked: rl.permissions.locked,
       startedAt: wl.startedAt,
+      ...(resolvedMods ? { modMetadata: resolvedMods } : {}),
     };
   }
 
@@ -1802,6 +1815,21 @@ export class MultiplayerRoomDO {
       .sort((a, b) => a.joinedAt - b.joinedAt);
     const hostPlayer = rl.players[rl.hostPlayerId] ?? playerList[0] ?? null;
 
+    const resolvedMods = rl.modMetadata ?? wl?.modMetadata;
+    const modCompatibilityStatus: ProtocolRoomModCompatibilityStatus | undefined =
+      resolvedMods || this.incompatibleJoinAttempts.length > 0
+        ? {
+            requiredMods: (resolvedMods?.mods ?? []).filter(
+              (m) => (m.multiplayerCompatibility ?? 'required') !== 'client_only',
+            ),
+            compatiblePlayers: playerList.map((p) => ({
+              playerId: p.playerId,
+              displayName: p.displayName,
+              isHost: p.isHost,
+            })),
+            incompatiblePlayers: this.incompatibleJoinAttempts.slice(-20),
+          }
+        : undefined;
     const gameState: RoomGameState = {
       seed: wl?.worldSeed ?? 0,
       worldName: wl?.worldName ?? rl.roomName,
@@ -1817,6 +1845,8 @@ export class MultiplayerRoomDO {
       hasPassword: rl.permissions.hasPassword,
       startedAt: wl?.startedAt ?? null,
       tick: wl?.tick ?? 0,
+      ...(resolvedMods ? { modMetadata: resolvedMods } : {}),
+      ...(modCompatibilityStatus ? { modCompatibilityStatus } : {}),
     };
 
     return {
@@ -1887,6 +1917,7 @@ export class MultiplayerRoomDO {
           updatedAt: Date.now(),
           lastActivityAt: snap.lastActivityAt,
           expiresAt: snap.expiresAt,
+          ...(snap.gameState.modMetadata ? { modMetadata: snap.gameState.modMetadata } : {}),
         }),
       });
     } catch {
@@ -3043,6 +3074,25 @@ export class MultiplayerRoomDO {
         : generateSecureWorldSeed();
     const friendlyFire =
       typeof body.friendlyFire === 'boolean' ? body.friendlyFire : false;
+    const modMetaCheck = validateUntrustedProtocolModMetadata(body.modMetadata);
+    if (!modMetaCheck.ok) {
+      this.securityLogger.record({
+        category: 'PAYLOAD_TAMPER',
+        code: modMetaCheck.error,
+        severity: 'medium',
+        roomId: String(body.roomId || ''),
+        detail: modMetaCheck.message.slice(0, 120),
+      });
+      return Response.json(
+        {
+          ok: false,
+          error: modMetaCheck.error,
+          message: modMetaCheck.message,
+        },
+        { status: modMetaCheck.status },
+      );
+    }
+    const sanitizedModMetadata = modMetaCheck.value;
 
     this.roomLayer = {
       roomId: body.roomId,
@@ -3073,6 +3123,7 @@ export class MultiplayerRoomDO {
       lastPlayerJoinedAt: now,
       lastPlayerLeftAt: null,
       expiresAt: now + ROOM_INACTIVE_TIMEOUT_MS,
+      ...(sanitizedModMetadata ? { modMetadata: sanitizedModMetadata } : {}),
     };
 
     this.worldLayer = this.makeDefaultWorldLayer(
@@ -3083,6 +3134,9 @@ export class MultiplayerRoomDO {
       now,
       friendlyFire,
     );
+    if (sanitizedModMetadata) {
+      this.worldLayer.modMetadata = sanitizedModMetadata;
+    }
     this.sharedObjectsLayer = this.makeDefaultSharedObjectsLayer();
     this.chatLayer = this.makeDefaultChatLayer();
     this.partyLayer = this.makeDefaultPartyLayer();
@@ -3220,6 +3274,78 @@ export class MultiplayerRoomDO {
           { status: 403 },
         );
       }
+    }
+
+    const hostModMetadata = rl.modMetadata ?? this.worldLayer?.modMetadata;
+    const clientModCheck = validateUntrustedProtocolModMetadata(
+      body.clientModMetadata,
+    );
+    if (!clientModCheck.ok) {
+      const attemptName = sanitizeDisplayName(
+        typeof body.playerName === 'string' ? body.playerName : undefined,
+        'Player',
+      );
+      this.incompatibleJoinAttempts.push({
+        playerName: attemptName,
+        attemptedAt: Date.now(),
+        reason: clientModCheck.message,
+        issues: [],
+      });
+      if (this.incompatibleJoinAttempts.length > 20) {
+        this.incompatibleJoinAttempts.splice(0, this.incompatibleJoinAttempts.length - 20);
+      }
+      this.securityLogger.record({
+        category: 'PAYLOAD_TAMPER',
+        code: clientModCheck.error,
+        severity: 'medium',
+        roomId: rl.roomId,
+        detail: clientModCheck.message.slice(0, 120),
+      });
+      return Response.json(
+        {
+          ok: false,
+          error: clientModCheck.error,
+          message: clientModCheck.message,
+        },
+        { status: clientModCheck.status },
+      );
+    }
+    const clientModMetadata = clientModCheck.value;
+    const modCompatibility = verifyMultiplayerModCompatibility(
+      hostModMetadata,
+      clientModMetadata,
+    );
+    if (!modCompatibility.compatible) {
+      const attemptName = sanitizeDisplayName(
+        typeof body.playerName === 'string' ? body.playerName : undefined,
+        'Player',
+      );
+      this.incompatibleJoinAttempts.push({
+        playerName: attemptName,
+        attemptedAt: Date.now(),
+        reason: modCompatibility.summary,
+        issues: modCompatibility.issues,
+      });
+      if (this.incompatibleJoinAttempts.length > 20) {
+        this.incompatibleJoinAttempts.splice(0, this.incompatibleJoinAttempts.length - 20);
+      }
+      this.securityLogger.record({
+        category: 'PAYLOAD_TAMPER',
+        code: 'MOD_COMPATIBILITY_REJECTED',
+        severity: 'low',
+        roomId: rl.roomId,
+        detail: modCompatibility.summary.slice(0, 120),
+      });
+      return Response.json(
+        {
+          ok: false,
+          error: 'MOD_INCOMPATIBLE',
+          message: modCompatibility.summary,
+          modCompatibility,
+          ...(hostModMetadata ? { hostModMetadata } : {}),
+        },
+        { status: 409 },
+      );
     }
 
     const verifiedIdentity =

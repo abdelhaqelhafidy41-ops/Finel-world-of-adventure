@@ -34,6 +34,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -44,6 +45,9 @@ import org.json.JSONObject;
  */
 public class LanMultiplayerServer {
     private static final java.util.Set<String> VALID_WEATHER_STATES = new java.util.HashSet<>(java.util.Arrays.asList("clear", "rain", "storm", "snow", "fog", "cloudy", "windy", "sandstorm", "blizzard", "thunderstorm"));
+    private static final int CURRENT_MOD_API_VERSION = 1;
+    private static final Pattern SAFE_MOD_ID_PATTERN = Pattern.compile("^[a-z0-9][a-z0-9._-]{1,63}$", Pattern.CASE_INSENSITIVE);
+    private static final Set<String> VALID_MOD_COMPAT_MODES = new HashSet<>(java.util.Arrays.asList("required", "optional", "client_only"));
 
     public static final int MAX_LAN_PLAYERS = 4;
     public static final int DEFAULT_LAN_PORT = 41234;
@@ -333,6 +337,7 @@ public class LanMultiplayerServer {
         long createdAt;
         String worldSettingsPermission = "HOST_ONLY";
         boolean friendlyFire = false;
+        JSONObject modMetadata = null;
         JSONObject worldTime;
         JSONObject worldWeather;
         final Map<String, PlayerRecord> players = new LinkedHashMap<>();
@@ -482,6 +487,193 @@ public class LanMultiplayerServer {
         String cleaned = raw.replaceAll("[\\x00-\\x1F\\x7F<>]", "").trim();
         if (cleaned.length() > maxLen) cleaned = cleaned.substring(0, maxLen);
         return cleaned.isEmpty() ? fallback : cleaned;
+    }
+
+    private JSONObject sanitizeModMetadata(JSONObject raw) {
+        if (raw == null) return null;
+        try {
+            int modApiVersion = Math.max(1, Math.min(999, raw.optInt("modApiVersion", CURRENT_MOD_API_VERSION)));
+            int schemaVersion = Math.max(1, Math.min(999, raw.optInt("schemaVersion", 1)));
+            String savedAtGameVersion = sanitizeText(raw.optString("savedAtGameVersion", "1.0.0"), 24, "1.0.0");
+            JSONArray rawMods = raw.optJSONArray("mods");
+            Map<String, JSONObject> modsById = new java.util.TreeMap<>();
+            if (rawMods != null) {
+                for (int i = 0; i < rawMods.length() && modsById.size() < 128; i++) {
+                    JSONObject entry = rawMods.optJSONObject(i);
+                    if (entry == null) continue;
+                    String modId = entry.optString("modId", "").trim();
+                    if (modId.length() > 64) modId = modId.substring(0, 64);
+                    if (modId.isEmpty() || !SAFE_MOD_ID_PATTERN.matcher(modId).matches()) continue;
+                    String compat = entry.optString("multiplayerCompatibility", "required").trim();
+                    if (!VALID_MOD_COMPAT_MODES.contains(compat)) compat = "required";
+                    int entryApi = Math.max(1, Math.min(999, entry.optInt("modApiVersion", modApiVersion)));
+                    int entrySchema = Math.max(1, Math.min(999, entry.optInt("schemaVersion", schemaVersion)));
+                    JSONObject clean = new JSONObject();
+                    clean.put("modId", modId);
+                    clean.put("name", sanitizeText(entry.optString("name", modId), 64, modId));
+                    clean.put("version", sanitizeText(entry.optString("version", "1.0.0"), 32, "1.0.0"));
+                    clean.put("modApiVersion", entryApi);
+                    clean.put("schemaVersion", entrySchema);
+                    clean.put("multiplayerCompatibility", compat);
+                    modsById.put(modId, clean);
+                }
+            }
+            JSONArray cleanMods = new JSONArray();
+            for (JSONObject m : modsById.values()) cleanMods.put(m);
+            JSONObject out = new JSONObject();
+            out.put("modApiVersion", modApiVersion);
+            out.put("schemaVersion", schemaVersion);
+            out.put("savedAtGameVersion", savedAtGameVersion);
+            out.put("mods", cleanMods);
+            return out;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private JSONObject verifyModCompatibility(JSONObject rawHostMeta, JSONObject rawClientMeta) throws Exception {
+        JSONObject hostMeta = sanitizeModMetadata(rawHostMeta);
+        JSONObject clientMeta = sanitizeModMetadata(rawClientMeta);
+        JSONArray issues = new JSONArray();
+        JSONArray hostMods = hostMeta != null && hostMeta.optJSONArray("mods") != null ? hostMeta.optJSONArray("mods") : new JSONArray();
+        JSONArray clientMods = clientMeta != null && clientMeta.optJSONArray("mods") != null ? clientMeta.optJSONArray("mods") : new JSONArray();
+
+        int hostRequiredCount = 0;
+        for (int i = 0; i < hostMods.length(); i++) {
+            JSONObject hm = hostMods.optJSONObject(i);
+            if (hm != null && !"client_only".equals(hm.optString("multiplayerCompatibility", "required"))) {
+                hostRequiredCount++;
+            }
+        }
+
+        Map<String, JSONObject> clientById = new HashMap<>();
+        for (int i = 0; i < clientMods.length(); i++) {
+            JSONObject cm = clientMods.optJSONObject(i);
+            if (cm != null) clientById.put(cm.optString("modId"), cm);
+        }
+
+        if (hostMeta != null) {
+            int hostApi = hostMeta.optInt("modApiVersion", CURRENT_MOD_API_VERSION);
+            int hostSchema = hostMeta.optInt("schemaVersion", 1);
+            if (hostApi > CURRENT_MOD_API_VERSION) {
+                JSONObject issue = new JSONObject();
+                issue.put("modId", "__mod_api__");
+                issue.put("code", "api_version_mismatch");
+                issue.put("expectedVersion", "<= v" + CURRENT_MOD_API_VERSION);
+                issue.put("actualVersion", "v" + hostApi);
+                issue.put("message", "Host requires Mod API v" + hostApi + " (supported <= v" + CURRENT_MOD_API_VERSION + ").");
+                issues.put(issue);
+            }
+            if (hostSchema != 1) {
+                JSONObject issue = new JSONObject();
+                issue.put("modId", "__mod_schema__");
+                issue.put("code", "schema_version_mismatch");
+                issue.put("expectedVersion", "1");
+                issue.put("actualVersion", String.valueOf(hostSchema));
+                issue.put("message", "Host uses unsupported mod schema v" + hostSchema + ".");
+                issues.put(issue);
+            }
+        }
+
+        Set<String> hostRequiredIds = new HashSet<>();
+        for (int i = 0; i < hostMods.length(); i++) {
+            JSONObject hm = hostMods.optJSONObject(i);
+            if (hm == null) continue;
+            String compat = hm.optString("multiplayerCompatibility", "required");
+            if ("client_only".equals(compat)) continue;
+            String modId = hm.optString("modId", "");
+            String modName = hm.optString("name", modId);
+            String hostVer = hm.optString("version", "1.0.0");
+            hostRequiredIds.add(modId);
+
+            JSONObject cm = clientById.get(modId);
+            if (cm == null) {
+                if ("required".equals(compat)) {
+                    JSONObject issue = new JSONObject();
+                    issue.put("modId", modId);
+                    issue.put("modName", modName);
+                    issue.put("code", "missing_mod");
+                    issue.put("expectedVersion", hostVer);
+                    issue.put("message", "Missing required mod \"" + modName + "\" (" + modId + " v" + hostVer + ").");
+                    issues.put(issue);
+                }
+                continue;
+            }
+            String clientVer = cm.optString("version", "1.0.0");
+            if ("required".equals(compat) && !hostVer.equals(clientVer)) {
+                JSONObject issue = new JSONObject();
+                issue.put("modId", modId);
+                issue.put("modName", modName);
+                issue.put("code", "version_mismatch");
+                issue.put("expectedVersion", hostVer);
+                issue.put("actualVersion", clientVer);
+                issue.put("message", "Mod \"" + modName + "\" version mismatch (host v" + hostVer + ", local v" + clientVer + ").");
+                issues.put(issue);
+            }
+            int hApi = hm.optInt("modApiVersion", CURRENT_MOD_API_VERSION);
+            int cApi = cm.optInt("modApiVersion", CURRENT_MOD_API_VERSION);
+            if (hApi != cApi) {
+                JSONObject issue = new JSONObject();
+                issue.put("modId", modId);
+                issue.put("modName", modName);
+                issue.put("code", "api_version_mismatch");
+                issue.put("expectedVersion", "v" + hApi);
+                issue.put("actualVersion", "v" + cApi);
+                issue.put("message", "Mod \"" + modName + "\" API version mismatch (host v" + hApi + ", local v" + cApi + ").");
+                issues.put(issue);
+            }
+            int hSchema = hm.optInt("schemaVersion", 1);
+            int cSchema = cm.optInt("schemaVersion", 1);
+            if (hSchema != cSchema) {
+                JSONObject issue = new JSONObject();
+                issue.put("modId", modId);
+                issue.put("modName", modName);
+                issue.put("code", "schema_version_mismatch");
+                issue.put("expectedVersion", "v" + hSchema);
+                issue.put("actualVersion", "v" + cSchema);
+                issue.put("message", "Mod \"" + modName + "\" schema version mismatch (host v" + hSchema + ", local v" + cSchema + ").");
+                issues.put(issue);
+            }
+        }
+
+        for (int i = 0; i < clientMods.length(); i++) {
+            JSONObject cm = clientMods.optJSONObject(i);
+            if (cm == null) continue;
+            if (!"required".equals(cm.optString("multiplayerCompatibility", "required"))) continue;
+            String modId = cm.optString("modId", "");
+            if (!hostRequiredIds.contains(modId)) {
+                String modName = cm.optString("name", modId);
+                String clientVer = cm.optString("version", "1.0.0");
+                JSONObject issue = new JSONObject();
+                issue.put("modId", modId);
+                issue.put("modName", modName);
+                issue.put("code", "extra_active_mod");
+                if (hostRequiredCount == 0) issue.put("expectedVersion", "Vanilla (None)");
+                issue.put("actualVersion", clientVer);
+                issue.put("message", hostRequiredCount == 0
+                        ? "Host is running a Vanilla world. Disable active gameplay mod \"" + modName + "\" (" + modId + ") to join."
+                        : "Local gameplay mod \"" + modName + "\" (" + modId + " v" + clientVer + ") is not active on the host.");
+                issues.put(issue);
+            }
+        }
+
+        boolean compatible = issues.length() == 0;
+        String summary;
+        if (!compatible) {
+            String firstMsg = issues.optJSONObject(0) != null ? issues.optJSONObject(0).optString("message", "Mod mismatch") : "Mod mismatch";
+            summary = issues.length() == 1 ? firstMsg : (issues.length() + " mod compatibility issues detected: " + firstMsg);
+        } else if (hostRequiredCount == 0) {
+            summary = "Vanilla compatible.";
+        } else {
+            summary = "Mod configuration is compatible.";
+        }
+
+        JSONObject report = new JSONObject();
+        report.put("compatible", compatible);
+        report.put("summary", summary);
+        report.put("hostModCount", hostRequiredCount);
+        report.put("issues", issues);
+        return report;
     }
 
     public String startHostJson(int preferredPort, String roomOptionsJson) {
@@ -972,6 +1164,9 @@ public class LanMultiplayerServer {
         ws.put("serverTimestamp", now);
         ws.put("partyState", buildPartySnapshotForPlayer(playerId));
         ws.put("coopQuests", new JSONArray());
+        if (room.modMetadata != null) {
+            ws.put("modMetadata", new JSONObject(room.modMetadata.toString()));
+        }
 
         JSONArray bossArr = new JSONArray();
         for (JSONObject b : room.bossEncounters.values()) {
@@ -1271,6 +1466,9 @@ public class LanMultiplayerServer {
                         announce.put("playerCount", room.players.size());
                         announce.put("maxPlayers", MAX_LAN_PLAYERS);
                         announce.put("status", room.status);
+                        if (room.modMetadata != null) {
+                            announce.put("modMetadata", new JSONObject(room.modMetadata.toString()));
+                        }
                     }
                     byte[] resp = announce.toString().getBytes(StandardCharsets.UTF_8);
                     ds.send(new DatagramPacket(resp, resp.length, pkt.getAddress(), pkt.getPort()));
@@ -1357,6 +1555,9 @@ public class LanMultiplayerServer {
                     res.put("roomName", room != null ? room.roomName : JSONObject.NULL);
                     res.put("hostName", room != null ? room.hostName : JSONObject.NULL);
                     res.put("status", room != null ? room.status : "idle");
+                    if (room != null && room.modMetadata != null) {
+                        res.put("modMetadata", new JSONObject(room.modMetadata.toString()));
+                    }
                 }
                 sendHttp(out, 200, res.toString());
             } else if ("GET".equalsIgnoreCase(method) && "/api/multiplayer/rooms".equals(path)) {
@@ -1520,6 +1721,7 @@ public class LanMultiplayerServer {
             r.hostId = randomId("pl", 8);
             r.status = "waiting";
             r.createdAt = System.currentTimeMillis();
+            r.modMetadata = sanitizeModMetadata(options.optJSONObject("modMetadata"));
 
             JSONObject optTime = options.optJSONObject("worldTime");
             r.worldTime = new JSONObject();
@@ -1693,6 +1895,19 @@ public class LanMultiplayerServer {
                 res.put("ok", false);
                 res.put("error", "ROOM_FULL");
                 res.put("message", "LAN GAME FULL (4 / 4 players).");
+                return res;
+            }
+
+            JSONObject modCompat = verifyModCompatibility(room.modMetadata, options.optJSONObject("clientModMetadata"));
+            if (!modCompat.optBoolean("compatible", true)) {
+                res.put("_status", 409);
+                res.put("ok", false);
+                res.put("error", "MOD_INCOMPATIBLE");
+                res.put("message", modCompat.optString("summary", "Mod configuration is incompatible."));
+                res.put("modCompatibility", modCompat);
+                if (room.modMetadata != null) {
+                    res.put("hostModMetadata", new JSONObject(room.modMetadata.toString()));
+                }
                 return res;
             }
 
@@ -3414,6 +3629,9 @@ public class LanMultiplayerServer {
         start.put("worldTime", snap.optJSONObject("worldTime"));
         start.put("worldWeather", snap.optJSONObject("worldWeather"));
         start.put("requireAllReady", false);
+        if (room.modMetadata != null) {
+            start.put("modMetadata", new JSONObject(room.modMetadata.toString()));
+        }
         start.put("room", snap);
         return start;
     }
@@ -3479,6 +3697,9 @@ public class LanMultiplayerServer {
         gameState.put("worldSettings", worldSettings);
         gameState.put("locked", false);
         gameState.put("hasPassword", false);
+        if (room.modMetadata != null) {
+            gameState.put("modMetadata", new JSONObject(room.modMetadata.toString()));
+        }
         snap.put("gameState", gameState);
         return snap;
     }

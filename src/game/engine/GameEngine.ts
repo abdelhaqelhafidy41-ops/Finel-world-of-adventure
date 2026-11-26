@@ -118,6 +118,8 @@ import type {
   NewWorldOptions,
   SaveGameData,
   SaveGameMeta,
+  SavedInventorySlot,
+  SavedQuestActiveEntry,
   SaveSlotId,
   SaveSlotSummary,
   WorldType,
@@ -212,6 +214,7 @@ import type {
 import {
   getModManager,
   type WorldModMetadataSnapshot,
+  type WorldModSelectionEntry,
 } from '../mods';
 
 export interface EngineCallbacks {
@@ -398,6 +401,12 @@ export class GameEngine {
   private activeWorldCreatedAtMs = Date.now();
   private hasUnsavedProgress = false;
   private unsavedTimer = 0;
+  private safeRecoveryModeActive = false;
+  private worldPreservedModMetadata: WorldModMetadataSnapshot | null = null;
+  private preservedUnloadedInventorySlots: SavedInventorySlot[] = [];
+  private preservedUnloadedActiveQuests: SavedQuestActiveEntry[] = [];
+  private preservedUnloadedCompletedQuests: string[] = [];
+  private preservedUnloadedBuildings: SavedPlayerBuilding[] = [];
   private multiplayerSessionActive = false;
   private authoritativeMultiplayerConfig: {
     seed: number;
@@ -4872,6 +4881,54 @@ export class GameEngine {
     const pos = this.controller.position;
     const camRot = this.controller.getCameraRotation();
     const worldExport = this.world.exportImportantState();
+    const exportedInventory = this.inventoryManager.exportState();
+    const occupiedSlots = new Set(exportedInventory.slots.map((s) => s.slotIndex));
+    const mergedSlots = [
+      ...exportedInventory.slots,
+      ...this.preservedUnloadedInventorySlots
+        .filter((s) => !occupiedSlots.has(s.slotIndex))
+        .map((s) => ({ ...s })),
+    ];
+
+    const exportedQuests = this.dialogueEngine.quests.exportState();
+    const activeQuestIds = new Set(exportedQuests.active.map((q) => q.questId));
+    const completedQuestSet = new Set([
+      ...exportedQuests.completed,
+      ...this.preservedUnloadedCompletedQuests,
+    ]);
+    const mergedActiveQuests = [
+      ...exportedQuests.active,
+      ...this.preservedUnloadedActiveQuests
+        .filter((q) => !activeQuestIds.has(q.questId) && !completedQuestSet.has(q.questId))
+        .map((q) => ({ ...q })),
+    ];
+
+    const buildingIds = new Set((worldExport.playerBuildings ?? []).map((b) => b.id));
+    const mergedBuildings = [
+      ...(worldExport.playerBuildings ?? []),
+      ...this.preservedUnloadedBuildings
+        .filter((b) => !buildingIds.has(b.id))
+        .map((b) => ({ ...b })),
+    ];
+
+    const currentModMeta = getModManager().getActiveWorldModMetadata();
+    const mergedModMetadata: WorldModMetadataSnapshot = (() => {
+      if (
+        !this.worldPreservedModMetadata ||
+        currentModMeta.selectionMode === 'vanilla'
+      ) {
+        return currentModMeta;
+      }
+      const presentIds = new Set(currentModMeta.mods.map((m) => m.modId));
+      const extras = this.worldPreservedModMetadata.mods.filter(
+        (m) => !presentIds.has(m.modId),
+      );
+      if (extras.length === 0) return currentModMeta;
+      return {
+        ...currentModMeta,
+        mods: [...currentModMeta.mods, ...extras],
+      };
+    })();
 
     return {
       worldId: this.activeSaveSlot,
@@ -4901,9 +4958,16 @@ export class GameEngine {
         xp: this.playerXp,
         coins: this.playerCoins,
       },
-      inventory: this.inventoryManager.exportState(),
+      inventory: {
+        ...exportedInventory,
+        slots: mergedSlots,
+      },
       crafting: this.craftingManager.exportState(),
-      quests: this.dialogueEngine.quests.exportState(),
+      quests: {
+        ...exportedQuests,
+        active: mergedActiveQuests,
+        completed: Array.from(completedQuestSet),
+      },
       story: this.storyManager.exportState(),
       sideQuests: this.sideQuestManager.exportState(),
       villageDev: this.world.villageDev.exportState(this.world.farmAnimals),
@@ -4930,7 +4994,7 @@ export class GameEngine {
         fogOfWar: this.mapManager.exportFogState(),
         waypoint: this.waypoint ? { ...this.waypoint } : null,
         npcStates: this.world.npcs.exportSaveNpcStates(),
-        playerBuildings: worldExport.playerBuildings,
+        playerBuildings: mergedBuildings,
       },
       camera: {
         ...this.cameraSettings,
@@ -4942,7 +5006,7 @@ export class GameEngine {
       audio: {
         footstepVolume: this.footstepVolume,
       },
-      modMetadata: getModManager().getActiveWorldModMetadata(),
+      modMetadata: mergedModMetadata,
     };
   }
 
@@ -4950,11 +5014,16 @@ export class GameEngine {
     return this.multiplayerSessionActive;
   }
 
+  public isSafeRecoveryMode(): boolean {
+    return this.safeRecoveryModeActive;
+  }
+
   public isLanTransportActive(): boolean {
     return this.multiplayerService?.getActiveMode?.() === 'lan';
   }
 
   public canPersistLocalWorld(): boolean {
+    if (this.safeRecoveryModeActive) return false;
     if (!this.multiplayerSessionActive) return true;
     return this.isLanTransportActive() && this.isLocalMultiplayerHost();
   }
@@ -4986,7 +5055,20 @@ export class GameEngine {
   }
 
   public saveToSlot(slotId: SaveSlotId, silent = false): boolean {
-    if (!this.controller || !this.world || !this.canPersistLocalWorld()) return false;
+    if (!this.controller || !this.world) return false;
+    if (this.safeRecoveryModeActive && !this.multiplayerSessionActive) {
+      if (slotId === this.activeSaveSlot || slotId === 'autosave') {
+        if (!silent) {
+          this.callbacks.onWorldNotice(
+            UI_TEXT[this.language].modsSafeRecoveryReadOnlyNotice,
+          );
+        }
+        return false;
+      }
+    } else if (!this.canPersistLocalWorld()) {
+      return false;
+    }
+
     const res = this.saveManager.saveToSlot(
       slotId,
       this.captureSaveSource(!silent),
@@ -4997,7 +5079,7 @@ export class GameEngine {
       }
       return false;
     }
-    if (slotId !== 'autosave') {
+    if (slotId !== 'autosave' && !this.safeRecoveryModeActive) {
       this.activeSaveSlot = slotId;
       if (this.multiplayerSessionActive && this.canPersistLocalWorld()) {
         this.hostLanWorldSlotId = slotId;
@@ -5015,6 +5097,12 @@ export class GameEngine {
   }
 
   public quickSave(): boolean {
+    if (this.safeRecoveryModeActive) {
+      this.callbacks.onWorldNotice(
+        UI_TEXT[this.language].modsSafeRecoveryReadOnlyNotice,
+      );
+      return false;
+    }
     return this.saveCurrentWorld(false);
   }
 
@@ -7025,7 +7113,22 @@ export class GameEngine {
     this.isSleeping = false;
     this.sleepTimer = 0;
 
-    // 1. Restore inventory & equipped bonuses before clamping player vitals
+    // 1. Capture any unloaded modded slots/quests/buildings before restoring active registries
+    this.worldPreservedModMetadata = data.modMetadata ?? null;
+    this.preservedUnloadedInventorySlots = (data.inventory?.slots ?? []).filter(
+      (s) => !this.itemManager.getItem(s.itemId),
+    );
+    this.preservedUnloadedCompletedQuests = (data.quests?.completed ?? []).filter(
+      (qId) => !getQuestDefinition(qId),
+    );
+    this.preservedUnloadedActiveQuests = (data.quests?.active ?? []).filter(
+      (q) => !getQuestDefinition(q.questId),
+    );
+    this.preservedUnloadedBuildings = (data.world?.playerBuildings ?? []).filter(
+      (b) => !getBlueprintById(b.blueprintId),
+    );
+
+    // Restore inventory & equipped bonuses before clamping player vitals
     this.inventoryManager.restoreState(data.inventory);
     this.craftingManager.restoreState(data.crafting);
     this.syncEquipmentBonuses();
@@ -7161,18 +7264,48 @@ export class GameEngine {
     this.emitHud();
   }
 
-  public async loadFromSlot(slotId: SaveSlotId): Promise<boolean> {
+  public async loadFromSlot(
+    slotId: SaveSlotId,
+    loadOptions?: {
+      safeRecoveryMode?: boolean;
+      overrideModSelection?: {
+        selectionMode: 'vanilla' | 'custom';
+        selectedMods: WorldModSelectionEntry[];
+      };
+    },
+  ): Promise<boolean> {
     if (this.multiplayerSessionActive) return false;
-    await getModManager().initialize();
-    const res = this.loadManager.loadSlot(slotId);
+    const modMgr = getModManager();
+    await modMgr.initialize();
+    const res = await this.loadManager.loadSlotAsync(slotId);
     if (!res.ok) {
       this.callbacks.onWorldNotice(UI_TEXT[this.language].loadFailedNotice);
       return false;
     }
 
-    const saveCompat = getModManager().evaluateSaveCompatibility(
-      res.data.modMetadata,
-    );
+    const selectionToApply = loadOptions?.overrideModSelection
+      ? loadOptions.overrideModSelection
+      : res.data.modMetadata
+        ? {
+            selectionMode:
+              res.data.modMetadata.selectionMode === 'vanilla' &&
+              !res.data.modMetadata.mods.some((m) => m.enabled !== false)
+                ? ('vanilla' as const)
+                : res.data.modMetadata.mods.length > 0
+                  ? ('custom' as const)
+                  : ('vanilla' as const),
+            selectedMods: res.data.modMetadata.mods.map((m, idx) => ({
+              modId: m.modId,
+              enabled: m.enabled !== false,
+              loadOrder: m.loadOrder ?? idx,
+            })),
+          }
+        : { selectionMode: 'vanilla' as const, selectedMods: [] };
+
+    await modMgr.applyWorldModSelection(selectionToApply);
+
+    const saveCompat = modMgr.evaluateSaveCompatibility(res.data.modMetadata);
+    this.safeRecoveryModeActive = Boolean(loadOptions?.safeRecoveryMode);
 
     this.sound.unlock();
     this.sound.playUiClick();
@@ -7193,13 +7326,15 @@ export class GameEngine {
       this.input?.requestPointerLock();
     }
     this.callbacks.onWorldNotice(
-      saveCompat.hasWarnings
-        ? UI_TEXT[this.language].modsCompatWarningNotice(
-            saveCompat.issues.filter((i) => i.severity !== 'info').length,
-          )
-        : UI_TEXT[this.language].loadedNotice(
-            res.data.meta.worldName || this.getSlotDisplayName(slotId),
-          ),
+      this.safeRecoveryModeActive
+        ? UI_TEXT[this.language].modsSafeRecoveryEnteredNotice
+        : saveCompat.hasWarnings
+          ? UI_TEXT[this.language].modsCompatWarningNotice(
+              saveCompat.issues.filter((i) => i.severity !== 'info').length,
+            )
+          : UI_TEXT[this.language].loadedNotice(
+              res.data.meta.worldName || this.getSlotDisplayName(slotId),
+            ),
     );
     return true;
   }
@@ -7212,6 +7347,12 @@ export class GameEngine {
 
   public async createNewWorld(options: NewWorldOptions): Promise<boolean> {
     this.multiplayerSessionActive = false;
+    this.safeRecoveryModeActive = false;
+    this.worldPreservedModMetadata = null;
+    this.preservedUnloadedInventorySlots = [];
+    this.preservedUnloadedActiveQuests = [];
+    this.preservedUnloadedCompletedQuests = [];
+    this.preservedUnloadedBuildings = [];
     this.authoritativeMultiplayerConfig = null;
     this.teardownMultiplayerSync();
     const worldId = generateWorldId();
@@ -7223,7 +7364,20 @@ export class GameEngine {
     this.sound.unlock();
     this.sound.playUiClick();
     this.endNpcDialogue();
-    await getModManager().initialize();
+    const modMgr = getModManager();
+    await modMgr.initialize();
+    if (options.modMode === 'vanilla') {
+      await modMgr.applyWorldModSelection({
+        selectionMode: 'vanilla',
+        selectedMods: [],
+      });
+    } else if (options.modMode === 'modded') {
+      await modMgr.applyWorldModSelection({
+        selectionMode: 'custom',
+        selectedMods: options.selectedMods ?? [],
+      });
+    }
+    this.worldPreservedModMetadata = modMgr.getActiveWorldModMetadata();
 
     const loaded = await this.ensureWorldRuntimeLoaded(seed, { x: 0, z: 4 });
     if (!loaded || !this.controller || !this.world) return false;
@@ -7347,7 +7501,14 @@ export class GameEngine {
     savedWorldData?: SaveGameData | null;
   }): Promise<boolean> {
     this.multiplayerSessionActive = true;
+    this.safeRecoveryModeActive = false;
+    this.worldPreservedModMetadata = null;
+    this.preservedUnloadedInventorySlots = [];
+    this.preservedUnloadedActiveQuests = [];
+    this.preservedUnloadedCompletedQuests = [];
+    this.preservedUnloadedBuildings = [];
     await getModManager().initialize();
+    await getModManager().clearWorldModScope();
     const room = this.multiplayerService?.getRoomState();
     const localId =
       options.localPlayerId ?? this.multiplayerService?.getLocalPlayerId() ?? null;
@@ -7364,6 +7525,15 @@ export class GameEngine {
       mpMode,
       remoteModMeta,
     );
+    if (!mpCompat.compatible) {
+      const firstErr = mpCompat.issues.find((i) => i.severity === 'error');
+      this.multiplayerSessionActive = false;
+      this.multiplayerService?.disconnect();
+      this.callbacks.onWorldNotice(
+        firstErr?.message ?? UI_TEXT[this.language].mpModCompatMismatchTitle,
+      );
+      return false;
+    }
     if (mpCompat.hasWarnings) {
       const warnCount = mpCompat.issues.filter((i) => i.severity !== 'info').length;
       if (warnCount > 0) {
@@ -7698,6 +7868,13 @@ export class GameEngine {
 
   public returnToMainMenu(): void {
     this.multiplayerSessionActive = false;
+    this.safeRecoveryModeActive = false;
+    this.worldPreservedModMetadata = null;
+    this.preservedUnloadedInventorySlots = [];
+    this.preservedUnloadedActiveQuests = [];
+    this.preservedUnloadedCompletedQuests = [];
+    this.preservedUnloadedBuildings = [];
+    void getModManager().clearWorldModScope();
     this.hostLanWorldSlotId = null;
     this.authoritativeMultiplayerConfig = null;
     this.teardownMultiplayerSync();
@@ -10381,6 +10558,7 @@ export class GameEngine {
       nearbyPlayerStructureId: !this.buildModeActive
         ? (this.world.buildings.getNearestManageableStructure(pos.x, pos.y, pos.z, 5.2)?.id ?? null)
         : null,
+      safeRecoveryMode: this.safeRecoveryModeActive || undefined,
     });
   }
 

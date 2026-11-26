@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
+  Boxes,
   Check,
   CheckCircle2,
   Compass,
@@ -42,6 +43,12 @@ import {
 } from '../../game/multiplayer/MultiplayerService';
 import { isSwitchingMultiplayerTransport } from '../../game/multiplayer/MultiplayerTransport';
 import { copyTextToClipboard } from '../../game/multiplayer/inviteUtils';
+import {
+  sanitizeProtocolWorldModMetadata,
+  verifyMultiplayerModCompatibility,
+  type ProtocolModCompatibilityReport,
+  type ProtocolWorldModMetadata,
+} from '../../../shared/multiplayerProtocol';
 import { getModManager } from '../../game/mods';
 import {
   MultiplayerJoinError,
@@ -61,6 +68,7 @@ import type {
   SaveSlotId,
   WorldType,
 } from '../../game/save/saveTypes';
+import { ModCompatibilityPanel } from '../multiplayer/ModCompatibilityPanel';
 import { RoomChatPanel } from '../multiplayer/RoomChatPanel';
 import { MainMenuButton } from './MainMenuButton';
 
@@ -190,10 +198,23 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
   const [copiedCode, setCopiedCode] = useState(false);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
+  const [modCompatError, setModCompatError] = useState<{
+    report: ProtocolModCompatibilityReport;
+    hostModMetadata?: ProtocolWorldModMetadata;
+    subtitleOverride?: string;
+    retryAction?: () => Promise<void>;
+  } | null>(null);
+  const [, setModSnapRev] = useState(0);
+
+  useEffect(() => {
+    void getModManager().initialize();
+    return getModManager().subscribe(() => setModSnapRev((r) => r + 1));
+  }, []);
 
   const clearNotices = useCallback(() => {
     setStatusNotice(null);
     setErrorNotice(null);
+    setModCompatError(null);
   }, []);
 
   // Fetch local Wi-Fi IP & any running host address for display
@@ -338,7 +359,55 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
         seedPayload?.seed ?? Math.floor(100000 + Math.random() * 899999);
 
       await getModManager().initialize();
-      const modMetadata = getModManager().getActiveWorldModMetadata();
+      const localActiveMeta =
+        sanitizeProtocolWorldModMetadata(getModManager().getActiveWorldModMetadata()) ?? {
+          modApiVersion: 1,
+          schemaVersion: 1,
+          savedAtGameVersion: getModManager().getSnapshot().gameVersion,
+          mods: [],
+        };
+
+      const modMetadata: ProtocolWorldModMetadata =
+        worldSource === 'saved'
+          ? sanitizeProtocolWorldModMetadata(savedWorldData?.modMetadata) ?? {
+              modApiVersion: 1,
+              schemaVersion: 1,
+              savedAtGameVersion: getModManager().getSnapshot().gameVersion,
+              mods: [],
+            }
+          : localActiveMeta;
+
+      if (worldSource === 'saved') {
+        const localMods = getModManager().getSnapshot().mods;
+        const discoveredIds = new Set(localMods.map((m) => m.manifest.modId));
+        const rawHostReport = verifyMultiplayerModCompatibility(modMetadata, localActiveMeta);
+        if (!rawHostReport.compatible) {
+          const enrichedReport: ProtocolModCompatibilityReport = {
+            ...rawHostReport,
+            issues: rawHostReport.issues.map((issue) =>
+              issue.code === 'missing_mod' && discoveredIds.has(issue.modId)
+                ? {
+                    ...issue,
+                    code: 'disabled_mod' as const,
+                    actualVersion:
+                      localMods.find((m) => m.manifest.modId === issue.modId)?.manifest
+                        .version ?? issue.actualVersion,
+                  }
+                : issue,
+            ),
+          };
+          setModCompatError({
+            report: enrichedReport,
+            hostModMetadata: modMetadata,
+            subtitleOverride: t.mpModHostSavedMismatchHint,
+            retryAction: async () => {
+              await handleCreateLanGame({ preventDefault: () => {} } as React.FormEvent);
+            },
+          });
+          setErrorNotice(enrichedReport.summary);
+          return;
+        }
+      }
 
       const hostRes = await startLanHost(
         {
@@ -478,6 +547,40 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
           return;
         }
 
+        await getModManager().initialize();
+        const clientModMetadata =
+          sanitizeProtocolWorldModMetadata(getModManager().getActiveWorldModMetadata()) ??
+          undefined;
+        const rawProbeCompat = verifyMultiplayerModCompatibility(
+          probe.modMetadata,
+          clientModMetadata,
+        );
+        if (!rawProbeCompat.compatible) {
+          const localMods = getModManager().getSnapshot().mods;
+          const discoveredIds = new Set(localMods.map((m) => m.manifest.modId));
+          const enrichedProbeCompat: ProtocolModCompatibilityReport = {
+            ...rawProbeCompat,
+            issues: rawProbeCompat.issues.map((issue) =>
+              issue.code === 'missing_mod' && discoveredIds.has(issue.modId)
+                ? {
+                    ...issue,
+                    code: 'disabled_mod' as const,
+                    actualVersion:
+                      localMods.find((m) => m.manifest.modId === issue.modId)?.manifest
+                        .version ?? issue.actualVersion,
+                  }
+                : issue,
+            ),
+          };
+          setModCompatError({
+            report: enrichedProbeCompat,
+            hostModMetadata: probe.modMetadata,
+            retryAction: () => connectToLanTarget(baseUrl, rawCode),
+          });
+          setErrorNotice(enrichedProbeCompat.summary);
+          return;
+        }
+
         if (transport) {
           transport.useLanMode(baseUrl);
         }
@@ -485,6 +588,7 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
         const joined = await service.joinRoom({
           roomCodeOrId: effectiveCode,
           playerName: cleanedPlayer.slice(0, 24),
+          clientModMetadata,
         });
 
         const joinedAddr = baseUrl.replace(/^https?:\/\//i, '');
@@ -493,7 +597,20 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
         setActiveRoom(joined);
         setSubView('lanLobby');
       } catch (err) {
-        if (err instanceof MultiplayerJoinError && err.code === 'ROOM_FULL') {
+        if (err instanceof MultiplayerJoinError && err.code === 'MOD_INCOMPATIBLE') {
+          const fallbackReport: ProtocolModCompatibilityReport = err.modCompatibility ?? {
+            compatible: false,
+            summary: err.message,
+            hostModCount: (err.hostModMetadata?.mods ?? []).length,
+            issues: [],
+          };
+          setModCompatError({
+            report: fallbackReport,
+            hostModMetadata: err.hostModMetadata,
+            retryAction: () => connectToLanTarget(baseUrl, rawCode),
+          });
+          setErrorNotice(fallbackReport.summary);
+        } else if (err instanceof MultiplayerJoinError && err.code === 'ROOM_FULL') {
           setErrorNotice(
             isAr
               ? 'لعبة الشبكة المحلية ممتلئة (الحد الأقصى 4 لاعبين).'
@@ -517,6 +634,16 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
               ? 'رمز الشبكة المحلية غير صحيح أو الغرفة غير موجودة.'
               : 'Invalid LAN code or room not found on that host.',
           );
+        } else if (
+          err instanceof MultiplayerJoinError &&
+          (err.code === 'INVALID_MOD_METADATA' || err.code === 'MOD_METADATA_TOO_LARGE')
+        ) {
+          setErrorNotice(
+            err.message ||
+              (isAr
+                ? 'تعذر التحقق من بيانات المودات المحلية.'
+                : 'Invalid or oversized mod compatibility metadata.'),
+          );
         } else {
           setErrorNotice(
             err instanceof Error
@@ -530,7 +657,7 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
         setJoiningLan(false);
       }
     },
-    [clearNotices, isAr, joiningLan, playerName, service, transport],
+    [clearNotices, isAr, joiningLan, onPrepareHostWorld, playerName, service, transport],
   );
 
   const handleManualJoinSubmit = async (e: React.FormEvent) => {
@@ -692,8 +819,23 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
           ) : (
             <Info className="w-4 h-4 mt-0.5 shrink-0 text-[#7fe094]" />
           )}
-          <span className="leading-snug">{errorNotice ?? statusNotice}</span>
+          <span className="leading-snug whitespace-pre-line">{errorNotice ?? statusNotice}</span>
         </div>
+      )}
+
+      {/* Pre-Join / Host Mod Compatibility Blocking Panel */}
+      {modCompatError && (
+        <ModCompatibilityPanel
+          lang={lang}
+          report={modCompatError.report}
+          hostModMetadata={modCompatError.hostModMetadata}
+          subtitleOverride={modCompatError.subtitleOverride}
+          onAfterRefresh={() => {
+            setErrorNotice(null);
+          }}
+          onRetryAction={modCompatError.retryAction}
+          onDismiss={() => setModCompatError(null)}
+        />
       )}
 
       {/* 1. LAN HUB */}
@@ -1043,6 +1185,14 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
               <div className="space-y-2">
                 {discoveredHosts.map((host) => {
                   const isFull = host.playerCount >= host.maxPlayers;
+                  const hostMeta = sanitizeProtocolWorldModMetadata(host.modMetadata) ?? undefined;
+                  const requiredHostMods = (hostMeta?.mods ?? []).filter(
+                    (m) => (m.multiplayerCompatibility ?? 'required') !== 'client_only',
+                  );
+                  const compatEval = getModManager().evaluateMultiplayerCompatibility(
+                    'lan',
+                    hostMeta,
+                  );
                   return (
                     <div
                       key={`${host.ip}:${host.port}:${host.roomCode}`}
@@ -1055,6 +1205,22 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
                           </span>
                           <span className="px-1.5 py-0.5 rounded bg-[#183926] border border-[#7fe094]/45 text-[10px] font-bold text-[#9ef0b0]">
                             LAN
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-[#14221b] border border-[#345443] text-[10px] font-semibold text-[#dce5d8]">
+                            {requiredHostMods.length === 0
+                              ? t.mpModsVanillaBadge
+                              : t.mpModsRequiredCountBadge(requiredHostMods.length)}
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.5 rounded border text-[10px] font-bold ${
+                              compatEval.compatible
+                                ? 'bg-[#173222] border-[#7fe094]/45 text-[#9ef0b0]'
+                                : 'bg-[#2a1618] border-[#e05a47]/50 text-[#f4b1a7]'
+                            }`}
+                          >
+                            {compatEval.compatible
+                              ? t.mpModCompatOkBadge
+                              : t.mpModCompatMismatchTitle}
                           </span>
                           <span className="text-[11px] font-mono-num text-[#e5a93c]">
                             {host.playerCount} / {host.maxPlayers}
@@ -1206,21 +1372,35 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
                   </span>
                 </p>
               </div>
-              <span
-                className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold ${
-                  connectionState === 'connected'
-                    ? 'bg-[#173222] border-[#7fe094]/45 text-[#9ef0b0]'
-                    : 'bg-[#2b2514] border-[#e5a93c]/45 text-[#f7d488]'
-                }`}
-              >
-                {connectionState === 'connected'
-                  ? isAr
-                    ? 'متصل بالشبكة المحلية'
-                    : 'LAN Connected'
-                  : isAr
-                    ? 'جاري الاتصال...'
-                    : 'Connecting...'}
-              </span>
+              <div className="flex items-center gap-2 flex-wrap">
+                {(() => {
+                  const reqMods = (activeRoom.modMetadata?.mods ?? []).filter(
+                    (m) => (m.multiplayerCompatibility ?? 'required') !== 'client_only',
+                  );
+                  return (
+                    <span className="px-2 py-1 rounded-lg border bg-[#14221b] border-[#345443] text-[11px] font-semibold text-[#dce5d8]">
+                      {reqMods.length === 0
+                        ? t.mpModsVanillaBadge
+                        : t.mpModsRequiredCountBadge(reqMods.length)}
+                    </span>
+                  );
+                })()}
+                <span
+                  className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold ${
+                    connectionState === 'connected'
+                      ? 'bg-[#173222] border-[#7fe094]/45 text-[#9ef0b0]'
+                      : 'bg-[#2b2514] border-[#e5a93c]/45 text-[#f7d488]'
+                  }`}
+                >
+                  {connectionState === 'connected'
+                    ? isAr
+                      ? 'متصل بالشبكة المحلية'
+                      : 'LAN Connected'
+                    : isAr
+                      ? 'جاري الاتصال...'
+                      : 'Connecting...'}
+                </span>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -1397,6 +1577,119 @@ export const LanMultiplayerScreen: React.FC<LanMultiplayerScreenProps> = ({
               ))}
             </div>
           </div>
+
+          {/* LAN Mod Compatibility Status (Required Mods / Compatible / Incompatible Players) */}
+          {(() => {
+            const compatStatus = activeRoom.modCompatibilityStatus;
+            const requiredMods =
+              compatStatus?.requiredMods ??
+              (activeRoom.modMetadata?.mods ?? []).filter(
+                (m) => (m.multiplayerCompatibility ?? 'required') !== 'client_only',
+              );
+            const compatiblePlayers =
+              compatStatus?.compatiblePlayers ??
+              activeRoom.players.map((p) => ({
+                playerId: p.id,
+                displayName: p.displayName,
+                isHost: p.isHost,
+              }));
+            const incompatiblePlayers = compatStatus?.incompatiblePlayers ?? [];
+
+            return (
+              <div
+                data-testid="lan-mod-compat-status"
+                className="p-3.5 rounded-xl bg-[#0b1611] border border-[#274033] space-y-3"
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-xs font-display font-bold uppercase tracking-wider text-[#c9d7cb] inline-flex items-center gap-1.5">
+                    <Boxes className="w-3.5 h-3.5 text-[#e5a93c]" />
+                    {t.mpLanModStatusTitle}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-[#14221b] border border-[#345443] text-[10px] font-bold text-[#dce5d8]">
+                    {requiredMods.length === 0
+                      ? t.mpModsVanillaBadge
+                      : t.mpModsRequiredCountBadge(requiredMods.length)}
+                  </span>
+                </div>
+
+                {/* Required Mods */}
+                <div className="space-y-1">
+                  <div className="text-[11px] font-semibold text-[#9db1a1]">
+                    {t.mpLanRequiredModsTitle}
+                  </div>
+                  {requiredMods.length === 0 ? (
+                    <div className="text-xs text-[#8fa594]">{t.mpLanVanillaNoMods}</div>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {requiredMods.map((mod) => (
+                        <span
+                          key={mod.modId}
+                          dir="ltr"
+                          className="px-2 py-0.5 rounded bg-[#112018] border border-[#2f493b] text-[11px] font-mono-num text-[#dce5d8]"
+                        >
+                          {mod.name} ({mod.modId} v{mod.version}
+                          {mod.compatibilityVersion ? ` · ${mod.compatibilityVersion}` : ''})
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Compatible & Incompatible Players */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="p-2.5 rounded-lg bg-[#08100c] border border-[#243d30] space-y-1.5">
+                    <div className="text-[11px] font-semibold text-[#9ef0b0]">
+                      {t.mpLanCompatiblePlayersTitle} ({compatiblePlayers.length})
+                    </div>
+                    <div className="space-y-1">
+                      {compatiblePlayers.map((cp) => (
+                        <div
+                          key={cp.playerId}
+                          className="text-xs text-[#dce5d8] flex items-center justify-between gap-2"
+                        >
+                          <span className="truncate">{cp.displayName}</span>
+                          {cp.isHost && (
+                            <span className="px-1.5 py-0.5 rounded bg-[#2a2313] border border-[#e5a93c]/45 text-[10px] font-bold text-[#f7d488] shrink-0">
+                              {isAr ? 'المضيف' : 'HOST'}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {(isLocalHost || incompatiblePlayers.length > 0) && (
+                    <div className="p-2.5 rounded-lg bg-[#160e10]/85 border border-[#e05a47]/35 space-y-1.5">
+                      <div className="text-[11px] font-semibold text-[#f4b1a7]">
+                        {t.mpLanIncompatiblePlayersTitle} ({incompatiblePlayers.length})
+                      </div>
+                      {incompatiblePlayers.length === 0 ? (
+                        <div className="text-[11px] text-[#cba39e]">
+                          {t.mpLanNoIncompatiblePlayers}
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5 max-h-28 overflow-y-auto">
+                          {incompatiblePlayers.map((attempt, idx) => (
+                            <div
+                              key={`${attempt.playerName}:${attempt.attemptedAt}:${idx}`}
+                              className="p-1.5 rounded bg-[#1f1215] border border-[#e05a47]/25 text-[11px]"
+                            >
+                              <div className="font-semibold text-white truncate">
+                                {attempt.playerName}
+                              </div>
+                              <div className="text-[10px] text-[#e8bfba] whitespace-pre-line leading-snug mt-0.5">
+                                {attempt.reason}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* LAN Lobby Chat */}
           <RoomChatPanel

@@ -35,10 +35,15 @@ export {
   type ModStateConfig,
   type ModTextureDescriptor,
   type ModValidationStatus,
+  type OrphanedModContentSummary,
   type ParsedModContentFile,
   type StandardModFolder,
+  type WorldModInspectionResult,
   type WorldModMetadataEntry,
   type WorldModMetadataSnapshot,
+  type WorldModSelectionEntry,
+  type WorldSaveModInspectEntry,
+  type WorldSaveModInspectStatus,
 } from './modTypes';
 
 export {
@@ -78,6 +83,7 @@ export {
   captureWorldModMetadata,
   evaluateMultiplayerModCompatibility,
   evaluateSaveModCompatibility,
+  inspectWorldSaveMods,
   resolveEffectiveMultiplayerCompatibility,
 } from './ModWorldCompatibility';
 
@@ -99,3 +105,12 @@ export {
   type ModLocalizationEntry,
 } from './handlers/defaultModHandlers';
 export { ModManager, getModManager } from './ModManager';
+export {
+  buildFallbackHostCompatibilityStatus,
+  buildSafeMultiplayerModMetadata,
+  enrichProtocolReportWithLocalDiscovery,
+  evaluateLocalClientCompatibilityForMode,
+  evaluateMultiplayerHostClientCompatibility,
+  formatMultiplayerModRejectionMessage,
+  resolveLocalMultiplayerModMetadata,
+} from './ModMultiplayerCompatibility';

@@ -105,6 +105,14 @@ function sanitizeWorldModMetadata(raw: unknown): WorldModMetadataSnapshot | unde
       modId,
       name: asString(item.name, modId),
       version,
+      ...(typeof item.loadOrder === 'number' && Number.isFinite(item.loadOrder)
+        ? { loadOrder: Math.trunc(item.loadOrder) }
+        : {}),
+      ...(typeof item.enabled === 'boolean' ? { enabled: item.enabled } : {}),
+      ...(typeof item.supportedGameVersion === 'string' && item.supportedGameVersion.trim()
+        ? { supportedGameVersion: item.supportedGameVersion.trim() }
+        : {}),
+      ...(typeof item.compatible === 'boolean' ? { compatible: item.compatible } : {}),
       ...(typeof item.modApiVersion === 'number' && Number.isFinite(item.modApiVersion)
         ? { modApiVersion: Math.trunc(item.modApiVersion) }
         : {}),
@@ -115,10 +123,16 @@ function sanitizeWorldModMetadata(raw: unknown): WorldModMetadataSnapshot | unde
     });
   }
 
+  const selectionMode =
+    raw.selectionMode === 'vanilla' || raw.selectionMode === 'custom'
+      ? raw.selectionMode
+      : undefined;
+
   return {
     modApiVersion: Math.max(1, Math.trunc(asFiniteNumber(raw.modApiVersion, 1))),
     schemaVersion: Math.max(1, Math.trunc(asFiniteNumber(raw.schemaVersion, 1))),
     savedAtGameVersion: asString(raw.savedAtGameVersion, '1.0.0'),
+    ...(selectionMode ? { selectionMode } : {}),
     mods,
   };
 }
@@ -557,6 +571,37 @@ export function migrateSaveData(
       ? metaRaw.thumbnailDataUrl
       : undefined;
 
+  const migratedModMetadata = sanitizeWorldModMetadata(working.modMetadata);
+  const derivedModSummary = migratedModMetadata
+    ? (() => {
+        const enabledMods = migratedModMetadata.mods.filter((m) => m.enabled !== false);
+        const selectionMode: 'vanilla' | 'custom' =
+          migratedModMetadata.selectionMode === 'vanilla' && enabledMods.length === 0
+            ? 'vanilla'
+            : migratedModMetadata.selectionMode === 'custom' ||
+                migratedModMetadata.mods.length > 0
+              ? 'custom'
+              : 'vanilla';
+        return {
+          selectionMode,
+          enabledCount: enabledMods.length,
+          modIds: enabledMods.map((m) => m.modId),
+        };
+      })()
+    : isRecord(metaRaw?.modSummary)
+      ? {
+          selectionMode:
+            metaRaw.modSummary.selectionMode === 'custom'
+              ? ('custom' as const)
+              : ('vanilla' as const),
+          enabledCount: Math.max(
+            0,
+            Math.floor(asFiniteNumber(metaRaw.modSummary.enabledCount, 0)),
+          ),
+          modIds: asStringArray(metaRaw.modSummary.modIds),
+        }
+      : { selectionMode: 'vanilla' as const, enabledCount: 0, modIds: [] };
+
   const normalized: SaveGameData = {
     version: CURRENT_SAVE_VERSION,
     meta: {
@@ -584,6 +629,7 @@ export function migrateSaveData(
       ),
       worldSeed,
       thumbnailDataUrl,
+      modSummary: derivedModSummary,
     },
     player: {
       position: {

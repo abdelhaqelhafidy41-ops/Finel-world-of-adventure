@@ -133,14 +133,14 @@ export const CreateWorldScreen: React.FC<CreateWorldScreenProps> = ({
   const userChoseModeRef = useRef(false);
   const [modMode, setModMode] = useState<'vanilla' | 'modded'>(() => {
     const initial = deduplicateModsForSelection(modManager.getSnapshot().mods);
-    return initial.some((m) => isModSelectableForWorld(m) && m.status === 'active')
+    return initial.some((m) => isModSelectableForWorld(m) && m.status === 'ready')
       ? 'modded'
       : 'vanilla';
   });
   const [orderedMods, setOrderedMods] = useState<OrderedWorldModRow[]>(() =>
     deduplicateModsForSelection(modManager.getSnapshot().mods).map((m) => ({
       modId: m.manifest.modId,
-      enabled: isModSelectableForWorld(m) && m.status === 'active',
+      enabled: isModSelectableForWorld(m) && m.status === 'ready',
     })),
   );
 
@@ -169,7 +169,7 @@ export const CreateWorldScreen: React.FC<CreateWorldScreenProps> = ({
         if (seen.has(id)) continue;
         next.push({
           modId: id,
-          enabled: isModSelectableForWorld(rec) && rec.status === 'active',
+          enabled: isModSelectableForWorld(rec) && rec.status === 'ready',
         });
       }
       return next;
@@ -177,7 +177,7 @@ export const CreateWorldScreen: React.FC<CreateWorldScreenProps> = ({
 
     if (!userChoseModeRef.current) {
       const hasAnyActiveReady = availableMods.some(
-        (m) => isModSelectableForWorld(m) && m.status === 'active',
+        (m) => isModSelectableForWorld(m) && m.status === 'ready',
       );
       setModMode(hasAnyActiveReady ? 'modded' : 'vanilla');
     }

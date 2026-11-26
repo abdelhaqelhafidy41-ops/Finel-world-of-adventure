@@ -31,6 +31,9 @@ import type {
   PlayerReportPayload,
   PlayerReportReason,
   PositionCorrectionPayload,
+  ProtocolModCompatibilityReport,
+  ProtocolRoomIncompatiblePlayerAttempt,
+  ProtocolRoomModCompatibilityStatus,
   ProtocolWorldModEntry,
   ProtocolWorldModMetadata,
   QuestScope,
@@ -80,6 +83,9 @@ export type {
   PlayerReportPayload,
   PlayerReportReason,
   PositionCorrectionPayload,
+  ProtocolModCompatibilityReport,
+  ProtocolRoomIncompatiblePlayerAttempt,
+  ProtocolRoomModCompatibilityStatus,
   ProtocolWorldModEntry,
   ProtocolWorldModMetadata,
   QuestScope,
@@ -145,6 +151,7 @@ export interface MultiplayerRoomSummary {
   status: RoomStatus;
   hasPassword: boolean;
   region?: string;
+  modMetadata?: ProtocolWorldModMetadata;
 }
 
 export interface MultiplayerRoomState extends MultiplayerRoomSummary {
@@ -165,6 +172,7 @@ export interface MultiplayerRoomState extends MultiplayerRoomSummary {
   serverTimestamp?: number;
   durableObjectId?: string;
   modMetadata?: ProtocolWorldModMetadata;
+  modCompatibilityStatus?: ProtocolRoomModCompatibilityStatus;
 }
 
 export interface MultiplayerGameStartInfo {
@@ -259,6 +267,7 @@ export interface MultiplayerInvite {
   playerCount: number;
   maxPlayers: number;
   sentAt: number;
+  modMetadata?: ProtocolWorldModMetadata;
 }
 
 export interface CreateRoomOptions {
@@ -287,6 +296,7 @@ export interface JoinRoomOptions {
   playerName: string;
   password?: string;
   resumeToken?: string;
+  clientModMetadata?: ProtocolWorldModMetadata;
 }
 
 export interface MultiplayerConnectOptions {
@@ -308,15 +318,29 @@ export type MultiplayerJoinErrorCode =
   | 'GAME_ALREADY_STARTED'
   | 'PASSWORD_REQUIRED'
   | 'INVALID_PASSWORD'
+  | 'MOD_INCOMPATIBLE'
+  | 'INVALID_MOD_METADATA'
+  | 'MOD_METADATA_TOO_LARGE'
   | 'UNKNOWN';
 
 export class MultiplayerJoinError extends Error {
   public readonly code: MultiplayerJoinErrorCode;
+  public readonly modCompatibility?: ProtocolModCompatibilityReport;
+  public readonly hostModMetadata?: ProtocolWorldModMetadata;
 
-  constructor(code: MultiplayerJoinErrorCode, message?: string) {
+  constructor(
+    code: MultiplayerJoinErrorCode,
+    message?: string,
+    extra?: {
+      modCompatibility?: ProtocolModCompatibilityReport;
+      hostModMetadata?: ProtocolWorldModMetadata;
+    },
+  ) {
     super(message || code);
     this.name = 'MultiplayerJoinError';
     this.code = code;
+    this.modCompatibility = extra?.modCompatibility;
+    this.hostModMetadata = extra?.hostModMetadata;
   }
 }
 

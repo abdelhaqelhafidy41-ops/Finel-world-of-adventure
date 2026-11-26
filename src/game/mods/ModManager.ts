@@ -16,7 +16,9 @@ import {
   captureWorldModMetadata,
   evaluateMultiplayerModCompatibility,
   evaluateSaveModCompatibility,
+  inspectWorldSaveMods,
 } from './ModWorldCompatibility';
+import type { SaveGameData } from '../save/saveTypes';
 import {
   CURRENT_GAME_VERSION,
   MOD_API_VERSION,
@@ -30,7 +32,9 @@ import {
   type ModRecord,
   type ModsSnapshot,
   type ModStateConfig,
+  type WorldModInspectionResult,
   type WorldModMetadataSnapshot,
+  type WorldModSelectionEntry,
 } from './modTypes';
 
 const MAX_LOG_ENTRIES = 120;
@@ -50,6 +54,11 @@ export class ModManager {
     enabledByModId: {},
     priorityByModId: {},
   };
+
+  private worldModScope: {
+    selectionMode: 'vanilla' | 'custom';
+    selectedMods: WorldModSelectionEntry[];
+  } | null = null;
 
   private snapshot: ModsSnapshot;
   private readonly listeners = new Set<(snap: ModsSnapshot) => void>();
@@ -124,6 +133,13 @@ export class ModManager {
   }
 
   public getActiveWorldModMetadata(): WorldModMetadataSnapshot {
+    if (this.worldModScope) {
+      return captureWorldModMetadata(this.snapshot, {
+        selectionMode: this.worldModScope.selectionMode,
+        configuredEntries: this.worldModScope.selectedMods,
+        gameVersion: CURRENT_GAME_VERSION,
+      });
+    }
     return captureWorldModMetadata(this.snapshot, CURRENT_GAME_VERSION);
   }
 
@@ -133,11 +149,93 @@ export class ModManager {
     return evaluateSaveModCompatibility(saveModMeta, this.snapshot);
   }
 
+  public inspectSaveMods(saveData: SaveGameData): WorldModInspectionResult {
+    return inspectWorldSaveMods(saveData, this.snapshot);
+  }
+
+  public async applyWorldModSelection(selection: {
+    selectionMode: 'vanilla' | 'custom';
+    selectedMods?: WorldModSelectionEntry[];
+  }): Promise<ModsSnapshot> {
+    await this.initialize();
+    this.worldModScope = {
+      selectionMode: selection.selectionMode,
+      selectedMods: [...(selection.selectedMods ?? [])].sort(
+        (a, b) => a.loadOrder - b.loadOrder || a.modId.localeCompare(b.modId),
+      ),
+    };
+    return this.refreshMods();
+  }
+
+  public async clearWorldModScope(): Promise<ModsSnapshot> {
+    if (!this.worldModScope) {
+      return this.snapshot;
+    }
+    this.worldModScope = null;
+    await this.initialize();
+    return this.refreshMods();
+  }
+
   public evaluateMultiplayerCompatibility(
     mode: 'singleplayer' | 'lan' | 'online',
     remoteMeta: WorldModMetadataSnapshot | undefined,
   ): ModCompatibilityEvaluation {
     return evaluateMultiplayerModCompatibility(mode, remoteMeta, this.snapshot);
+  }
+
+  /**
+   * Aligns local active mods to match a remote multiplayer host when all required mods are installed locally:
+   * - Enables all host `required` mods that are already discovered locally.
+   * - Disables local active `required` gameplay mods not present on the host.
+   * - Preserves `client_only` cosmetic mods.
+   */
+  public async applyMultiplayerModPreset(
+    remoteMeta: WorldModMetadataSnapshot | undefined,
+  ): Promise<ModsSnapshot> {
+    await this.initialize();
+    const remoteMods = remoteMeta?.mods ?? [];
+    const requiredHostIds = new Set(
+      remoteMods
+        .filter((m) => (m.multiplayerCompatibility ?? 'required') !== 'client_only')
+        .map((m) => m.modId),
+    );
+
+    const nextEnabled: Record<string, boolean> = {
+      ...this.stateConfig.enabledByModId,
+    };
+
+    for (const rec of this.snapshot.mods) {
+      const modId = rec.manifest.modId;
+      if (requiredHostIds.has(modId)) {
+        nextEnabled[modId] = true;
+        continue;
+      }
+      const isClientOnly =
+        rec.manifest.multiplayerCompatibility === 'client_only' ||
+        (rec.parsedContentFiles.length === 0 && rec.assets.length === 0) ||
+        (rec.parsedContentFiles.every((f) =>
+          ['textures', 'sounds', 'music', 'localization', 'assets', 'models'].includes(
+            f.category.toLowerCase(),
+          ),
+        ) &&
+          rec.assets.every((a) =>
+            ['textures', 'sounds', 'music', 'localization', 'assets', 'models'].includes(
+              a.category.toLowerCase(),
+            ),
+          ));
+
+      if (!isClientOnly && (nextEnabled[modId] ?? true)) {
+        nextEnabled[modId] = false;
+      }
+    }
+
+    this.stateConfig = {
+      ...this.stateConfig,
+      enabledByModId: nextEnabled,
+    };
+    await this.storage.writeState(this.stateConfig);
+    this.appendLog('info', 'Aligned local active mods to multiplayer host preset.');
+    return this.refreshMods();
   }
 
   public subscribe(listener: (snap: ModsSnapshot) => void): () => void {
@@ -200,9 +298,42 @@ export class ModManager {
         // Safely unload all active mod content before rebuilding state cleanly
         this.unloadAllActiveModsInternal(false);
 
+        const effectiveStateConfig: ModStateConfig = (() => {
+          if (!this.worldModScope) {
+            return this.stateConfig;
+          }
+          const scopedEnabled: Record<string, boolean> = {};
+          const scopedPriority: Record<string, number> = {
+            ...this.stateConfig.priorityByModId,
+          };
+          for (const rawEntry of discovered.entries) {
+            if (rawEntry.manifestRaw) {
+              try {
+                const parsed = JSON.parse(rawEntry.manifestRaw) as { modId?: unknown };
+                if (typeof parsed.modId === 'string' && parsed.modId.trim()) {
+                  scopedEnabled[parsed.modId.trim()] = false;
+                }
+              } catch {
+                // ignore
+              }
+            }
+          }
+          if (this.worldModScope.selectionMode === 'custom') {
+            for (const sel of this.worldModScope.selectedMods) {
+              scopedEnabled[sel.modId] = sel.enabled;
+              scopedPriority[sel.modId] = sel.loadOrder;
+            }
+          }
+          return {
+            version: this.stateConfig.version,
+            enabledByModId: scopedEnabled,
+            priorityByModId: scopedPriority,
+          };
+        })();
+
         const { records, loadOrder } = validateDiscoveredMods(
           discovered.entries,
-          this.stateConfig,
+          effectiveStateConfig,
           CURRENT_GAME_VERSION,
         );
 

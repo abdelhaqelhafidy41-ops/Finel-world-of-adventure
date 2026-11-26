@@ -69,6 +69,11 @@ import {
   type RoomPrivacy,
 } from '../../game/multiplayer/multiplayerTypes';
 import { ProfileManager } from '../../game/profile/ProfileManager';
+import {
+  sanitizeProtocolWorldModMetadata,
+  type ProtocolModCompatibilityReport,
+  type ProtocolWorldModMetadata,
+} from '../../../shared/multiplayerProtocol';
 import type { PlayerSearchSummary } from '../../../shared/profileTypes';
 import type {
   SaveGameData,
@@ -77,6 +82,7 @@ import type {
   WorldType,
 } from '../../game/save/saveTypes';
 import { useMenuNavigation } from '../../hooks/useMenuNavigation';
+import { ModCompatibilityPanel } from '../multiplayer/ModCompatibilityPanel';
 import { PlayerInteractionModal } from '../multiplayer/PlayerInteractionModal';
 import { PartyPanel } from '../multiplayer/PartyPanel';
 import { RoomChatPanel } from '../multiplayer/RoomChatPanel';
@@ -240,6 +246,12 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
   const [inspectedPlayer, setInspectedPlayer] =
     useState<MultiplayerPlayer | null>(null);
   const [, setSocialRevision] = useState(0);
+  const [modCompatError, setModCompatError] = useState<{
+    report: ProtocolModCompatibilityReport;
+    hostModMetadata?: ProtocolWorldModMetadata;
+    retryAction?: () => Promise<void>;
+  } | null>(null);
+  const [, setModSnapRev] = useState(0);
 
   const mpConfig = useMemo(() => getMultiplayerConfig(), []);
   const isBackendConfigured = service.isConfigured();
@@ -254,6 +266,11 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
     const res = await checkMultiplayerServerHealth(effectiveUrl, 5000);
     setServerHealthStatus(res.ok ? 'connected' : 'unavailable');
   }, [mpConfig.baseUrl, service]);
+
+  useEffect(() => {
+    void getModManager().initialize();
+    return getModManager().subscribe(() => setModSnapRev((r) => r + 1));
+  }, []);
 
   useEffect(() => {
     void ProfileManager.ensureServerSyncedProfile();
@@ -275,6 +292,7 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
   const clearNotices = useCallback(() => {
     setStatusNotice(null);
     setErrorNotice(null);
+    setModCompatError(null);
   }, []);
 
   const formatServiceError = useCallback(
@@ -323,6 +341,11 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
             return t.mpErrorRoomFull;
           case 'GAME_ALREADY_STARTED':
             return t.mpErrorGameAlreadyStarted;
+          case 'MOD_INCOMPATIBLE':
+            return err.modCompatibility?.summary || err.message || t.mpModCompatMismatchTitle;
+          case 'INVALID_MOD_METADATA':
+          case 'MOD_METADATA_TOO_LARGE':
+            return err.message || t.mpModCompatMismatchTitle;
           default:
             return err.message || t.mpErrorUnableToConnect;
         }
@@ -463,12 +486,25 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
         setActiveRoom(joined);
         setSubView('lobby');
       } catch (err) {
+        if (err instanceof MultiplayerJoinError && err.code === 'MOD_INCOMPATIBLE') {
+          const fallbackReport: ProtocolModCompatibilityReport = err.modCompatibility ?? {
+            compatible: false,
+            summary: err.message,
+            hostModCount: (err.hostModMetadata?.mods ?? []).length,
+            issues: [],
+          };
+          setModCompatError({
+            report: fallbackReport,
+            hostModMetadata: err.hostModMetadata,
+            retryAction: () => performJoinWithTarget(rawTarget, password),
+          });
+        }
         setErrorNotice(formatJoinError(err));
       } finally {
         setJoiningRoom(false);
       }
     },
-    [clearNotices, formatJoinError, playerName, service, t.mpOfflineCannotConnectNotice, t.mpPlayerNamePlaceholder, t.mpRoomCodeRequired],
+    [clearNotices, formatJoinError, playerName, service, t.mpModCompatMismatchTitle, t.mpOfflineCannotConnectNotice, t.mpPlayerNamePlaceholder, t.mpRoomCodeRequired],
   );
 
   // Consume deep-linked `/join/ROOM_ID` or `worldofadventure://join/ROOM_ID` target
@@ -561,9 +597,22 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
       setActiveRoom(joined);
       setSubView('lobby');
     } catch (err) {
-      setErrorNotice(formatServiceError(err, t.mpErrorUnableToConnect));
+      if (err instanceof MultiplayerJoinError && err.code === 'MOD_INCOMPATIBLE') {
+        const fallbackReport: ProtocolModCompatibilityReport = err.modCompatibility ?? {
+          compatible: false,
+          summary: err.message,
+          hostModCount: (err.hostModMetadata?.mods ?? []).length,
+          issues: [],
+        };
+        setModCompatError({
+          report: fallbackReport,
+          hostModMetadata: err.hostModMetadata,
+          retryAction: handleQuickJoin,
+        });
+      }
+      setErrorNotice(formatJoinError(err));
     }
-  }, [clearNotices, formatServiceError, playerName, service, t]);
+  }, [clearNotices, formatJoinError, playerName, service, t]);
 
   const openFriends = useCallback(
     (fromLobby = false) => {
@@ -642,7 +691,9 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
     setCreatingRoom(true);
     try {
       await getModManager().initialize();
-      const modMetadata = getModManager().getActiveWorldModMetadata();
+      const modMetadata =
+        sanitizeProtocolWorldModMetadata(getModManager().getActiveWorldModMetadata()) ??
+        undefined;
       const created = await service.createRoom({
         roomName: cleanedRoom.slice(0, 36),
         playerName: cleanedPlayer.slice(0, 24),
@@ -896,6 +947,19 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
       setActiveRoom(joined);
       setSubView('lobby');
     } catch (err) {
+      if (err instanceof MultiplayerJoinError && err.code === 'MOD_INCOMPATIBLE') {
+        const fallbackReport: ProtocolModCompatibilityReport = err.modCompatibility ?? {
+          compatible: false,
+          summary: err.message,
+          hostModCount: (err.hostModMetadata?.mods ?? []).length,
+          issues: [],
+        };
+        setModCompatError({
+          report: fallbackReport,
+          hostModMetadata: err.hostModMetadata,
+          retryAction: () => handleAcceptInvite(inviteId),
+        });
+      }
       setErrorNotice(formatJoinError(err));
     }
   };
@@ -1136,12 +1200,22 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
             }`}
           >
             <Info className="w-4 h-4 mt-0.5 shrink-0 text-[#e5a93c]" />
-            <span className="leading-snug">{errorNotice ?? statusNotice}</span>
+            <span className="leading-snug whitespace-pre-line">{errorNotice ?? statusNotice}</span>
           </div>
         )}
 
         {/* Main Scrollable Content */}
         <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-4">
+          {modCompatError && subView !== 'offlineLan' && (
+            <ModCompatibilityPanel
+              lang={lang}
+              report={modCompatError.report}
+              hostModMetadata={modCompatError.hostModMetadata}
+              onAfterRefresh={() => setErrorNotice(null)}
+              onRetryAction={modCompatError.retryAction}
+              onDismiss={() => setModCompatError(null)}
+            />
+          )}
           {/* 0. MULTIPLAYER MODE SELECTOR (ONLINE vs OFFLINE LAN) */}
           {subView === 'modeSelect' && (
             <div className="space-y-4" data-testid="mp-mode-select-view">
@@ -1867,47 +1941,73 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
                   </div>
                 ) : (
                   <div className="divide-y divide-white/10 rounded-xl border border-white/10 bg-[#0c1611]">
-                    {filteredRooms.map((room) => (
-                      <div
-                        key={room.roomId}
-                        className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            {room.hasPassword && (
-                              <Lock className="w-3.5 h-3.5 text-[#e5a93c] shrink-0" />
-                            )}
-                            <span className="font-display font-bold text-sm sm:text-base text-[#f7faf5] truncate">
-                              {room.roomName}
-                            </span>
-                          </div>
-                          <div className="text-xs text-[#9db1a1] mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                            <span>{room.hostName}</span>
-                            <span aria-hidden="true">·</span>
-                            <span>{room.worldType}</span>
-                            <span aria-hidden="true">·</span>
-                            <span className="font-mono-num">
-                              {room.playerCount}/{room.maxPlayers}
-                            </span>
-                            {room.status === 'in-game' && (
-                              <>
-                                <span aria-hidden="true">·</span>
-                                <span className="text-[#7fe094] font-semibold">
-                                  {lang === 'ar' ? 'جارية' : 'In World'}
-                                </span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => void handleJoinBrowserRoom(room)}
-                          className="min-h-[44px] px-4 py-2 rounded-xl bg-[#e5a93c] hover:bg-[#eeb750] text-[#111914] font-display font-bold text-xs sm:text-sm cursor-pointer whitespace-nowrap shrink-0"
+                    {filteredRooms.map((room) => {
+                      const roomMods = sanitizeProtocolWorldModMetadata(room.modMetadata) ?? undefined;
+                      const reqHostMods = (roomMods?.mods ?? []).filter(
+                        (m) => (m.multiplayerCompatibility ?? 'required') !== 'client_only',
+                      );
+                      const roomCompat = getModManager().evaluateMultiplayerCompatibility(
+                        'online',
+                        roomMods,
+                      );
+                      return (
+                        <div
+                          key={room.roomId}
+                          className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                         >
-                          {t.mpJoinRoom}
-                        </button>
-                      </div>
-                    ))}
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {room.hasPassword && (
+                                <Lock className="w-3.5 h-3.5 text-[#e5a93c] shrink-0" />
+                              )}
+                              <span className="font-display font-bold text-sm sm:text-base text-[#f7faf5] truncate">
+                                {room.roomName}
+                              </span>
+                              <span className="px-1.5 py-0.5 rounded bg-[#14221b] border border-[#345443] text-[10px] font-semibold text-[#dce5d8]">
+                                {reqHostMods.length === 0
+                                  ? t.mpModsVanillaBadge
+                                  : t.mpModsRequiredCountBadge(reqHostMods.length)}
+                              </span>
+                              <span
+                                className={`px-1.5 py-0.5 rounded border text-[10px] font-bold ${
+                                  roomCompat.compatible
+                                    ? 'bg-[#173222] border-[#7fe094]/45 text-[#9ef0b0]'
+                                    : 'bg-[#2a1618] border-[#e05a47]/50 text-[#f4b1a7]'
+                                }`}
+                              >
+                                {roomCompat.compatible
+                                  ? t.mpModCompatOkBadge
+                                  : t.mpModCompatMismatchTitle}
+                              </span>
+                            </div>
+                            <div className="text-xs text-[#9db1a1] mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                              <span>{room.hostName}</span>
+                              <span aria-hidden="true">·</span>
+                              <span>{room.worldType}</span>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono-num">
+                                {room.playerCount}/{room.maxPlayers}
+                              </span>
+                              {room.status === 'in-game' && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="text-[#7fe094] font-semibold">
+                                    {lang === 'ar' ? 'جارية' : 'In World'}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void handleJoinBrowserRoom(room)}
+                            className="min-h-[44px] px-4 py-2 rounded-xl bg-[#e5a93c] hover:bg-[#eeb750] text-[#111914] font-display font-bold text-xs sm:text-sm cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            {t.mpJoinRoom}
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -2407,54 +2507,82 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
                 </div>
               ) : (
                 <div className="divide-y divide-white/10 rounded-xl border border-white/10 bg-[#0c1611]">
-                  {invites.map((inv) => (
-                    <div
-                      key={inv.inviteId}
-                      className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                    >
-                      <div className="min-w-0 flex items-center gap-3">
-                        <AvatarBadge
-                          avatar={inv.fromAvatar}
-                          seed={inv.fromPublicProfileId ?? inv.fromPlayerName}
-                          displayName={inv.fromPlayerName}
-                          size="sm"
-                        />
-                        <div className="min-w-0">
-                          <div className="font-display font-bold text-sm text-[#f7faf5] truncate">
-                            {inv.roomName}
-                          </div>
-                          <div className="text-xs text-[#9db1a1] mt-0.5 flex flex-wrap items-center gap-x-2">
-                            <span>
-                              {inv.fromPlayerName}
-                              {inv.fromPlayerTag ? ` #${inv.fromPlayerTag}` : ''}
-                            </span>
-                            <span aria-hidden="true">·</span>
-                            <span className="font-mono-num">{inv.roomCode}</span>
-                            <span aria-hidden="true">·</span>
-                            <span className="font-mono-num">
-                              {inv.playerCount}/{inv.maxPlayers}
-                            </span>
+                  {invites.map((inv) => {
+                    const invMods = sanitizeProtocolWorldModMetadata(inv.modMetadata) ?? undefined;
+                    const reqInvMods = (invMods?.mods ?? []).filter(
+                      (m) => (m.multiplayerCompatibility ?? 'required') !== 'client_only',
+                    );
+                    const invCompat = getModManager().evaluateMultiplayerCompatibility(
+                      'online',
+                      invMods,
+                    );
+                    return (
+                      <div
+                        key={inv.inviteId}
+                        className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      >
+                        <div className="min-w-0 flex items-center gap-3">
+                          <AvatarBadge
+                            avatar={inv.fromAvatar}
+                            seed={inv.fromPublicProfileId ?? inv.fromPlayerName}
+                            displayName={inv.fromPlayerName}
+                            size="sm"
+                          />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-display font-bold text-sm text-[#f7faf5] truncate">
+                                {inv.roomName}
+                              </span>
+                              <span className="px-1.5 py-0.5 rounded bg-[#14221b] border border-[#345443] text-[10px] font-semibold text-[#dce5d8]">
+                                {reqInvMods.length === 0
+                                  ? t.mpModsVanillaBadge
+                                  : t.mpModsRequiredCountBadge(reqInvMods.length)}
+                              </span>
+                              <span
+                                className={`px-1.5 py-0.5 rounded border text-[10px] font-bold ${
+                                  invCompat.compatible
+                                    ? 'bg-[#173222] border-[#7fe094]/45 text-[#9ef0b0]'
+                                    : 'bg-[#2a1618] border-[#e05a47]/50 text-[#f4b1a7]'
+                                }`}
+                              >
+                                {invCompat.compatible
+                                  ? t.mpModCompatOkBadge
+                                  : t.mpModCompatMismatchTitle}
+                              </span>
+                            </div>
+                            <div className="text-xs text-[#9db1a1] mt-0.5 flex flex-wrap items-center gap-x-2">
+                              <span>
+                                {inv.fromPlayerName}
+                                {inv.fromPlayerTag ? ` #${inv.fromPlayerTag}` : ''}
+                              </span>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono-num">{inv.roomCode}</span>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono-num">
+                                {inv.playerCount}/{inv.maxPlayers}
+                              </span>
+                            </div>
                           </div>
                         </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => void handleAcceptInvite(inv.inviteId)}
+                            className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#e5a93c] hover:bg-[#eeb750] text-[#111914] font-display font-bold text-xs cursor-pointer whitespace-nowrap"
+                          >
+                            {t.mpAcceptBtn}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeclineInvite(inv.inviteId)}
+                            className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#182920] hover:bg-[#22392d] border border-[#2f493b] text-xs font-semibold text-[#e4ece1] cursor-pointer whitespace-nowrap"
+                          >
+                            {t.mpDeclineBtn}
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => void handleAcceptInvite(inv.inviteId)}
-                          className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#e5a93c] hover:bg-[#eeb750] text-[#111914] font-display font-bold text-xs cursor-pointer whitespace-nowrap"
-                        >
-                          {t.mpAcceptBtn}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleDeclineInvite(inv.inviteId)}
-                          className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#182920] hover:bg-[#22392d] border border-[#2f493b] text-xs font-semibold text-[#e4ece1] cursor-pointer whitespace-nowrap"
-                        >
-                          {t.mpDeclineBtn}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2507,6 +2635,19 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
                             ? ` (${localLatencyMs} ${t.mpPingUnit})`
                             : ''}
                         </span>
+                      </span>
+                      <span
+                        data-testid="mp-lobby-mods-badge"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border bg-[#14221b] border-[#345443] text-[11px] font-semibold text-[#dce5d8]"
+                      >
+                        {(() => {
+                          const reqMods = (activeRoom.modMetadata?.mods ?? []).filter(
+                            (m) => (m.multiplayerCompatibility ?? 'required') !== 'client_only',
+                          );
+                          return reqMods.length === 0
+                            ? t.mpModsVanillaBadge
+                            : t.mpModsRequiredCountBadge(reqMods.length);
+                        })()}
                       </span>
                     </div>
                     <div className="text-xs sm:text-sm text-[#c7d6c8] flex flex-wrap items-center gap-x-2.5 gap-y-1">

@@ -10,8 +10,773 @@ const DEFAULT_LAN_PORT = 41234;
 const DISCOVERY_PORT = 41235;
 const DISCOVERY_MAGIC = 'WOA_LAN_V1';
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
-const MAX_HTTP_BODY_BYTES = 16_384;
+const MAX_HTTP_BODY_BYTES = 32_768;
 const MAX_WS_PAYLOAD_BYTES = 65_536;
+const CURRENT_MOD_API_VERSION = 1;
+const SUPPORTED_MOD_SCHEMA_VERSIONS = new Set([1]);
+const VALID_MOD_COMPAT_MODES = new Set(['required', 'optional', 'client_only']);
+const SAFE_MOD_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,63}$/i;
+const MAX_MOD_METADATA_BYTES = 16_384;
+const MAX_MODS_PER_METADATA = 64;
+const MAX_DEPS_PER_MOD = 32;
+const LAN_SEMVER_RE =
+  /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+const FORBIDDEN_MOD_METADATA_KEYS = new Set([
+  'script',
+  'scripts',
+  'code',
+  'eval',
+  'executable',
+  'executables',
+  'binary',
+  'binaries',
+  'payload',
+  'file',
+  'files',
+  'archive',
+  'archivebytes',
+  'dataurl',
+  'filepath',
+  'sourcepath',
+  'assets',
+  'models',
+  'textures',
+  'sounds',
+  'music',
+  'dll',
+  'so',
+  'wasm',
+  'native',
+  'buffer',
+  'bytes',
+  'base64',
+  'content',
+  'contents',
+  'entry',
+  'main',
+]);
+const FORBIDDEN_PATH_OR_EXEC_PATTERN =
+  /(?:\.\.|[/\\]|%2e|\0|\.(?:js|mjs|cjs|ts|tsx|jsx|exe|dll|so|dylib|apk|dex|jar|bat|cmd|ps1|sh|wasm|py|rb|php)$)/i;
+
+function parseLanSemver(input) {
+  if (typeof input !== 'string') return null;
+  const trimmed = input.trim();
+  if (!trimmed || trimmed.length > 48) return null;
+  const match = LAN_SEMVER_RE.exec(trimmed);
+  if (!match) return null;
+  const major = Number(match[1]);
+  const minor = match[2] !== undefined ? Number(match[2]) : 0;
+  const patch = match[3] !== undefined ? Number(match[3]) : 0;
+  if (
+    !Number.isInteger(major) ||
+    !Number.isInteger(minor) ||
+    !Number.isInteger(patch) ||
+    major < 0 ||
+    minor < 0 ||
+    patch < 0
+  ) {
+    return null;
+  }
+  return { major, minor, patch, prerelease: match[4] ?? null };
+}
+
+function compareLanSemver(a, b) {
+  if (a.major !== b.major) return a.major > b.major ? 1 : -1;
+  if (a.minor !== b.minor) return a.minor > b.minor ? 1 : -1;
+  if (a.patch !== b.patch) return a.patch > b.patch ? 1 : -1;
+  if (a.prerelease === b.prerelease) return 0;
+  if (a.prerelease === null) return 1;
+  if (b.prerelease === null) return -1;
+  return a.prerelease.localeCompare(b.prerelease);
+}
+
+function matchSingleLanComparator(version, token) {
+  const clean = token.trim();
+  if (!clean || clean === '*' || clean.toLowerCase() === 'x') return true;
+  if (clean.startsWith('^')) {
+    const base = parseLanSemver(clean.slice(1));
+    if (!base || compareLanSemver(version, base) < 0) return false;
+    if (base.major > 0) return version.major === base.major;
+    if (base.minor > 0) return version.major === 0 && version.minor === base.minor;
+    return version.major === 0 && version.minor === 0 && version.patch === base.patch;
+  }
+  if (clean.startsWith('~')) {
+    const rawBody = clean.slice(1).trim();
+    const parts = rawBody.replace(/^v/, '').split('.');
+    const base = parseLanSemver(rawBody);
+    if (!base || compareLanSemver(version, base) < 0) return false;
+    if (parts.length <= 1) return version.major === base.major;
+    return version.major === base.major && version.minor === base.minor;
+  }
+  const wildcardMatch = /^v?(\d+|x|\*)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?$/i.exec(clean);
+  if (
+    wildcardMatch &&
+    (wildcardMatch[1] === 'x' ||
+      wildcardMatch[1] === '*' ||
+      wildcardMatch[2] === 'x' ||
+      wildcardMatch[2] === '*' ||
+      wildcardMatch[3] === 'x' ||
+      wildcardMatch[3] === '*' ||
+      wildcardMatch[2] === undefined ||
+      wildcardMatch[3] === undefined)
+  ) {
+    const wMajor = wildcardMatch[1];
+    const wMinor = wildcardMatch[2];
+    const wPatch = wildcardMatch[3];
+    if (wMajor !== 'x' && wMajor !== '*' && version.major !== Number(wMajor)) return false;
+    if (wMinor !== undefined && wMinor !== 'x' && wMinor !== '*' && version.minor !== Number(wMinor)) {
+      return false;
+    }
+    if (wPatch !== undefined && wPatch !== 'x' && wPatch !== '*' && version.patch !== Number(wPatch)) {
+      return false;
+    }
+    return true;
+  }
+  let op = '=';
+  let verStr = clean;
+  if (clean.startsWith('>=')) {
+    op = '>=';
+    verStr = clean.slice(2);
+  } else if (clean.startsWith('<=')) {
+    op = '<=';
+    verStr = clean.slice(2);
+  } else if (clean.startsWith('>')) {
+    op = '>';
+    verStr = clean.slice(1);
+  } else if (clean.startsWith('<')) {
+    op = '<';
+    verStr = clean.slice(1);
+  } else if (clean.startsWith('=')) {
+    op = '=';
+    verStr = clean.slice(1);
+  }
+  const target = parseLanSemver(verStr);
+  if (!target) return false;
+  const cmp = compareLanSemver(version, target);
+  if (op === '>=') return cmp >= 0;
+  if (op === '<=') return cmp <= 0;
+  if (op === '>') return cmp > 0;
+  if (op === '<') return cmp < 0;
+  return cmp === 0;
+}
+
+function isValidLanSemverRange(rangeExpr) {
+  if (typeof rangeExpr !== 'string' || !rangeExpr.trim() || rangeExpr.length > 48) {
+    return false;
+  }
+  const orClauses = rangeExpr.split('||').map((s) => s.trim()).filter(Boolean);
+  if (orClauses.length === 0) return false;
+  return orClauses.every((clause) => {
+    const hyphenMatch = /^(.+?)\s+-\s+(.+)$/.exec(clause);
+    if (hyphenMatch) {
+      return Boolean(parseLanSemver(hyphenMatch[1]) && parseLanSemver(hyphenMatch[2]));
+    }
+    const tokens = clause.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return false;
+    return tokens.every((tok) => {
+      if (tok === '*' || tok.toLowerCase() === 'x') return true;
+      return (
+        parseLanSemver(tok.replace(/^[~^=<>]+/, '')) !== null ||
+        /^v?(\d+|x|\*)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?$/i.test(tok)
+      );
+    });
+  });
+}
+
+function satisfiesLanSemverRange(versionStr, rangeExpr) {
+  const version = parseLanSemver(versionStr);
+  if (!version) return false;
+  if (typeof rangeExpr !== 'string' || !rangeExpr.trim() || rangeExpr.length > 48) {
+    return false;
+  }
+  const orClauses = rangeExpr.split('||').map((s) => s.trim()).filter(Boolean);
+  if (orClauses.length === 0) return false;
+  return orClauses.some((clause) => {
+    const hyphenMatch = /^(.+?)\s+-\s+(.+)$/.exec(clause);
+    if (hyphenMatch) {
+      return (
+        matchSingleLanComparator(version, `>=${hyphenMatch[1].trim()}`) &&
+        matchSingleLanComparator(version, `<=${hyphenMatch[2].trim()}`)
+      );
+    }
+    const tokens = clause.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return false;
+    return tokens.every((tok) => matchSingleLanComparator(version, tok));
+  });
+}
+
+function sanitizeLanModText(raw, maxLen, fallback) {
+  if (typeof raw !== 'string') return fallback;
+  const cleaned = raw
+    .replace(/[\u0000-\u001f\u007f<>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return fallback;
+  return cleaned.slice(0, maxLen);
+}
+
+function sanitizeLanModDependencies(rawDeps) {
+  if (!Array.isArray(rawDeps) || rawDeps.length === 0) return undefined;
+  const out = [];
+  const seen = new Set();
+  for (let i = 0; i < rawDeps.length && out.length < MAX_DEPS_PER_MOD; i += 1) {
+    const dep = rawDeps[i];
+    if (typeof dep === 'string') {
+      const modId = dep.trim().slice(0, 64);
+      if (!modId || !SAFE_MOD_ID_PATTERN.test(modId) || seen.has(modId)) continue;
+      seen.add(modId);
+      out.push({ modId });
+      continue;
+    }
+    if (!dep || typeof dep !== 'object' || Array.isArray(dep)) continue;
+    const modId = typeof dep.modId === 'string' ? dep.modId.trim().slice(0, 64) : '';
+    if (!modId || !SAFE_MOD_ID_PATTERN.test(modId) || seen.has(modId)) continue;
+    const rawRange =
+      typeof dep.versionRange === 'string' ? dep.versionRange.trim().slice(0, 32) : undefined;
+    const versionRange = rawRange && isValidLanSemverRange(rawRange) ? rawRange : undefined;
+    seen.add(modId);
+    out.push({
+      modId,
+      ...(versionRange ? { versionRange } : {}),
+      ...(dep.optional === true ? { optional: true } : {}),
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function hasForbiddenLanModFieldOrTraversal(obj) {
+  for (const [k, v] of Object.entries(obj)) {
+    if (FORBIDDEN_MOD_METADATA_KEYS.has(k.toLowerCase())) {
+      return `Forbidden mod metadata field "${k}" is not allowed.`;
+    }
+    if (typeof v === 'string' && FORBIDDEN_PATH_OR_EXEC_PATTERN.test(v)) {
+      return `Unsafe path or executable reference in "${k}".`;
+    }
+  }
+  return null;
+}
+
+function validateUntrustedLanModMetadata(raw) {
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: null };
+  }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'INVALID_MOD_METADATA',
+      message: 'Mod metadata must be a JSON object.',
+    };
+  }
+  try {
+    const byteLen = Buffer.byteLength(JSON.stringify(raw), 'utf8');
+    if (byteLen > MAX_MOD_METADATA_BYTES) {
+      return {
+        ok: false,
+        status: 413,
+        error: 'MOD_METADATA_TOO_LARGE',
+        message: `Mod metadata exceeds maximum size (${MAX_MOD_METADATA_BYTES} bytes).`,
+      };
+    }
+  } catch {
+    return {
+      ok: false,
+      status: 400,
+      error: 'INVALID_MOD_METADATA',
+      message: 'Mod metadata is not serializable.',
+    };
+  }
+  const rootViolation = hasForbiddenLanModFieldOrTraversal(raw);
+  if (rootViolation) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'INVALID_MOD_METADATA',
+      message: rootViolation,
+    };
+  }
+  if (
+    raw.savedAtGameVersion !== undefined &&
+    (typeof raw.savedAtGameVersion !== 'string' ||
+      !isValidLanSemverRange(raw.savedAtGameVersion.trim()))
+  ) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'INVALID_MOD_METADATA',
+      message: 'Mod metadata contains an invalid savedAtGameVersion.',
+    };
+  }
+  if (
+    raw.modApiVersion !== undefined &&
+    (typeof raw.modApiVersion !== 'number' || !Number.isFinite(raw.modApiVersion) || raw.modApiVersion < 1)
+  ) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'INVALID_MOD_METADATA',
+      message: 'Mod metadata contains an invalid modApiVersion.',
+    };
+  }
+  if (
+    raw.schemaVersion !== undefined &&
+    (typeof raw.schemaVersion !== 'number' || !Number.isFinite(raw.schemaVersion) || raw.schemaVersion < 1)
+  ) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'INVALID_MOD_METADATA',
+      message: 'Mod metadata contains an invalid schemaVersion.',
+    };
+  }
+  if (raw.mods !== undefined && !Array.isArray(raw.mods)) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'INVALID_MOD_METADATA',
+      message: 'Mod metadata "mods" field must be an array.',
+    };
+  }
+  const rawMods = Array.isArray(raw.mods) ? raw.mods : [];
+  if (rawMods.length > MAX_MODS_PER_METADATA) {
+    return {
+      ok: false,
+      status: 413,
+      error: 'MOD_METADATA_TOO_LARGE',
+      message: `Mod metadata exceeds maximum limit of ${MAX_MODS_PER_METADATA} mods.`,
+    };
+  }
+  for (let i = 0; i < rawMods.length; i += 1) {
+    const entry = rawMods[i];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'INVALID_MOD_METADATA',
+        message: `Mod entry at mods[${i}] must be an object.`,
+      };
+    }
+    const entryViolation = hasForbiddenLanModFieldOrTraversal(entry);
+    if (entryViolation) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'INVALID_MOD_METADATA',
+        message: `mods[${i}]: ${entryViolation}`,
+      };
+    }
+    const modId = typeof entry.modId === 'string' ? entry.modId.trim() : '';
+    if (!modId || !SAFE_MOD_ID_PATTERN.test(modId) || FORBIDDEN_PATH_OR_EXEC_PATTERN.test(modId)) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'INVALID_MOD_METADATA',
+        message: `Invalid modId at mods[${i}].`,
+      };
+    }
+    const version = typeof entry.version === 'string' ? entry.version.trim() : '';
+    if (!version || !parseLanSemver(version)) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'INVALID_MOD_METADATA',
+        message: `Invalid version "${version || 'missing'}" for mod "${modId}".`,
+      };
+    }
+    if (
+      entry.compatibilityVersion !== undefined &&
+      (typeof entry.compatibilityVersion !== 'string' ||
+        !isValidLanSemverRange(entry.compatibilityVersion.trim()))
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'INVALID_MOD_METADATA',
+        message: `Invalid compatibilityVersion for mod "${modId}".`,
+      };
+    }
+    if (
+      entry.supportedGameVersion !== undefined &&
+      (typeof entry.supportedGameVersion !== 'string' ||
+        !isValidLanSemverRange(entry.supportedGameVersion.trim()))
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'INVALID_MOD_METADATA',
+        message: `Invalid supportedGameVersion for mod "${modId}".`,
+      };
+    }
+    if (
+      entry.multiplayerCompatibility !== undefined &&
+      (typeof entry.multiplayerCompatibility !== 'string' ||
+        !VALID_MOD_COMPAT_MODES.has(entry.multiplayerCompatibility.trim()))
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'INVALID_MOD_METADATA',
+        message: `Invalid multiplayerCompatibility mode for mod "${modId}".`,
+      };
+    }
+    if (entry.dependencies !== undefined) {
+      if (!Array.isArray(entry.dependencies)) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'INVALID_MOD_METADATA',
+          message: `Mod "${modId}" dependencies must be an array.`,
+        };
+      }
+      if (entry.dependencies.length > MAX_DEPS_PER_MOD) {
+        return {
+          ok: false,
+          status: 413,
+          error: 'MOD_METADATA_TOO_LARGE',
+          message: `Mod "${modId}" exceeds maximum dependencies (${MAX_DEPS_PER_MOD}).`,
+        };
+      }
+      for (const dep of entry.dependencies) {
+        if (typeof dep === 'string') {
+          const dId = dep.trim();
+          if (!dId || !SAFE_MOD_ID_PATTERN.test(dId) || FORBIDDEN_PATH_OR_EXEC_PATTERN.test(dId)) {
+            return {
+              ok: false,
+              status: 400,
+              error: 'INVALID_MOD_METADATA',
+              message: `Invalid dependency id in mod "${modId}".`,
+            };
+          }
+          continue;
+        }
+        if (!dep || typeof dep !== 'object' || Array.isArray(dep)) {
+          return {
+            ok: false,
+            status: 400,
+            error: 'INVALID_MOD_METADATA',
+            message: `Invalid dependency entry in mod "${modId}".`,
+          };
+        }
+        const depViolation = hasForbiddenLanModFieldOrTraversal(dep);
+        if (depViolation) {
+          return {
+            ok: false,
+            status: 400,
+            error: 'INVALID_MOD_METADATA',
+            message: `Dependency in "${modId}": ${depViolation}`,
+          };
+        }
+        const dId = typeof dep.modId === 'string' ? dep.modId.trim() : '';
+        if (!dId || !SAFE_MOD_ID_PATTERN.test(dId) || FORBIDDEN_PATH_OR_EXEC_PATTERN.test(dId)) {
+          return {
+            ok: false,
+            status: 400,
+            error: 'INVALID_MOD_METADATA',
+            message: `Invalid dependency modId in mod "${modId}".`,
+          };
+        }
+        if (
+          dep.versionRange !== undefined &&
+          (typeof dep.versionRange !== 'string' || !isValidLanSemverRange(dep.versionRange.trim()))
+        ) {
+          return {
+            ok: false,
+            status: 400,
+            error: 'INVALID_MOD_METADATA',
+            message: `Invalid dependency versionRange for "${dId}" in "${modId}".`,
+          };
+        }
+      }
+    }
+  }
+  return { ok: true, value: sanitizeLanModMetadata(raw) };
+}
+
+function sanitizeLanModMetadata(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const modApiVersion =
+    typeof raw.modApiVersion === 'number' && Number.isFinite(raw.modApiVersion)
+      ? Math.max(1, Math.min(999, Math.round(raw.modApiVersion)))
+      : CURRENT_MOD_API_VERSION;
+  const schemaVersion =
+    typeof raw.schemaVersion === 'number' && Number.isFinite(raw.schemaVersion)
+      ? Math.max(1, Math.min(999, Math.round(raw.schemaVersion)))
+      : 1;
+  const savedAtGameVersion = sanitizeLanModText(raw.savedAtGameVersion, 24, '1.0.0');
+  const rawMods = Array.isArray(raw.mods) ? raw.mods : [];
+  const modsById = new Map();
+  for (let i = 0; i < rawMods.length && modsById.size < MAX_MODS_PER_METADATA; i += 1) {
+    const entry = rawMods[i];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const modId = typeof entry.modId === 'string' ? entry.modId.trim().slice(0, 64) : '';
+    if (!modId || !SAFE_MOD_ID_PATTERN.test(modId)) continue;
+    const compatRaw =
+      typeof entry.multiplayerCompatibility === 'string'
+        ? entry.multiplayerCompatibility.trim()
+        : 'required';
+    const multiplayerCompatibility = VALID_MOD_COMPAT_MODES.has(compatRaw)
+      ? compatRaw
+      : 'required';
+    const entryApiVersion =
+      typeof entry.modApiVersion === 'number' && Number.isFinite(entry.modApiVersion)
+        ? Math.max(1, Math.min(999, Math.round(entry.modApiVersion)))
+        : modApiVersion;
+    const entrySchemaVersion =
+      typeof entry.schemaVersion === 'number' && Number.isFinite(entry.schemaVersion)
+        ? Math.max(1, Math.min(999, Math.round(entry.schemaVersion)))
+        : schemaVersion;
+    const rawSupportedGame =
+      typeof entry.supportedGameVersion === 'string'
+        ? sanitizeLanModText(entry.supportedGameVersion, 32, '')
+        : '';
+    const supportedGameVersion =
+      rawSupportedGame && isValidLanSemverRange(rawSupportedGame)
+        ? rawSupportedGame
+        : undefined;
+    const rawCompatVer =
+      typeof entry.compatibilityVersion === 'string'
+        ? sanitizeLanModText(entry.compatibilityVersion, 32, '')
+        : '';
+    const compatibilityVersion =
+      rawCompatVer && isValidLanSemverRange(rawCompatVer) ? rawCompatVer : undefined;
+    const dependencies = sanitizeLanModDependencies(entry.dependencies);
+
+    modsById.set(modId, {
+      modId,
+      name: sanitizeLanModText(entry.name, 64, modId),
+      version: sanitizeLanModText(entry.version, 32, '1.0.0'),
+      ...(supportedGameVersion ? { supportedGameVersion } : {}),
+      ...(compatibilityVersion ? { compatibilityVersion } : {}),
+      ...(dependencies ? { dependencies } : {}),
+      modApiVersion: entryApiVersion,
+      schemaVersion: entrySchemaVersion,
+      multiplayerCompatibility,
+    });
+  }
+  const mods = Array.from(modsById.values()).sort((a, b) => a.modId.localeCompare(b.modId));
+  return { modApiVersion, schemaVersion, savedAtGameVersion, mods };
+}
+
+function areLanModVersionsCompatible(hostMod, clientMod) {
+  const hostRange = hostMod.compatibilityVersion ? hostMod.compatibilityVersion.trim() : '';
+  const clientRange = clientMod.compatibilityVersion ? clientMod.compatibilityVersion.trim() : '';
+  if (hostRange || clientRange) {
+    const hostOk = hostRange ? satisfiesLanSemverRange(clientMod.version, hostRange) : true;
+    const clientOk = clientRange ? satisfiesLanSemverRange(hostMod.version, clientRange) : true;
+    return {
+      ok: hostOk && clientOk,
+      expectedLabel: hostRange ? `${hostRange} (host ${hostMod.version})` : hostMod.version,
+    };
+  }
+  return { ok: clientMod.version === hostMod.version, expectedLabel: hostMod.version };
+}
+
+function formatLanModCompatibilityMessage(report) {
+  if (report.compatible || report.issues.length === 0) {
+    return report.hostModCount === 0 ? 'Vanilla compatible.' : 'Mod configuration is compatible.';
+  }
+  const missingLines = [];
+  const dependencyLines = [];
+  const incompatibleLines = [];
+  const unsupportedLines = [];
+  const extraLines = [];
+  for (const issue of report.issues) {
+    const label = issue.modName || issue.modId;
+    if (issue.code === 'missing_mod' || issue.code === 'disabled_mod') {
+      missingLines.push(`- ${label} (${issue.expectedVersion || issue.modId})`);
+    } else if (issue.code === 'missing_dependency') {
+      dependencyLines.push(
+        `- ${label}${issue.dependencyModId ? ` -> ${issue.dependencyModId}` : ''}${issue.expectedVersion ? ` (${issue.expectedVersion})` : ''}`,
+      );
+    } else if (issue.code === 'unsupported_mod') {
+      unsupportedLines.push(`- ${label}: ${issue.message}`);
+    } else if (issue.code === 'extra_active_mod') {
+      extraLines.push(`- ${label} (${issue.modId}${issue.actualVersion ? ` ${issue.actualVersion}` : ''})`);
+    } else {
+      incompatibleLines.push(
+        issue.expectedVersion || issue.actualVersion
+          ? `- ${label}\n  Required: ${issue.expectedVersion || 'unknown'}\n  Installed: ${issue.actualVersion || 'unknown'}`
+          : `- ${label}: ${issue.message}`,
+      );
+    }
+  }
+  const lines = ['Cannot join this world.'];
+  if (missingLines.length > 0) lines.push('Missing required mods:', ...missingLines);
+  if (dependencyLines.length > 0) lines.push('Missing dependencies:', ...dependencyLines);
+  if (incompatibleLines.length > 0) lines.push('Incompatible mods:', ...incompatibleLines);
+  if (unsupportedLines.length > 0) lines.push('Unsupported mods:', ...unsupportedLines);
+  if (extraLines.length > 0) lines.push('Extra active mods not enabled on host:', ...extraLines);
+  return lines.join('\n');
+}
+
+function verifyLanModCompatibility(rawHostMeta, rawClientMeta, currentGameVersion = '1.0.0') {
+  const hostMeta = sanitizeLanModMetadata(rawHostMeta);
+  const clientMeta = sanitizeLanModMetadata(rawClientMeta);
+  const issues = [];
+  const hostMods = hostMeta ? hostMeta.mods : [];
+  const clientMods = clientMeta ? clientMeta.mods : [];
+  const hostRequiredCount = hostMods.filter(
+    (m) => (m.multiplayerCompatibility || 'required') !== 'client_only',
+  ).length;
+  const effectiveGameVersion = (hostMeta && hostMeta.savedAtGameVersion) || currentGameVersion;
+  const clientById = new Map();
+  for (const cm of clientMods) clientById.set(cm.modId, cm);
+
+  if (hostMeta) {
+    if (hostMeta.modApiVersion > CURRENT_MOD_API_VERSION) {
+      issues.push({
+        modId: '__mod_api__',
+        code: 'api_version_mismatch',
+        expectedVersion: `<= v${CURRENT_MOD_API_VERSION}`,
+        actualVersion: `v${hostMeta.modApiVersion}`,
+        message: `Host requires Mod API v${hostMeta.modApiVersion} (supported <= v${CURRENT_MOD_API_VERSION}).`,
+      });
+    }
+    if (!SUPPORTED_MOD_SCHEMA_VERSIONS.has(hostMeta.schemaVersion)) {
+      issues.push({
+        modId: '__mod_schema__',
+        code: 'schema_version_mismatch',
+        expectedVersion: '1',
+        actualVersion: String(hostMeta.schemaVersion),
+        message: `Host uses unsupported mod schema v${hostMeta.schemaVersion}.`,
+      });
+    }
+  }
+
+  const hostRequiredIds = new Set();
+  const hostAllowedClientIds = new Set();
+  for (const hostMod of hostMods) {
+    const compat = hostMod.multiplayerCompatibility || 'required';
+    if (compat === 'client_only') continue;
+    hostRequiredIds.add(hostMod.modId);
+    hostAllowedClientIds.add(hostMod.modId);
+    for (const dep of hostMod.dependencies || []) {
+      if (dep.optional !== true) {
+        hostAllowedClientIds.add(dep.modId);
+      }
+    }
+    const clientMod = clientById.get(hostMod.modId);
+    if (!clientMod) {
+      if (compat === 'required') {
+        issues.push({
+          modId: hostMod.modId,
+          modName: hostMod.name,
+          code: 'missing_mod',
+          expectedVersion: hostMod.compatibilityVersion || hostMod.version,
+          message: `Missing required mod "${hostMod.name}" (${hostMod.modId} v${hostMod.version}).`,
+        });
+      }
+      continue;
+    }
+    if (compat === 'required') {
+      const versionCheck = areLanModVersionsCompatible(hostMod, clientMod);
+      if (!versionCheck.ok) {
+        issues.push({
+          modId: hostMod.modId,
+          modName: hostMod.name,
+          code: 'version_mismatch',
+          expectedVersion: versionCheck.expectedLabel,
+          actualVersion: clientMod.version,
+          message: `Mod "${hostMod.name}" version incompatible (Required: ${versionCheck.expectedLabel}, Installed: ${clientMod.version}).`,
+        });
+      }
+      if (
+        clientMod.supportedGameVersion &&
+        !satisfiesLanSemverRange(effectiveGameVersion, clientMod.supportedGameVersion)
+      ) {
+        issues.push({
+          modId: hostMod.modId,
+          modName: hostMod.name,
+          code: 'unsupported_mod',
+          expectedVersion: effectiveGameVersion,
+          actualVersion: clientMod.supportedGameVersion,
+          message: `Mod "${hostMod.name}" does not support game version ${effectiveGameVersion} (supports ${clientMod.supportedGameVersion}).`,
+        });
+      }
+    }
+    if (
+      typeof hostMod.modApiVersion === 'number' &&
+      typeof clientMod.modApiVersion === 'number' &&
+      hostMod.modApiVersion !== clientMod.modApiVersion
+    ) {
+      issues.push({
+        modId: hostMod.modId,
+        modName: hostMod.name,
+        code: 'api_version_mismatch',
+        expectedVersion: `v${hostMod.modApiVersion}`,
+        actualVersion: `v${clientMod.modApiVersion}`,
+        message: `Mod "${hostMod.name}" API version mismatch (host v${hostMod.modApiVersion}, local v${clientMod.modApiVersion}).`,
+      });
+    }
+    if (
+      typeof hostMod.schemaVersion === 'number' &&
+      typeof clientMod.schemaVersion === 'number' &&
+      hostMod.schemaVersion !== clientMod.schemaVersion
+    ) {
+      issues.push({
+        modId: hostMod.modId,
+        modName: hostMod.name,
+        code: 'schema_version_mismatch',
+        expectedVersion: `v${hostMod.schemaVersion}`,
+        actualVersion: `v${clientMod.schemaVersion}`,
+        message: `Mod "${hostMod.name}" schema version mismatch (host v${hostMod.schemaVersion}, local v${clientMod.schemaVersion}).`,
+      });
+    }
+    const depCandidates = [...(hostMod.dependencies || []), ...(clientMod.dependencies || [])];
+    const checkedDepIds = new Set();
+    for (const dep of depCandidates) {
+      if (dep.optional === true || checkedDepIds.has(dep.modId)) continue;
+      checkedDepIds.add(dep.modId);
+      const installedDep = clientById.get(dep.modId);
+      if (!installedDep) {
+        issues.push({
+          modId: hostMod.modId,
+          modName: hostMod.name,
+          code: 'missing_dependency',
+          dependencyModId: dep.modId,
+          expectedVersion: dep.versionRange,
+          message: `Mod "${hostMod.name}" requires dependency "${dep.modId}"${dep.versionRange ? ` (${dep.versionRange})` : ''}.`,
+        });
+      } else if (
+        dep.versionRange &&
+        !satisfiesLanSemverRange(installedDep.version, dep.versionRange)
+      ) {
+        issues.push({
+          modId: hostMod.modId,
+          modName: hostMod.name,
+          code: 'missing_dependency',
+          dependencyModId: dep.modId,
+          expectedVersion: dep.versionRange,
+          actualVersion: installedDep.version,
+          message: `Mod "${hostMod.name}" requires dependency "${dep.modId}" (${dep.versionRange}), installed v${installedDep.version}.`,
+        });
+      }
+    }
+  }
+
+  for (const clientMod of clientMods) {
+    const compat = clientMod.multiplayerCompatibility || 'required';
+    if (compat !== 'required') continue;
+    if (!hostAllowedClientIds.has(clientMod.modId)) {
+      issues.push({
+        modId: clientMod.modId,
+        modName: clientMod.name,
+        code: 'extra_active_mod',
+        expectedVersion: hostRequiredCount === 0 ? 'Vanilla (None)' : undefined,
+        actualVersion: clientMod.version,
+        message:
+          hostRequiredCount === 0
+            ? `Host is running a Vanilla world. Disable active gameplay mod "${clientMod.name}" (${clientMod.modId}) to join.`
+            : `Local gameplay mod "${clientMod.name}" (${clientMod.modId} v${clientMod.version}) is not active on the host.`,
+      });
+    }
+  }
+
+  const compatible = issues.length === 0;
+  const report = { compatible, summary: '', hostModCount: hostRequiredCount, issues };
+  report.summary = formatLanModCompatibilityMessage(report);
+  return report;
+}
 
 const AVATAR_COLORS = ['#6ab06e', '#e5a93c', '#58b4d1', '#d96b6b'];
 const PARTY_MARKER_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ec4899'];
@@ -685,6 +1450,7 @@ class OfflineLanServer {
       partyState: this.buildPartySnapshotForPlayer(playerId),
       coopQuests: [],
       bossEncounters,
+      ...(this.room.modMetadata ? { modMetadata: this.room.modMetadata } : {}),
       ...(player
         ? {
             coins: player.coins ?? 0,
@@ -977,6 +1743,18 @@ class OfflineLanServer {
         locked: false,
         hasPassword: false,
         ...(this.room.modMetadata ? { modMetadata: this.room.modMetadata } : {}),
+        modCompatibilityStatus: {
+          requiredMods: (
+            (this.room.modMetadata && this.room.modMetadata.mods) ||
+            []
+          ).filter((m) => (m.multiplayerCompatibility || 'required') !== 'client_only'),
+          compatiblePlayers: Array.from(this.room.players.values()).map((p) => ({
+            playerId: p.playerId,
+            displayName: p.displayName,
+            isHost: p.playerId === this.room.hostId,
+          })),
+          incompatiblePlayers: (this.room.incompatibleJoinAttempts || []).slice(-20),
+        },
       },
     };
   }
@@ -1218,6 +1996,16 @@ class OfflineLanServer {
       }
     }
 
+    const modMetaCheck = validateUntrustedLanModMetadata(options.modMetadata);
+    if (!modMetaCheck.ok) {
+      return {
+        ok: false,
+        status: modMetaCheck.status,
+        error: modMetaCheck.error,
+        message: modMetaCheck.message,
+      };
+    }
+
     this.room = {
       roomId,
       roomCode,
@@ -1232,10 +2020,8 @@ class OfflineLanServer {
       createdAt: now,
       worldSettingsPermission: 'HOST_ONLY',
       friendlyFire: false,
-      modMetadata:
-        options.modMetadata && typeof options.modMetadata === 'object'
-          ? options.modMetadata
-          : null,
+      modMetadata: modMetaCheck.value,
+      incompatibleJoinAttempts: [],
       players: new Map([[hostId, hostPlayer]]),
       parties: new Map(),
       partyInvites: new Map(),
@@ -1308,6 +2094,72 @@ class OfflineLanServer {
       return {
         status: 409,
         body: { ok: false, error: 'ROOM_FULL', message: 'LAN GAME FULL (4 / 4 players).' },
+      };
+    }
+
+    const attemptName = sanitizeText(
+      options.playerName,
+      24,
+      `Player ${this.room.players.size + 1}`,
+    );
+    const clientModCheck = validateUntrustedLanModMetadata(options.clientModMetadata);
+    if (!clientModCheck.ok) {
+      if (!Array.isArray(this.room.incompatibleJoinAttempts)) {
+        this.room.incompatibleJoinAttempts = [];
+      }
+      this.room.incompatibleJoinAttempts.push({
+        playerName: attemptName,
+        attemptedAt: Date.now(),
+        reason: clientModCheck.message,
+        issues: [],
+      });
+      if (this.room.incompatibleJoinAttempts.length > 20) {
+        this.room.incompatibleJoinAttempts.splice(
+          0,
+          this.room.incompatibleJoinAttempts.length - 20,
+        );
+      }
+      this.broadcast('ROOM_STATE', 'server', this.buildRoomSnapshot());
+      return {
+        status: clientModCheck.status,
+        body: {
+          ok: false,
+          error: clientModCheck.error,
+          message: clientModCheck.message,
+        },
+      };
+    }
+
+    const modCompatibility = verifyLanModCompatibility(
+      this.room.modMetadata,
+      clientModCheck.value,
+    );
+    if (!modCompatibility.compatible) {
+      if (!Array.isArray(this.room.incompatibleJoinAttempts)) {
+        this.room.incompatibleJoinAttempts = [];
+      }
+      this.room.incompatibleJoinAttempts.push({
+        playerName: attemptName,
+        attemptedAt: Date.now(),
+        reason: modCompatibility.summary,
+        issues: modCompatibility.issues,
+      });
+      if (this.room.incompatibleJoinAttempts.length > 20) {
+        this.room.incompatibleJoinAttempts.splice(
+          0,
+          this.room.incompatibleJoinAttempts.length - 20,
+        );
+      }
+      this.broadcast('ROOM_STATE', 'server', this.buildRoomSnapshot());
+      return {
+        status: 409,
+        body: {
+          ok: false,
+          error: 'MOD_INCOMPATIBLE',
+          message: modCompatibility.summary,
+          modCompatibility,
+          ...(this.room.modMetadata ? { hostModMetadata: this.room.modMetadata } : {}),
+        },
       };
     }
 
@@ -1958,6 +2810,7 @@ class OfflineLanServer {
             worldTime: snap.worldTime,
             worldWeather: snap.worldWeather,
             requireAllReady: false,
+            ...(this.room.modMetadata ? { modMetadata: this.room.modMetadata } : {}),
             room: snap,
           });
         }
@@ -2020,6 +2873,7 @@ class OfflineLanServer {
           worldTime: snap.worldTime,
           worldWeather: snap.worldWeather,
           requireAllReady: false,
+          ...(this.room.modMetadata ? { modMetadata: this.room.modMetadata } : {}),
           room: snap,
         });
         break;
@@ -3255,6 +4109,7 @@ class OfflineLanServer {
           roomName: this.room ? this.room.roomName : null,
           hostName: this.room ? this.room.hostName : null,
           status: this.room ? this.room.status : 'idle',
+          ...(this.room && this.room.modMetadata ? { modMetadata: this.room.modMetadata } : {}),
         });
         return;
       }
@@ -3298,6 +4153,10 @@ class OfflineLanServer {
           return;
         }
         const created = this.initRoom(parsed.data);
+        if (!created || !created.ok) {
+          this.sendJson(res, (created && created.status) || 400, created);
+          return;
+        }
         this.sendJson(res, 200, created);
         return;
       }
@@ -3432,6 +4291,7 @@ class OfflineLanServer {
           playerCount: this.room.players.size,
           maxPlayers: MAX_LAN_PLAYERS,
           status: this.room.status,
+          ...(this.room.modMetadata ? { modMetadata: this.room.modMetadata } : {}),
         });
         const buf = Buffer.from(announcement, 'utf8');
         sock.send(buf, 0, buf.length, rinfo.port, rinfo.address, () => {});
@@ -3526,6 +4386,7 @@ function discoverLanHosts(timeoutMs = 1500) {
               playerCount: Number(data.playerCount) || 1,
               maxPlayers: MAX_LAN_PLAYERS,
               status: String(data.status || 'waiting'),
+              ...(data.modMetadata ? { modMetadata: sanitizeLanModMetadata(data.modMetadata) } : {}),
             });
           }
         } catch {
