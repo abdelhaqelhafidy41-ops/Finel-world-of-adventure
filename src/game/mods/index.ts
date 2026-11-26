@@ -44,6 +44,8 @@ export {
   type WorldModSelectionEntry,
   type WorldSaveModInspectEntry,
   type WorldSaveModInspectStatus,
+  type Woa3dAssetMetadata,
+  type Woa3dModelDescriptor,
 } from './modTypes';
 
 export {
@@ -96,6 +98,15 @@ export {
   type WoamodValidationResult,
   type WoamodExtractedAssetPreview,
 } from './WoamodPackageValidator';
+export {
+  extractModelReferenceFromContent,
+  isWoa3dCompatibleWithContent,
+  normalizeModRelativeAssetPathForLookup,
+  normalizeWoa3dModCategory,
+  parseAndValidateWoa3dText,
+  type CanonicalWoa3dCategory,
+  type Woa3dValidationOutcome,
+} from './woa3dMetadata';
 export { ModContentRegistry } from './ModContentRegistry';
 export { ModStorageAdapter, type ModStorageInfo } from './ModStorageAdapter';
 export {

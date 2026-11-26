@@ -1103,6 +1103,7 @@ export default function App() {
           });
           if (!started) {
             lastStartedMatchKeyRef.current = null;
+            setTitleSubScreen('multiplayer');
             setPhase('title');
             return;
           }
@@ -1121,6 +1122,7 @@ export default function App() {
         } catch (err) {
           console.error('[Multiplayer] Failed to start world:', err);
           lastStartedMatchKeyRef.current = null;
+          setTitleSubScreen('multiplayer');
           setPhase('title');
           showNotice(UI_TEXT[languageRef.current].loadFailedNotice);
         }
@@ -2452,16 +2454,29 @@ export default function App() {
                       setTitleSubScreen('multiplayer');
                     } catch (err) {
                       setIncomingInvite(null);
+                      const errObj =
+                        err && typeof err === 'object'
+                          ? (err as {
+                              code?: string;
+                              message?: string;
+                              modCompatibility?: { summary?: string };
+                            })
+                          : null;
                       const msg =
-                        err && typeof err === 'object' && 'code' in err
-                          ? (err as { code?: string }).code === 'ROOM_FULL'
-                            ? t.mpErrorRoomFull
-                            : (err as { code?: string }).code === 'GAME_ALREADY_STARTED'
-                              ? t.mpErrorGameAlreadyStarted
-                              : (err as { code?: string }).code === 'ROOM_EXPIRED'
-                                ? t.mpErrorRoomExpired
-                                : t.mpErrorRoomNotFound
-                          : t.mpErrorRoomNotFound;
+                        errObj?.code === 'MOD_INCOMPATIBLE'
+                          ? errObj.modCompatibility?.summary ||
+                            errObj.message ||
+                            t.mpModCompatMismatchTitle
+                          : errObj?.code === 'INVALID_MOD_METADATA' ||
+                              errObj?.code === 'MOD_METADATA_TOO_LARGE'
+                            ? errObj.message || t.mpModCompatMismatchTitle
+                            : errObj?.code === 'ROOM_FULL'
+                              ? t.mpErrorRoomFull
+                              : errObj?.code === 'GAME_ALREADY_STARTED'
+                                ? t.mpErrorGameAlreadyStarted
+                                : errObj?.code === 'ROOM_EXPIRED'
+                                  ? t.mpErrorRoomExpired
+                                  : t.mpErrorRoomNotFound;
                       showNotice(msg);
                     } finally {
                       setAcceptingInvite(false);

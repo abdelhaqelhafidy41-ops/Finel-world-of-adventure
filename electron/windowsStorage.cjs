@@ -29,24 +29,40 @@ const STANDARD_MOD_FOLDERS = Object.freeze([
   'music',
   'items',
   'weapons',
+  'armor',
+  'tools',
+  'consumables',
+  'resources',
+  'recipes',
   'characters',
+  'animals',
   'creatures',
+  'monsters',
   'npcs',
   'buildings',
+  'decorations',
   'quests',
-  'recipes',
+  'loot_tables',
   'localization',
 ]);
 
 const MOD_CONTENT_FOLDERS = new Set([
   'items',
   'weapons',
+  'armor',
+  'tools',
+  'consumables',
+  'resources',
+  'recipes',
   'characters',
+  'animals',
   'creatures',
+  'monsters',
   'npcs',
   'buildings',
+  'decorations',
   'quests',
-  'recipes',
+  'loot_tables',
   'localization',
 ]);
 
@@ -125,6 +141,7 @@ const ALLOWED_MOD_ASSET_MIME = Object.freeze({
   '.obj': 'text/plain',
   '.mtl': 'text/plain',
   '.bin': 'application/octet-stream',
+  '.woa3d': 'application/json',
 });
 
 const MAX_ARCHIVE_ENTRIES = 1200;
@@ -1049,10 +1066,16 @@ function createDesktopStorageManager({ getDocumentsPath, getUserDataPath, platfo
           }
         } else if (rel !== 'mod.json') {
           const fStat = await fsp.stat(realItem).catch(() => null);
+          const sizeBytes = fStat ? fStat.size : 0;
+          let rawText;
+          if (ext === '.woa3d' && sizeBytes <= MAX_JSON_ENTRY_BYTES) {
+            rawText = await fsp.readFile(realItem, 'utf8').catch(() => undefined);
+          }
           assetFiles.push({
             category,
             relativePath: rel,
-            sizeBytes: fStat ? fStat.size : 0,
+            sizeBytes,
+            ...(rawText !== undefined ? { rawText } : {}),
           });
         }
       }
@@ -1193,10 +1216,19 @@ function createDesktopStorageManager({ getDocumentsPath, getUserDataPath, platfo
           const secondFolder = topFolder === 'assets' ? parts[1] : null;
           const category =
             secondFolder && MOD_ASSET_FOLDERS.has(secondFolder) ? secondFolder : topFolder;
+          let rawText;
+          if (ext === '.woa3d' && entry.uncompressedSize <= MAX_JSON_ENTRY_BYTES) {
+            try {
+              rawText = extractZipEntryBuffer(archiveBuffer, entry).toString('utf8');
+            } catch {
+              rawText = undefined;
+            }
+          }
           assetFiles.push({
             category,
             relativePath: rel,
             sizeBytes: entry.uncompressedSize,
+            ...(rawText !== undefined ? { rawText } : {}),
           });
         }
       }
@@ -1652,10 +1684,10 @@ function createDesktopStorageManager({ getDocumentsPath, getUserDataPath, platfo
           }
 
           const entryBuf = extractZipEntryBuffer(buf, item.entry);
-          if (item.rel.startsWith('items/') || item.rel.startsWith('weapons/') || item.rel.startsWith('recipes/') || item.rel.startsWith('quests/') || item.rel.startsWith('characters/') || item.rel.startsWith('creatures/') || item.rel.startsWith('npcs/') || item.rel.startsWith('buildings/') || item.rel.startsWith('localization/')) {
-            if (path.extname(item.rel).toLowerCase() === '.json') {
-              JSON.parse(entryBuf.toString('utf8'));
-            }
+          const relTop = item.rel.split('/')[0];
+          const relExt = path.extname(item.rel).toLowerCase();
+          if ((MOD_CONTENT_FOLDERS.has(relTop) && relExt === '.json') || relExt === '.woa3d') {
+            JSON.parse(entryBuf.toString('utf8'));
           }
 
           await fsp.writeFile(destPath, entryBuf, { flag: 'wx' });

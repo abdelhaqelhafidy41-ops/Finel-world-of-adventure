@@ -72,6 +72,8 @@ const ALLOWED_MIME_TYPES: Record<string, string> = {
   '.glb': 'model/gltf-binary',
   '.obj': 'text/plain',
   '.mtl': 'text/plain',
+  '.bin': 'application/octet-stream',
+  '.woa3d': 'application/json',
   '.json': 'application/json',
   '.txt': 'text/plain',
 };
@@ -353,9 +355,14 @@ async function scanWebZipPackage(
       rel = rel.replace(/^\/+/, '');
       if (!rel) continue;
 
-      const firstSeg = rel.split('/')[0].toLowerCase();
+      const parts = rel.split('/');
+      const firstSeg = parts[0].toLowerCase();
       if (STANDARD_FOLDER_SET.has(firstSeg)) {
         folderSet.add(firstSeg);
+      }
+      const secondSeg = firstSeg === 'assets' && parts[1] ? parts[1].toLowerCase() : null;
+      if (secondSeg && STANDARD_FOLDER_SET.has(secondSeg)) {
+        folderSet.add(secondSeg);
       }
       if (entry.isDir) continue;
 
@@ -371,12 +378,25 @@ async function scanWebZipPackage(
         continue;
       }
 
-      const category = STANDARD_FOLDER_SET.has(firstSeg) ? firstSeg : 'other';
+      const category =
+        secondSeg && STANDARD_FOLDER_SET.has(secondSeg)
+          ? secondSeg
+          : STANDARD_FOLDER_SET.has(firstSeg)
+            ? firstSeg
+            : 'other';
       if (ext === '.json') {
         const extracted = await extractWebZipEntryBytes(bytes, entry);
         contentFiles.push({
           category,
           relativePath: rel,
+          rawText: decoder.decode(extracted),
+        });
+      } else if (ext === '.woa3d' && entry.uncompressedSize <= 2 * 1024 * 1024) {
+        const extracted = await extractWebZipEntryBytes(bytes, entry);
+        assetFiles.push({
+          category,
+          relativePath: rel,
+          sizeBytes: entry.uncompressedSize,
           rawText: decoder.decode(extracted),
         });
       } else {

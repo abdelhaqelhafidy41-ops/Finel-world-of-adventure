@@ -3014,6 +3014,116 @@ export const MultiplayerScreen: React.FC<MultiplayerScreenProps> = ({
                 </div>
               </div>
 
+              {/* Online Mod Compatibility Status (Required Mods / Compatible / Incompatible Players) */}
+              {(() => {
+                const compatStatus = activeRoom.modCompatibilityStatus;
+                const requiredMods =
+                  compatStatus?.requiredMods ??
+                  (activeRoom.modMetadata?.mods ?? []).filter(
+                    (m) => (m.multiplayerCompatibility ?? 'required') !== 'client_only',
+                  );
+                const compatiblePlayers =
+                  compatStatus?.compatiblePlayers ??
+                  activeRoom.players.map((p) => ({
+                    playerId: p.id,
+                    displayName: p.displayName,
+                    isHost: p.isHost,
+                  }));
+                const incompatiblePlayers = compatStatus?.incompatiblePlayers ?? [];
+                if (requiredMods.length === 0 && incompatiblePlayers.length === 0) {
+                  return null;
+                }
+                return (
+                  <div
+                    data-testid="mp-lobby-mod-compat-status"
+                    className="p-3.5 rounded-xl bg-[#0c1611] border border-[#2b4436] space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-xs font-display font-bold uppercase tracking-wider text-[#c9d7cb]">
+                        {t.mpLanModStatusTitle}
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-[#14221b] border border-[#345443] text-[10px] font-bold text-[#dce5d8]">
+                        {requiredMods.length === 0
+                          ? t.mpModsVanillaBadge
+                          : t.mpModsRequiredCountBadge(requiredMods.length)}
+                      </span>
+                    </div>
+
+                    {requiredMods.length > 0 && (
+                      <div className="space-y-1">
+                        <div className="text-[11px] font-semibold text-[#9db1a1]">
+                          {t.mpLanRequiredModsTitle}
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {requiredMods.map((mod) => (
+                            <span
+                              key={mod.modId}
+                              dir="ltr"
+                              className="px-2 py-0.5 rounded bg-[#112018] border border-[#2f493b] text-[11px] font-mono-num text-[#dce5d8]"
+                            >
+                              {mod.name} ({mod.modId} v{mod.version}
+                              {mod.compatibilityVersion ? ` · ${mod.compatibilityVersion}` : ''})
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div className="p-2.5 rounded-lg bg-[#08100c] border border-[#243d30] space-y-1">
+                        <div className="text-[11px] font-semibold text-[#9ef0b0]">
+                          {t.mpLanCompatiblePlayersTitle} ({compatiblePlayers.length})
+                        </div>
+                        <div className="space-y-0.5">
+                          {compatiblePlayers.map((cp) => (
+                            <div
+                              key={cp.playerId}
+                              className="text-xs text-[#dce5d8] flex items-center justify-between gap-2"
+                            >
+                              <span className="truncate">{cp.displayName}</span>
+                              {cp.isHost && (
+                                <span className="px-1.5 py-0.5 rounded bg-[#2a2313] border border-[#e5a93c]/45 text-[10px] font-bold text-[#f7d488] shrink-0">
+                                  {t.mpHostLabel}
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {(isLocalHost || incompatiblePlayers.length > 0) && (
+                        <div className="p-2.5 rounded-lg bg-[#160e10]/85 border border-[#e05a47]/35 space-y-1">
+                          <div className="text-[11px] font-semibold text-[#f4b1a7]">
+                            {t.mpLanIncompatiblePlayersTitle} ({incompatiblePlayers.length})
+                          </div>
+                          {incompatiblePlayers.length === 0 ? (
+                            <div className="text-[11px] text-[#cba39e]">
+                              {t.mpLanNoIncompatiblePlayers}
+                            </div>
+                          ) : (
+                            <div className="space-y-1.5 max-h-28 overflow-y-auto">
+                              {incompatiblePlayers.map((attempt, idx) => (
+                                <div
+                                  key={`${attempt.playerName}:${attempt.attemptedAt}:${idx}`}
+                                  className="p-1.5 rounded bg-[#1f1215] border border-[#e05a47]/25 text-[11px]"
+                                >
+                                  <div className="font-semibold text-white truncate">
+                                    {attempt.playerName}
+                                  </div>
+                                  <div className="text-[10px] text-[#e8bfba] whitespace-pre-line leading-snug mt-0.5">
+                                    {attempt.reason}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Room Chat Panel */}
               <RoomChatPanel
                 lang={lang}

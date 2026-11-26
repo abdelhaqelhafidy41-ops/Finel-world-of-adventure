@@ -1595,7 +1595,7 @@ export function isAllowedMultiplayerWeaponId(weaponId: string): boolean {
 }
 
 export const CURRENT_MOD_API_VERSION = 1;
-export const SUPPORTED_MOD_SCHEMA_VERSIONS = [1] as const;
+export const SUPPORTED_MOD_SCHEMA_VERSIONS = [1, 2] as const;
 export const MAX_MOD_METADATA_BYTES = 16_384;
 export const MAX_MODS_PER_METADATA = 64;
 export const MAX_DEPS_PER_MOD = 32;
@@ -3272,7 +3272,7 @@ export function sanitizeProtocolWorldModMetadata(
   const savedAtGameVersion = sanitizeModTextField(
     obj.savedAtGameVersion,
     24,
-    '1.0.0',
+    '1.1.25',
   );
 
   const rawMods = Array.isArray(obj.mods) ? obj.mods : [];
@@ -3302,7 +3302,7 @@ export function sanitizeProtocolWorldModMetadata(
 
     const rawSupportedGame =
       typeof rec.supportedGameVersion === 'string'
-        ? sanitizeModTextField(rec.supportedGameVersion, 32, '')
+        ? rec.supportedGameVersion.trim().slice(0, 32)
         : '';
     const supportedGameVersion =
       rawSupportedGame && isValidProtocolSemverRange(rawSupportedGame)
@@ -3311,7 +3311,7 @@ export function sanitizeProtocolWorldModMetadata(
 
     const rawCompatVer =
       typeof rec.compatibilityVersion === 'string'
-        ? sanitizeModTextField(rec.compatibilityVersion, 32, '')
+        ? rec.compatibilityVersion.trim().slice(0, 32)
         : '';
     const compatibilityVersion =
       rawCompatVer && isValidProtocolSemverRange(rawCompatVer)
@@ -3456,7 +3456,7 @@ export function formatProtocolModCompatibilityMessage(
 export function verifyMultiplayerModCompatibility(
   rawHostMeta: ProtocolWorldModMetadata | null | undefined,
   rawClientMeta: ProtocolWorldModMetadata | null | undefined,
-  currentGameVersion = '1.0.0',
+  currentGameVersion = '1.1.25',
 ): ProtocolModCompatibilityReport {
   const hostMeta = sanitizeProtocolWorldModMetadata(rawHostMeta);
   const clientMeta = sanitizeProtocolWorldModMetadata(rawClientMeta);

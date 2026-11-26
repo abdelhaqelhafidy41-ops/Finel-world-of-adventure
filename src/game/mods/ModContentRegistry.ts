@@ -86,6 +86,18 @@ export class ModContentRegistry {
       filesByCategory.set(cat, list);
     }
 
+    if (
+      !filesByCategory.has('models') &&
+      this.handlers.has('models') &&
+      context.assets.some(
+        (a) =>
+          a.category.toLowerCase() === 'models' ||
+          a.relativePath.toLowerCase().endsWith('.woa3d'),
+      )
+    ) {
+      filesByCategory.set('models', []);
+    }
+
     const orderedCategories = sortModCategories(Array.from(filesByCategory.keys()));
     for (const category of orderedCategories) {
       const files = filesByCategory.get(category) ?? [];

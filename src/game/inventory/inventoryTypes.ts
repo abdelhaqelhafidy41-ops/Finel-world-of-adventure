@@ -120,6 +120,7 @@ export interface ItemDefinition {
   maxDurability?: number;
   consumeEffect?: ItemConsumeEffect;
   valueCoins?: number;
+  modelPath?: string;
 }
 
 export interface InventorySlotState {

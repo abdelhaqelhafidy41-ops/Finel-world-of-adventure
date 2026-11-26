@@ -95,24 +95,40 @@ public final class AndroidExternalStorageManager {
         "music",
         "items",
         "weapons",
+        "armor",
+        "tools",
+        "consumables",
+        "resources",
+        "recipes",
         "characters",
+        "animals",
         "creatures",
+        "monsters",
         "npcs",
         "buildings",
+        "decorations",
         "quests",
-        "recipes",
+        "loot_tables",
         "localization"
     );
 
     private static final Set<String> MOD_CONTENT_FOLDERS = new HashSet<>(Arrays.asList(
         "items",
         "weapons",
+        "armor",
+        "tools",
+        "consumables",
+        "resources",
+        "recipes",
         "characters",
+        "animals",
         "creatures",
+        "monsters",
         "npcs",
         "buildings",
+        "decorations",
         "quests",
-        "recipes",
+        "loot_tables",
         "localization"
     ));
 
@@ -124,7 +140,8 @@ public final class AndroidExternalStorageManager {
         "music"
     ));
 
-    private static final String CURRENT_GAME_VERSION = "1.0.0";
+    private static final String CURRENT_GAME_VERSION = "1.1.25";
+    private static final Set<Integer> SUPPORTED_MOD_SCHEMA_VERSIONS = new HashSet<>(Arrays.asList(1, 2));
     private static final String FILE_WOAMOD_META = ".woamod-package.json";
     private static final String STAGING_DIR_PREFIX = ".woamod-staging-";
 
@@ -156,6 +173,7 @@ public final class AndroidExternalStorageManager {
         map.put(".obj", "text/plain");
         map.put(".mtl", "text/plain");
         map.put(".bin", "application/octet-stream");
+        map.put(".woa3d", "application/json");
         return map;
     }
 
@@ -1496,9 +1514,12 @@ public final class AndroidExternalStorageManager {
                     dirEntries.add(cleanName);
                 } else {
                     String ext = getLowerExtension(cleanName);
-                    if ("mod.json".equals(cleanName) || cleanName.endsWith("/mod.json") || ".json".equals(ext)) {
+                    if ("mod.json".equals(cleanName) || cleanName.endsWith("/mod.json") || ".json".equals(ext) || ".woa3d".equals(ext)) {
                         byte[] bytes = readStreamCapped(zis, MAX_MOD_JSON_BYTES);
                         jsonFiles.put(cleanName, bytes);
+                        if (".woa3d".equals(ext)) {
+                            assetSizes.put(cleanName, (long) bytes.length);
+                        }
                     } else {
                         long sz = entry.getSize();
                         if (sz < 0) {
@@ -1592,7 +1613,14 @@ public final class AndroidExternalStorageManager {
                     asset.put("category", category);
                     asset.put("relativePath", rel);
                     Long sz = assetSizes.get(rawName);
-                    asset.put("sizeBytes", sz != null ? sz : 0L);
+                    long actualSize = sz != null ? sz : 0L;
+                    asset.put("sizeBytes", actualSize);
+                    if (".woa3d".equals(ext) && jsonFiles.containsKey(rawName)) {
+                        byte[] wBytes = jsonFiles.get(rawName);
+                        if (wBytes != null) {
+                            asset.put("rawText", new String(wBytes, StandardCharsets.UTF_8));
+                        }
+                    }
                     assetFiles.put(asset);
                 }
             }
@@ -1690,6 +1718,9 @@ public final class AndroidExternalStorageManager {
                     asset.put("category", category);
                     asset.put("relativePath", rel);
                     asset.put("sizeBytes", child.length());
+                    if (".woa3d".equals(ext) && child.length() <= MAX_MOD_JSON_BYTES) {
+                        asset.put("rawText", readFileUtf8(child));
+                    }
                     assetFiles.put(asset);
                 }
             } catch (Exception ignored) {
@@ -1865,6 +1896,10 @@ public final class AndroidExternalStorageManager {
                         asset.put("category", category);
                         asset.put("relativePath", rel);
                         asset.put("sizeBytes", size);
+                        if (".woa3d".equals(ext) && size <= MAX_MOD_JSON_BYTES) {
+                            String txt = readSafDocUtf8(treeUri, docId);
+                            if (txt != null) asset.put("rawText", txt);
+                        }
                         assetFiles.put(asset);
                     }
                 } catch (Exception ignored) {
@@ -2611,7 +2646,7 @@ public final class AndroidExternalStorageManager {
                         return "{\"ok\":false,\"error\":\"MANIFEST_TOO_LARGE_OR_INVALID\"}";
                     }
                     manifestBytes = content;
-                } else if (MOD_CONTENT_FOLDERS.contains(topFolder) && ".json".equals(ext)) {
+                } else if ((MOD_CONTENT_FOLDERS.contains(topFolder) && ".json".equals(ext)) || ".woa3d".equals(ext)) {
                     if (content.length > MAX_MOD_JSON_BYTES) {
                         return "{\"ok\":false,\"error\":\"ZIP_ENTRY_TOO_LARGE\"}";
                     }
@@ -2649,7 +2684,30 @@ public final class AndroidExternalStorageManager {
             }
 
             if (!satisfiesBasicSemverRange(CURRENT_GAME_VERSION, supportedGameVer)) {
-                return "{\"ok\":false,\"error\":\"UNSUPPORTED_GAME_VERSION\",\"detail\":" + JSONObject.quote("Requires " + supportedGameVer) + "}";
+                return "{\"ok\":false,\"error\":\"UNSUPPORTED_GAME_VERSION\",\"detail\":" + JSONObject.quote("Requires " + supportedGameVer + ", current version is " + CURRENT_GAME_VERSION) + "}";
+            }
+
+            String minGameVer = manifest.optString("minGameVersion", "").trim();
+            String maxGameVer = manifest.optString("maxGameVersion", "").trim();
+            int[] curSem = parseBasicSemver(CURRENT_GAME_VERSION);
+            if (!minGameVer.isEmpty()) {
+                int[] minSem = parseBasicSemver(minGameVer);
+                if (minSem == null || (curSem != null && compareBasicSemver(curSem, minSem) < 0)) {
+                    return "{\"ok\":false,\"error\":\"UNSUPPORTED_GAME_VERSION\",\"detail\":" + JSONObject.quote("Requires >= " + minGameVer + ", current version is " + CURRENT_GAME_VERSION) + "}";
+                }
+            }
+            if (!maxGameVer.isEmpty()) {
+                int[] maxSem = parseBasicSemver(maxGameVer);
+                if (maxSem == null || (curSem != null && compareBasicSemver(curSem, maxSem) > 0)) {
+                    return "{\"ok\":false,\"error\":\"UNSUPPORTED_GAME_VERSION\",\"detail\":" + JSONObject.quote("Supports <= " + maxGameVer + ", current version is " + CURRENT_GAME_VERSION) + "}";
+                }
+            }
+
+            int reqSchema = manifest.has("schemaVersion") && !manifest.isNull("schemaVersion")
+                ? manifest.optInt("schemaVersion", -1)
+                : 1;
+            if (!SUPPORTED_MOD_SCHEMA_VERSIONS.contains(reqSchema)) {
+                return "{\"ok\":false,\"error\":\"UNSUPPORTED_MOD_SCHEMA_VERSION\",\"detail\":" + JSONObject.quote("Unsupported schemaVersion v" + reqSchema) + "}";
             }
 
             // Collect installed mod versions for duplicate + dependency checks

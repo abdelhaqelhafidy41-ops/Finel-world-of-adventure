@@ -212,6 +212,8 @@ import type {
   VillageDevelopmentSnapshot,
 } from '../village/villageDevTypes';
 import {
+  evaluateMultiplayerHostClientCompatibility,
+  formatMultiplayerModRejectionMessage,
   getModManager,
   type WorldModMetadataSnapshot,
   type WorldModSelectionEntry,
@@ -7526,12 +7528,17 @@ export class GameEngine {
       remoteModMeta,
     );
     if (!mpCompat.compatible) {
+      const protocolReport = evaluateMultiplayerHostClientCompatibility(
+        remoteModMeta,
+        getModManager().getActiveWorldModMetadata(),
+      );
       const firstErr = mpCompat.issues.find((i) => i.severity === 'error');
+      const detailedSummary = !protocolReport.compatible
+        ? formatMultiplayerModRejectionMessage(protocolReport)
+        : (firstErr?.message ?? UI_TEXT[this.language].mpModCompatMismatchTitle);
       this.multiplayerSessionActive = false;
       this.multiplayerService?.disconnect();
-      this.callbacks.onWorldNotice(
-        firstErr?.message ?? UI_TEXT[this.language].mpModCompatMismatchTitle,
-      );
+      this.callbacks.onWorldNotice(detailedSummary);
       return false;
     }
     if (mpCompat.hasWarnings) {

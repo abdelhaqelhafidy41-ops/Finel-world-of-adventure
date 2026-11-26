@@ -17,6 +17,12 @@ import {
   parseSemver,
   satisfiesSemverRange,
 } from './modSemver';
+import {
+  extractModelReferenceFromContent,
+  isWoa3dCompatibleWithContent,
+  normalizeModRelativeAssetPathForLookup,
+  parseAndValidateWoa3dText,
+} from './woa3dMetadata';
 
 export const MAX_WOAMOD_ARCHIVE_BYTES = 150 * 1024 * 1024;
 export const MAX_WOAMOD_UNCOMPRESSED_TOTAL_BYTES = 300 * 1024 * 1024;
@@ -500,9 +506,11 @@ function normalizeManifestFromObject(
       ? Math.trunc(parsed.modApiVersion)
       : MOD_API_VERSION;
   const schemaVersion =
-    typeof parsed.schemaVersion === 'number' && Number.isFinite(parsed.schemaVersion)
-      ? Math.trunc(parsed.schemaVersion)
-      : MOD_CONTENT_SCHEMA_VERSION;
+    parsed.schemaVersion === undefined || parsed.schemaVersion === null
+      ? 1
+      : typeof parsed.schemaVersion === 'number' && Number.isFinite(parsed.schemaVersion)
+        ? Math.trunc(parsed.schemaVersion)
+        : Number.NaN;
   const mpRaw =
     typeof parsed.multiplayerCompatibility === 'string'
       ? parsed.multiplayerCompatibility.trim()
@@ -613,6 +621,11 @@ export async function validateWoamodArchiveBytes(
     category: string;
     entry: WoamodZipEntryHeader;
   }> = [];
+  const woa3dEntries: Array<{
+    rel: string;
+    category: string;
+    entry: WoamodZipEntryHeader;
+  }> = [];
 
   for (const entry of entries) {
     let rel = entry.name;
@@ -665,6 +678,9 @@ export async function validateWoamodArchiveBytes(
     } else {
       const second = topFolder === 'assets' && parts[1] ? parts[1].toLowerCase() : null;
       const category = second && STANDARD_FOLDER_SET.has(second) ? second : topFolder;
+      if (ext === '.woa3d') {
+        woa3dEntries.push({ rel, category, entry });
+      }
       assetPreviews.push({
         category,
         relativePath: rel,
@@ -779,11 +795,11 @@ export async function validateWoamodArchiveBytes(
   }
 
   const reqSchema = manifest.schemaVersion ?? MOD_CONTENT_SCHEMA_VERSION;
-  if (!SUPPORTED_MOD_SCHEMA_VERSIONS.includes(reqSchema)) {
+  if (!Number.isInteger(reqSchema) || !SUPPORTED_MOD_SCHEMA_VERSIONS.includes(reqSchema)) {
     return {
       ok: false,
-      errorCode: 'UNSUPPORTED_GAME_VERSION',
-      message: `Mod schemaVersion v${reqSchema} is unsupported by this version of World of Adventure.`,
+      errorCode: 'UNSUPPORTED_MOD_SCHEMA_VERSION',
+      message: `Mod content schemaVersion v${String(reqSchema)} is not supported (supported: v${SUPPORTED_MOD_SCHEMA_VERSIONS.join(', v')}).`,
       detail: `modId=${manifest.modId}`,
       manifest,
     };
@@ -859,13 +875,82 @@ export async function validateWoamodArchiveBytes(
     }
   }
 
+  // Validate .woa3d 3D model descriptors inside the package
+  const woa3dByLookupPath = new Map<string, { rel: string; canonicalCategory: string; modCategory: string }>();
+  for (let i = 0; i < woa3dEntries.length; i++) {
+    const woaItem = woa3dEntries[i];
+    const catLower = woaItem.category.toLowerCase();
+    if (catLower !== 'models' && catLower !== 'assets') {
+      return {
+        ok: false,
+        errorCode: 'INVALID_WOA3D_LOCATION',
+        message: `.woa3d model asset "${woaItem.rel}" must be stored under assets/models/ or models/ (found category "${woaItem.category}").`,
+        detail: woaItem.rel,
+        manifest,
+      };
+    }
+
+    try {
+      const woaBytes = await extractWoamodEntryBytes(
+        bytes,
+        woaItem.entry,
+        MAX_WOAMOD_JSON_BYTES,
+      );
+      const woaText = new TextDecoder('utf-8', { fatal: true }).decode(woaBytes);
+      const woaRes = parseAndValidateWoa3dText(woaText, SUPPORTED_MOD_SCHEMA_VERSIONS);
+      if (!woaRes.ok) {
+        return {
+          ok: false,
+          errorCode: woaRes.errorCode,
+          message: `Invalid .woa3d asset "${woaItem.rel}": ${woaRes.message}`,
+          detail: woaItem.rel,
+          manifest,
+        };
+      }
+      const lookupKey = normalizeModRelativeAssetPathForLookup(woaItem.rel, manifest.modId);
+      if (lookupKey) {
+        woa3dByLookupPath.set(lookupKey, {
+          rel: woaItem.rel,
+          canonicalCategory: woaRes.metadata.canonicalCategory,
+          modCategory: woaRes.metadata.modCategory,
+        });
+      }
+    } catch {
+      return {
+        ok: false,
+        errorCode: 'CORRUPT_WOA3D_JSON',
+        message: `Corrupted or unreadable .woa3d asset "${woaItem.rel}" inside .woamod package.`,
+        detail: woaItem.rel,
+        manifest,
+      };
+    }
+  }
+
   // Validate all content JSON files inside the package so corrupt JSON never installs
+  const collectContentObjects = (data: unknown): Array<Record<string, unknown>> => {
+    if (Array.isArray(data)) {
+      return data.filter(isPlainRecord);
+    }
+    if (!isPlainRecord(data)) return [];
+    const list: Array<Record<string, unknown>> = [];
+    for (const val of Object.values(data)) {
+      if (Array.isArray(val)) {
+        for (const item of val) {
+          if (isPlainRecord(item)) list.push(item);
+        }
+      }
+    }
+    if (list.length === 0) list.push(data);
+    return list;
+  };
+
   for (let i = 0; i < contentJsonEntries.length; i++) {
     const item = contentJsonEntries[i];
     if (contentJsonEntries.length > 0) {
       const pct = 46 + Math.round(((i + 1) / contentJsonEntries.length) * 12);
       emitProgress(Math.min(58, pct), 'validating', item.rel);
     }
+    let parsedContent: unknown;
     try {
       const contentBytes = await extractWoamodEntryBytes(
         bytes,
@@ -873,7 +958,7 @@ export async function validateWoamodArchiveBytes(
         MAX_WOAMOD_JSON_BYTES,
       );
       const text = new TextDecoder('utf-8', { fatal: true }).decode(contentBytes);
-      JSON.parse(text);
+      parsedContent = JSON.parse(text);
     } catch {
       return {
         ok: false,
@@ -882,6 +967,32 @@ export async function validateWoamodArchiveBytes(
         detail: item.rel,
         manifest,
       };
+    }
+
+    if (woa3dByLookupPath.size > 0) {
+      for (const contentObj of collectContentObjects(parsedContent)) {
+        const modelRef = extractModelReferenceFromContent(contentObj);
+        if (!modelRef) continue;
+        const lookupKey = normalizeModRelativeAssetPathForLookup(modelRef, manifest.modId);
+        if (!lookupKey) continue;
+        const woaInfo = woa3dByLookupPath.get(lookupKey);
+        if (!woaInfo) continue;
+        if (
+          !isWoa3dCompatibleWithContent(
+            woaInfo.canonicalCategory,
+            item.category,
+            contentObj,
+          )
+        ) {
+          return {
+            ok: false,
+            errorCode: 'WOA3D_CATEGORY_MISMATCH',
+            message: `Content "${item.rel}" (${item.category}) references model "${woaInfo.rel}" with incompatible modCategory "${woaInfo.modCategory}".`,
+            detail: `${item.rel} -> ${woaInfo.rel}`,
+            manifest,
+          };
+        }
+      }
     }
   }
 

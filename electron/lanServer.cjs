@@ -13,7 +13,7 @@ const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_HTTP_BODY_BYTES = 32_768;
 const MAX_WS_PAYLOAD_BYTES = 65_536;
 const CURRENT_MOD_API_VERSION = 1;
-const SUPPORTED_MOD_SCHEMA_VERSIONS = new Set([1]);
+const SUPPORTED_MOD_SCHEMA_VERSIONS = new Set([1, 2]);
 const VALID_MOD_COMPAT_MODES = new Set(['required', 'optional', 'client_only']);
 const SAFE_MOD_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,63}$/i;
 const MAX_MOD_METADATA_BYTES = 16_384;
@@ -502,7 +502,7 @@ function sanitizeLanModMetadata(raw) {
     typeof raw.schemaVersion === 'number' && Number.isFinite(raw.schemaVersion)
       ? Math.max(1, Math.min(999, Math.round(raw.schemaVersion)))
       : 1;
-  const savedAtGameVersion = sanitizeLanModText(raw.savedAtGameVersion, 24, '1.0.0');
+  const savedAtGameVersion = sanitizeLanModText(raw.savedAtGameVersion, 24, '1.1.25');
   const rawMods = Array.isArray(raw.mods) ? raw.mods : [];
   const modsById = new Map();
   for (let i = 0; i < rawMods.length && modsById.size < MAX_MODS_PER_METADATA; i += 1) {
@@ -527,7 +527,7 @@ function sanitizeLanModMetadata(raw) {
         : schemaVersion;
     const rawSupportedGame =
       typeof entry.supportedGameVersion === 'string'
-        ? sanitizeLanModText(entry.supportedGameVersion, 32, '')
+        ? entry.supportedGameVersion.trim().slice(0, 32)
         : '';
     const supportedGameVersion =
       rawSupportedGame && isValidLanSemverRange(rawSupportedGame)
@@ -535,7 +535,7 @@ function sanitizeLanModMetadata(raw) {
         : undefined;
     const rawCompatVer =
       typeof entry.compatibilityVersion === 'string'
-        ? sanitizeLanModText(entry.compatibilityVersion, 32, '')
+        ? entry.compatibilityVersion.trim().slice(0, 32)
         : '';
     const compatibilityVersion =
       rawCompatVer && isValidLanSemverRange(rawCompatVer) ? rawCompatVer : undefined;
@@ -609,7 +609,7 @@ function formatLanModCompatibilityMessage(report) {
   return lines.join('\n');
 }
 
-function verifyLanModCompatibility(rawHostMeta, rawClientMeta, currentGameVersion = '1.0.0') {
+function verifyLanModCompatibility(rawHostMeta, rawClientMeta, currentGameVersion = '1.1.25') {
   const hostMeta = sanitizeLanModMetadata(rawHostMeta);
   const clientMeta = sanitizeLanModMetadata(rawClientMeta);
   const issues = [];
@@ -636,7 +636,7 @@ function verifyLanModCompatibility(rawHostMeta, rawClientMeta, currentGameVersio
       issues.push({
         modId: '__mod_schema__',
         code: 'schema_version_mismatch',
-        expectedVersion: '1',
+        expectedVersion: Array.from(SUPPORTED_MOD_SCHEMA_VERSIONS).join(', '),
         actualVersion: String(hostMeta.schemaVersion),
         message: `Host uses unsupported mod schema v${hostMeta.schemaVersion}.`,
       });

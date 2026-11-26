@@ -101,6 +101,7 @@ export interface BuildingBlueprint {
   /** Snap metadata */
   snapType?: SnapAnchorType;
   snapAnchors?: SnapAnchorDef[];
+  modelPath?: string;
 }
 
 export interface PlayerStructureStorageItem {

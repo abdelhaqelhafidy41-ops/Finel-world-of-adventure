@@ -22,12 +22,18 @@ import {
   parseSemver,
   satisfiesSemverRange,
 } from './modSemver';
+import {
+  extractModelReferenceFromContent,
+  isWoa3dCompatibleWithContent,
+  normalizeModRelativeAssetPathForLookup,
+  parseAndValidateWoa3dText,
+} from './woa3dMetadata';
 
 const MOD_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,63}$/i;
 const MAX_MOD_ASSET_BYTES = 16 * 1024 * 1024;
 
 const TEXTURE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.avif']);
-const MODEL_EXTENSIONS = new Set(['.glb', '.gltf', '.obj', '.mtl', '.bin']);
+const MODEL_EXTENSIONS = new Set(['.glb', '.gltf', '.obj', '.mtl', '.bin', '.woa3d']);
 const AUDIO_EXTENSIONS = new Set(['.ogg', '.mp3', '.wav']);
 const GENERAL_SAFE_ASSET_EXTENSIONS = new Set([
   ...TEXTURE_EXTENSIONS,
@@ -422,9 +428,11 @@ function parseManifest(
       ? Math.trunc(parsed.modApiVersion)
       : MOD_API_VERSION;
   const schemaVersion =
-    typeof parsed.schemaVersion === 'number' && Number.isFinite(parsed.schemaVersion)
-      ? Math.trunc(parsed.schemaVersion)
-      : MOD_CONTENT_SCHEMA_VERSION;
+    parsed.schemaVersion === undefined || parsed.schemaVersion === null
+      ? 1
+      : typeof parsed.schemaVersion === 'number' && Number.isFinite(parsed.schemaVersion)
+        ? Math.trunc(parsed.schemaVersion)
+        : Number.NaN;
   const mpCompatRaw =
     typeof parsed.multiplayerCompatibility === 'string'
       ? parsed.multiplayerCompatibility.trim()
@@ -616,29 +624,131 @@ export function validateDiscoveredMods(
 
     const reqSchemaVersion =
       parsedManifest.manifest.schemaVersion ?? MOD_CONTENT_SCHEMA_VERSION;
-    if (!SUPPORTED_MOD_SCHEMA_VERSIONS.includes(reqSchemaVersion)) {
+    if (!Number.isInteger(reqSchemaVersion) || !SUPPORTED_MOD_SCHEMA_VERSIONS.includes(reqSchemaVersion)) {
       gameCompatible = false;
       diagnostics.push({
         code: 'UNSUPPORTED_MOD_SCHEMA_VERSION',
         severity: 'error',
-        message: `Mod content schemaVersion v${reqSchemaVersion} is not supported (supported: v${SUPPORTED_MOD_SCHEMA_VERSIONS.join(', v')}).`,
+        message: `Mod content schemaVersion v${String(reqSchemaVersion)} is not supported (supported: v${SUPPORTED_MOD_SCHEMA_VERSIONS.join(', v')}).`,
       });
     }
 
     const assets: ModAssetIndexEntry[] = [];
     const incompatibleAssets: IncompatibleModAsset[] = [];
+    const woa3dByLookupPath = new Map<string, ModAssetIndexEntry>();
+
     for (const af of raw.assetFiles) {
       const issue = classifyModAsset(af.category, af.relativePath, af.sizeBytes);
       if (issue) {
         incompatibleAssets.push(issue);
-      } else {
-        assets.push({
+        continue;
+      }
+
+      const ext = getAssetExtension(af.relativePath);
+      if (ext === '.woa3d') {
+        let woa3dMetadata: ModAssetIndexEntry['woa3dMetadata'];
+        if (typeof af.rawText === 'string') {
+          const woaCheck = parseAndValidateWoa3dText(af.rawText, SUPPORTED_MOD_SCHEMA_VERSIONS);
+          if (!woaCheck.ok) {
+            incompatibleAssets.push({
+              category: af.category,
+              relativePath: af.relativePath,
+              sizeBytes: af.sizeBytes,
+              reason:
+                woaCheck.reason === 'wrong_category'
+                  ? 'wrong_category'
+                  : 'unsupported_format',
+              detail: woaCheck.message,
+            });
+            continue;
+          }
+          woa3dMetadata = woaCheck.metadata;
+        }
+        const entry: ModAssetIndexEntry = {
           modId,
           sourceId: raw.sourceId,
           category: af.category,
           relativePath: af.relativePath,
           sizeBytes: af.sizeBytes,
-        });
+          ...(woa3dMetadata ? { woa3dMetadata } : {}),
+          ...(typeof af.rawText === 'string' ? { rawText: af.rawText } : {}),
+        };
+        const lookupKey = normalizeModRelativeAssetPathForLookup(af.relativePath, modId);
+        if (lookupKey) {
+          woa3dByLookupPath.set(lookupKey, entry);
+        }
+        assets.push(entry);
+        continue;
+      }
+
+      assets.push({
+        modId,
+        sourceId: raw.sourceId,
+        category: af.category,
+        relativePath: af.relativePath,
+        sizeBytes: af.sizeBytes,
+      });
+    }
+
+    if (woa3dByLookupPath.size > 0 && parsedContentFiles.length > 0) {
+      const collectContentEntries = (data: unknown): Array<Record<string, unknown>> => {
+        if (Array.isArray(data)) {
+          return data.filter(isPlainRecord);
+        }
+        if (!isPlainRecord(data)) return [];
+        const out: Array<Record<string, unknown>> = [];
+        for (const val of Object.values(data)) {
+          if (Array.isArray(val)) {
+            for (const item of val) {
+              if (isPlainRecord(item)) out.push(item);
+            }
+          }
+        }
+        if (out.length === 0) out.push(data);
+        return out;
+      };
+
+      const mismatchedWoa3dPaths = new Set<string>();
+      for (const contentFile of parsedContentFiles) {
+        const entries = collectContentEntries(contentFile.data);
+        for (const contentObj of entries) {
+          const modelRef = extractModelReferenceFromContent(contentObj);
+          if (!modelRef) continue;
+          const lookupKey = normalizeModRelativeAssetPathForLookup(modelRef, modId);
+          if (!lookupKey) continue;
+          const woaAsset = woa3dByLookupPath.get(lookupKey);
+          if (!woaAsset?.woa3dMetadata) continue;
+
+          if (
+            !isWoa3dCompatibleWithContent(
+              woaAsset.woa3dMetadata.canonicalCategory,
+              contentFile.category,
+              contentObj,
+            )
+          ) {
+            mismatchedWoa3dPaths.add(woaAsset.relativePath);
+            incompatibleAssets.push({
+              category: woaAsset.category,
+              relativePath: woaAsset.relativePath,
+              sizeBytes: woaAsset.sizeBytes,
+              reason: 'wrong_category',
+              detail: `Content "${contentFile.relativePath}" (${contentFile.category}) referenced .woa3d with modCategory "${woaAsset.woa3dMetadata.modCategory}".`,
+            });
+            diagnostics.push({
+              code: 'WOA3D_CATEGORY_MISMATCH',
+              severity: 'warning',
+              message: `Model "${woaAsset.relativePath}" has modCategory "${woaAsset.woa3dMetadata.modCategory}" which does not match "${contentFile.category}" in "${contentFile.relativePath}".`,
+            });
+          }
+        }
+      }
+
+      if (mismatchedWoa3dPaths.size > 0) {
+        for (let i = assets.length - 1; i >= 0; i--) {
+          if (mismatchedWoa3dPaths.has(assets[i].relativePath)) {
+            assets.splice(i, 1);
+          }
+        }
       }
     }
 
@@ -651,7 +761,9 @@ export function validateDiscoveredMods(
         code: 'INCOMPATIBLE_ASSET',
         severity: 'warning',
         message: `Incompatible asset (${incompatibleAssets.length} file${incompatibleAssets.length > 1 ? 's' : ''} skipped): ${sample}`,
-        detail: incompatibleAssets.map((a) => `${a.relativePath} (${a.reason})`).join(', '),
+        detail: incompatibleAssets
+          .map((a) => `${a.relativePath} (${a.reason}${a.detail ? `: ${a.detail}` : ''})`)
+          .join(', '),
       });
     }
 

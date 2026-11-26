@@ -29,6 +29,8 @@ import {
   resolveModCrossReference,
   resolveModObjectIdentifier,
 } from '../ModNamespaceRegistry';
+import { SUPPORTED_MOD_SCHEMA_VERSIONS, type Woa3dModelDescriptor } from '../modTypes';
+import { parseAndValidateWoa3dText } from '../woa3dMetadata';
 import type {
   ModContentHandler,
   ModContentHandlerResult,
@@ -272,6 +274,15 @@ function sanitizeItemLikeDefinition(
   );
   if (!assetCheck.ok) return null;
 
+  const modelCheck = resolveOptionalAssetField(
+    modId,
+    raw,
+    ['modelPath', 'model', 'modelAsset', 'woa3d', 'woa3dPath', 'model3d'],
+    diagnostics,
+    sourceFile,
+  );
+  if (!modelCheck.ok) return null;
+
   const id = idRes.fullId;
 
   let defaultCategory: ItemDefinition['category'] = 'material';
@@ -353,6 +364,7 @@ function sanitizeItemLikeDefinition(
       typeof raw.valueCoins === 'number' && Number.isFinite(raw.valueCoins)
         ? Math.max(0, Math.round(raw.valueCoins))
         : undefined,
+    ...(modelCheck.value ? { modelPath: modelCheck.value } : {}),
   };
 
   if (typeof raw.equipSlot === 'string' && VALID_EQUIP_SLOTS.has(raw.equipSlot.trim())) {
@@ -462,6 +474,7 @@ function sanitizeItemLikeDefinition(
       isRanged,
       projectileSpeed: isRanged ? 34 : undefined,
       chargeDuration: isRanged ? 0.55 : undefined,
+      ...(modelCheck.value ? { modelPath: modelCheck.value } : {}),
     };
   }
 
@@ -643,11 +656,20 @@ function sanitizeBlueprint(
   const assetCheck = resolveOptionalAssetField(
     modId,
     raw,
-    ['texture', 'texturePath', 'model', 'modelPath'],
+    ['texture', 'texturePath'],
     diagnostics,
     sourceFile,
   );
   if (!assetCheck.ok) return null;
+
+  const modelCheck = resolveOptionalAssetField(
+    modId,
+    raw,
+    ['modelPath', 'model', 'modelAsset', 'woa3d', 'woa3dPath', 'model3d'],
+    diagnostics,
+    sourceFile,
+  );
+  if (!modelCheck.ok) return null;
 
   const rawCat = typeof raw.category === 'string' ? raw.category.trim() : '';
   const category: BuildingCategory = VALID_BUILDING_CATEGORIES.has(rawCat)
@@ -728,6 +750,7 @@ function sanitizeBlueprint(
           ? 120
           : 250,
     repairCosts,
+    ...(modelCheck.value ? { modelPath: modelCheck.value } : {}),
   };
 }
 
@@ -1020,7 +1043,7 @@ function sanitizeEntityDescriptor(
   const modelCheck = resolveOptionalAssetField(
     modId,
     raw,
-    ['modelPath', 'model'],
+    ['modelPath', 'model', 'modelAsset', 'woa3d', 'woa3dPath', 'model3d'],
     diagnostics,
     sourceFile,
   );
@@ -1090,6 +1113,7 @@ export interface ModContentRegistryMap {
   sounds: NamespacedContentRegistry<ModSoundDescriptor>;
   music: NamespacedContentRegistry<ModMusicDescriptor>;
   textures: NamespacedContentRegistry<ModTextureDescriptor>;
+  models: NamespacedContentRegistry<Woa3dModelDescriptor>;
   localization: NamespacedContentRegistry<ModLocalizationEntry>;
 }
 
@@ -1113,10 +1137,12 @@ export class DefaultModContentStore {
     sounds: new NamespacedContentRegistry<ModSoundDescriptor>('sounds'),
     music: new NamespacedContentRegistry<ModMusicDescriptor>('music'),
     textures: new NamespacedContentRegistry<ModTextureDescriptor>('textures'),
+    models: new NamespacedContentRegistry<Woa3dModelDescriptor>('models'),
     localization: new NamespacedContentRegistry<ModLocalizationEntry>('localization'),
   };
 
   public readonly weaponStatsRegistry = new NamespacedContentRegistry<WeaponStats>('weapons');
+  public readonly modelsRegistry = this.registries.models;
 
   private readonly descriptorsByCategory = new Map<
     string,
@@ -1179,6 +1205,22 @@ export class DefaultModContentStore {
 
   public getLootTable(tableId: string): ModLootTableDescriptor | undefined {
     return this.registries.loot_tables.get(tableId);
+  }
+
+  public getModModel(idOrCanonicalRef: string): Woa3dModelDescriptor | undefined {
+    const direct = this.modelsRegistry.get(idOrCanonicalRef);
+    if (direct) return direct;
+    const normalizedInput = idOrCanonicalRef.trim().toLowerCase();
+    for (const model of this.modelsRegistry.getAll()) {
+      if (model.canonicalRef.toLowerCase() === normalizedInput) {
+        return model;
+      }
+    }
+    return undefined;
+  }
+
+  public getAllModModels(): Woa3dModelDescriptor[] {
+    return this.modelsRegistry.getAll();
   }
 
   public getDescriptors(category: string): ModDescriptorEntry[] {
@@ -1278,7 +1320,7 @@ export class DefaultModContentStore {
       this.createEntityHandler('monsters', ['monsters', 'enemies'], this.registries.monsters),
       this.createEntityHandler('npcs', ['npcs'], this.registries.npcs),
       this.createDescriptorHandler('assets', ['assets']),
-      this.createDescriptorHandler('models', ['models']),
+      this.createModelsHandler(),
     ];
   }
 
@@ -1932,6 +1974,137 @@ export class DefaultModContentStore {
         this.descriptorsByCategory.get(category)?.delete(modId);
       },
       clearAll: () => {
+        this.descriptorsByCategory.get(category)?.clear();
+      },
+    };
+  }
+
+  private createModelsHandler(): ModContentHandler {
+    const category = 'models';
+    if (!this.descriptorsByCategory.has(category)) {
+      this.descriptorsByCategory.set(category, new Map());
+    }
+    return {
+      contentType: category,
+      validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
+        const diagnostics: ModDiagnostic[] = [];
+        const entries: ModDescriptorEntry[] = [];
+        this.modelsRegistry.unloadMod(ctx.modId);
+        let loadedCount = 0;
+
+        for (const file of ctx.files) {
+          const list = extractEntriesList(file.data, ['models']);
+          if (list.length === 0 && isRecord(file.data)) {
+            const rawId =
+              typeof file.data.id === 'string' ? file.data.id : file.relativePath;
+            entries.push({
+              modId: ctx.modId,
+              id: rawId.includes(':') ? rawId : `${ctx.modId}:${rawId}`,
+              payload: file.data,
+            });
+            loadedCount += 1;
+            continue;
+          }
+
+          for (const item of list) {
+            if (!isRecord(item)) continue;
+            const rawId =
+              typeof item.id === 'string' && item.id.trim()
+                ? item.id.trim()
+                : `${file.relativePath}#${entries.length}`;
+            entries.push({
+              modId: ctx.modId,
+              id: rawId.includes(':') ? rawId : `${ctx.modId}:${rawId}`,
+              payload: item,
+            });
+            loadedCount += 1;
+          }
+        }
+
+        for (const asset of ctx.assets) {
+          if (!asset.relativePath.toLowerCase().endsWith('.woa3d')) continue;
+          let meta = asset.woa3dMetadata;
+          let rawObj: Record<string, unknown> | undefined;
+          if (!meta && typeof asset.rawText === 'string') {
+            const parsed = parseAndValidateWoa3dText(
+              asset.rawText,
+              SUPPORTED_MOD_SCHEMA_VERSIONS,
+            );
+            if (!parsed.ok) {
+              diagnostics.push({
+                code: parsed.errorCode,
+                severity: 'warning',
+                message: `Skipped invalid .woa3d model "${asset.relativePath}": ${parsed.message}`,
+              });
+              continue;
+            }
+            meta = parsed.metadata;
+            rawObj = parsed.parsed;
+          } else if (typeof asset.rawText === 'string') {
+            try {
+              const maybe = JSON.parse(asset.rawText);
+              if (isRecord(maybe)) rawObj = maybe;
+            } catch {
+              // ignore
+            }
+          }
+
+          const fileSlug =
+            asset.relativePath
+              .split('/')
+              .pop()
+              ?.replace(/\.woa3d$/i, '')
+              .replace(/[^a-z0-9._-]+/gi, '_') || 'model';
+          const rawObjId = (meta?.id ?? fileSlug).replace(/[^a-z0-9._:-]+/gi, '_');
+          const idRes = resolveModObjectIdentifier(ctx.modId, rawObjId, CORE_PROTECTED_IDS);
+          const fullId = idRes.ok
+            ? idRes.fullId
+            : `${ctx.modId}:${fileSlug.toLowerCase()}`;
+          const canonicalRef = `${ctx.modId}://${asset.relativePath.replace(/\\/g, '/')}`;
+
+          const descriptor: Woa3dModelDescriptor = {
+            id: fullId,
+            modId: ctx.modId,
+            relativePath: asset.relativePath,
+            canonicalRef,
+            category: meta?.category ?? '3d-model',
+            type: '3d-model',
+            modCategory: meta?.modCategory ?? 'models',
+            canonicalCategory: meta?.canonicalCategory ?? 'models',
+            schemaVersion:
+              meta?.schemaVersion ?? ctx.manifest.schemaVersion ?? 2,
+            name: meta?.name ?? fileSlug,
+            sizeBytes: asset.sizeBytes,
+            ...(rawObj ? { raw: rawObj } : {}),
+          };
+
+          const regRes = this.modelsRegistry.register(ctx.modId, fullId, descriptor);
+          if (!regRes.ok) {
+            diagnostics.push({
+              code: regRes.code,
+              severity: 'warning',
+              message: `${asset.relativePath}: ${regRes.message}`,
+            });
+            continue;
+          }
+
+          entries.push({
+            modId: ctx.modId,
+            id: fullId,
+            payload: descriptor as unknown as Record<string, unknown>,
+          });
+          loadedCount += 1;
+        }
+
+        this.descriptorsByCategory.get(category)!.set(ctx.modId, entries);
+        return { loadedCount, diagnostics };
+      },
+      unloadMod: (modId: string) => {
+        this.modelsRegistry.unloadMod(modId);
+        this.descriptorsByCategory.get(category)?.delete(modId);
+      },
+      clearAll: () => {
+        this.modelsRegistry.clear();
         this.descriptorsByCategory.get(category)?.clear();
       },
     };

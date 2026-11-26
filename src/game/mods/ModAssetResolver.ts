@@ -215,6 +215,21 @@ export class ModAssetResolver {
     return this.assetEntriesByRef.get(canonicalRef);
   }
 
+  public findWoa3dMetadata(canonicalRef: string) {
+    return this.assetEntriesByRef.get(canonicalRef)?.woa3dMetadata;
+  }
+
+  public getWoa3dAssets(modId?: string): ModAssetIndexEntry[] {
+    const out: ModAssetIndexEntry[] = [];
+    for (const entry of this.assetEntriesByRef.values()) {
+      if (modId && entry.modId !== modId) continue;
+      if (entry.relativePath.toLowerCase().endsWith('.woa3d') || entry.woa3dMetadata) {
+        out.push(entry);
+      }
+    }
+    return out;
+  }
+
   public getModAssetRefs(modId: string): string[] {
     const refs = this.refsByModId.get(modId);
     return refs ? Array.from(refs) : [];

@@ -63,6 +63,7 @@ export interface RawModAssetFile {
   category: string;
   relativePath: string;
   sizeBytes: number;
+  rawText?: string;
 }
 
 export interface RawDiscoveredModEntry {

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { UI_TEXT, type Language } from '../../game/i18n/translations';
 import {
+  CURRENT_GAME_VERSION,
   captureWorldModMetadata,
   getModManager,
   inspectWorldSaveMods,
@@ -140,8 +141,8 @@ export const WorldModRecoveryModal: React.FC<WorldModRecoveryModalProps> = ({
         enabled: row.enabled,
         supportedGameVersion: installed?.manifest.supportedGameVersion,
         compatible: installed ? installed.gameCompatible && installed.hasValidManifest : false,
-        modApiVersion: modsSnapshot.modApiVersion,
-        schemaVersion: modsSnapshot.schemaVersion,
+        modApiVersion: installed?.manifest.modApiVersion ?? modsSnapshot.modApiVersion,
+        schemaVersion: installed?.manifest.schemaVersion ?? modsSnapshot.schemaVersion,
       };
     });
 
@@ -150,7 +151,7 @@ export const WorldModRecoveryModal: React.FC<WorldModRecoveryModalProps> = ({
       modMetadata: {
         modApiVersion: workingSave.modMetadata?.modApiVersion ?? modsSnapshot.modApiVersion,
         schemaVersion: workingSave.modMetadata?.schemaVersion ?? modsSnapshot.schemaVersion,
-        savedAtGameVersion: workingSave.modMetadata?.savedAtGameVersion ?? '1.0.0',
+        savedAtGameVersion: workingSave.modMetadata?.savedAtGameVersion ?? CURRENT_GAME_VERSION,
         selectionMode,
         mods: previewEntries,
       },

@@ -84,7 +84,10 @@ import workerApp from './workers/multiplayer/src/index';
 import { MultiplayerRoomDO } from './workers/multiplayer/src/MultiplayerRoomDO';
 import { RoomDirectoryDO } from './workers/multiplayer/src/RoomDirectoryDO';
 import { validateDiscoveredMods } from './src/game/mods/ModValidator';
-import { evaluateMultiplayerModCompatibility } from './src/game/mods/ModWorldCompatibility';
+import {
+  evaluateMultiplayerModCompatibility,
+  evaluateSaveModCompatibility,
+} from './src/game/mods/ModWorldCompatibility';
 import {
   enrichProtocolReportWithLocalDiscovery,
   formatMultiplayerModRejectionMessage,
@@ -1054,6 +1057,171 @@ async function runAllTests() {
     assert.ok(formatMultiplayerModRejectionMessage(enriched).includes('Cannot join this world.'));
     assert.ok(formatProtocolModCompatibilityMessage(rawReport).includes('Cannot join this world.'));
     pass('12. Local discovery enrichment marks installed-but-disabled mods as disabled_mod');
+  }
+
+  // =========================================================================
+  // 13. Multiple required mods, Online Invite & Quick-Join compatibility filtering
+  // =========================================================================
+  {
+    const multiHostMeta = makeModMeta([
+      {
+        modId: 'mod-alpha',
+        name: 'Alpha Expansion',
+        version: '1.2.0',
+        compatibilityVersion: '1.x',
+        supportedGameVersion: CURRENT_GAME_VERSION,
+        modApiVersion: CURRENT_MOD_API_VERSION,
+        schemaVersion: CURRENT_MOD_SCHEMA_VERSION,
+        multiplayerCompatibility: 'required',
+      },
+      {
+        modId: 'mod-beta',
+        name: 'Beta Dungeons',
+        version: '2.0.0',
+        compatibilityVersion: '2.x',
+        supportedGameVersion: CURRENT_GAME_VERSION,
+        modApiVersion: CURRENT_MOD_API_VERSION,
+        schemaVersion: CURRENT_MOD_SCHEMA_VERSION,
+        multiplayerCompatibility: 'required',
+      },
+    ]);
+    const partialClient = makeModMeta([
+      {
+        modId: 'mod-alpha',
+        name: 'Alpha Expansion',
+        version: '1.3.0',
+        supportedGameVersion: CURRENT_GAME_VERSION,
+        modApiVersion: CURRENT_MOD_API_VERSION,
+        schemaVersion: CURRENT_MOD_SCHEMA_VERSION,
+        multiplayerCompatibility: 'required',
+      },
+    ]);
+    const multiReport = verifyMultiplayerModCompatibility(multiHostMeta, partialClient);
+    assert.equal(multiReport.compatible, false);
+    assert.ok(multiReport.issues.some((i) => i.modId === 'mod-beta' && i.code === 'missing_mod'));
+    assert.ok(multiReport.summary.includes('Beta Dungeons'));
+
+    const { callWorker } = createWorkerHarness();
+    const hostCreated = await callWorker('/api/multiplayer/rooms', 'POST', {
+      playerName: 'InviteHost',
+      roomName: 'Multi-Mod Realm',
+      worldName: 'Multi-Mod World',
+      privacy: 'public',
+      modMetadata: multiHostMeta,
+    });
+    assert.equal(hostCreated.status, 200);
+    const createdRoom = hostCreated.json.room as { roomId: string };
+    const hostPlayerId = String(hostCreated.json.playerId);
+    const hostToken = String(hostCreated.json.sessionToken);
+
+    // Quick-join with vanilla client rejects with 409 MOD_INCOMPATIBLE when only modded rooms exist
+    const qjBad = await callWorker('/api/multiplayer/rooms/quick-join', 'POST', {
+      playerName: 'VanillaQuick',
+      clientModMetadata: makeModMeta([]),
+    });
+    assert.equal(qjBad.status, 409);
+    assert.equal(qjBad.json.error, 'MOD_INCOMPATIBLE');
+
+    // Send invite & ensure incompatible invite accept fails before world entry, while matching succeeds
+    const inviteRes = await callWorker('/api/multiplayer/invites', 'POST', {
+      roomId: createdRoom.roomId,
+      fromPlayerId: hostPlayerId,
+      sessionToken: hostToken,
+      toPlayerName: 'InvitedGuest',
+    });
+    assert.equal(inviteRes.status, 200);
+    const inviteObj = inviteRes.json.invite as { inviteId: string };
+
+    const invReject = await callWorker('/api/multiplayer/invites/accept', 'POST', {
+      inviteId: inviteObj.inviteId,
+      playerName: 'InvitedGuest',
+      clientModMetadata: partialClient,
+    });
+    assert.equal(invReject.status, 409);
+    assert.equal(invReject.json.error, 'MOD_INCOMPATIBLE');
+
+    const fullClient = makeModMeta([
+      {
+        modId: 'mod-alpha',
+        name: 'Alpha Expansion',
+        version: '1.5.0',
+        supportedGameVersion: CURRENT_GAME_VERSION,
+        modApiVersion: CURRENT_MOD_API_VERSION,
+        schemaVersion: CURRENT_MOD_SCHEMA_VERSION,
+        multiplayerCompatibility: 'required',
+      },
+      {
+        modId: 'mod-beta',
+        name: 'Beta Dungeons',
+        version: '2.1.0',
+        supportedGameVersion: CURRENT_GAME_VERSION,
+        modApiVersion: CURRENT_MOD_API_VERSION,
+        schemaVersion: CURRENT_MOD_SCHEMA_VERSION,
+        multiplayerCompatibility: 'required',
+      },
+    ]);
+    const invAccept = await callWorker('/api/multiplayer/invites/accept', 'POST', {
+      inviteId: inviteObj.inviteId,
+      playerName: 'InvitedGuest',
+      clientModMetadata: fullClient,
+    });
+    assert.equal(invAccept.status, 200);
+    pass('13. Multiple required mods, online invite rejection/accept, and quick-join filtering verified');
+  }
+
+  // =========================================================================
+  // 14. Saved World Mod Compatibility & Vanilla Save Loading
+  // =========================================================================
+  {
+    const baseSnap: ModsSnapshot = {
+      initialized: true,
+      scanning: false,
+      modsDir: '/mods',
+      writable: true,
+      platform: 'web',
+      gameVersion: CURRENT_GAME_VERSION,
+      modApiVersion: MOD_API_VERSION,
+      schemaVersion: MOD_CONTENT_SCHEMA_VERSION,
+      mods: [],
+      activeModIds: [],
+      loadOrder: [],
+      logs: [],
+      lastScanAtMs: Date.now(),
+      reloadedAtMs: null,
+      lastError: null,
+      installProgress: null,
+    };
+
+    // 14a. Vanilla save loads normally
+    const vanillaEval = evaluateSaveModCompatibility(undefined, baseSnap);
+    assert.equal(vanillaEval.compatible, true);
+    assert.equal(vanillaEval.hasWarnings, false);
+
+    // 14b. Modded save missing required mod warns & blocks direct safe load
+    const moddedSaveMissing = evaluateSaveModCompatibility(
+      {
+        modApiVersion: MOD_API_VERSION,
+        schemaVersion: MOD_CONTENT_SCHEMA_VERSION,
+        savedAtGameVersion: CURRENT_GAME_VERSION,
+        selectionMode: 'custom',
+        mods: [
+          {
+            modId: 'crystal-cavern',
+            name: 'Crystal Cavern',
+            version: '1.0.0',
+            loadOrder: 0,
+            enabled: true,
+            compatible: true,
+            modApiVersion: MOD_API_VERSION,
+            schemaVersion: MOD_CONTENT_SCHEMA_VERSION,
+          },
+        ],
+      },
+      baseSnap,
+    );
+    assert.equal(moddedSaveMissing.hasWarnings, true);
+    assert.ok(moddedSaveMissing.issues.some((i) => i.code === 'missing_mod'));
+    pass('14. Vanilla saves load cleanly while modded saves missing required mods trigger safety warning');
   }
 
   console.log(`\nALL ${passed} MOD MULTIPLAYER VERIFICATION SUITES PASSED.`);

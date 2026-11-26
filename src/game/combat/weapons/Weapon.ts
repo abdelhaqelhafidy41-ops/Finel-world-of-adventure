@@ -44,6 +44,7 @@ export interface WeaponStats {
   isRanged: boolean;
   projectileSpeed?: number;
   chargeDuration?: number;
+  modelPath?: string;
 }
 
 export interface WeaponAttackContext {

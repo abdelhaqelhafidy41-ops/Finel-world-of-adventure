@@ -1,7 +1,7 @@
-export const CURRENT_GAME_VERSION = '1.0.0';
+export const CURRENT_GAME_VERSION = '1.1.25';
 export const MOD_API_VERSION = 1;
-export const MOD_CONTENT_SCHEMA_VERSION = 1;
-export const SUPPORTED_MOD_SCHEMA_VERSIONS: readonly number[] = [1];
+export const MOD_CONTENT_SCHEMA_VERSION = 2;
+export const SUPPORTED_MOD_SCHEMA_VERSIONS: readonly number[] = [1, 2];
 export const MOD_PACKAGE_EXTENSION = '.woamod';
 
 export type ModInstallKind = 'development' | 'woamod';
@@ -26,6 +26,7 @@ export const MOD_CONTENT_TYPES = [
   'sounds',
   'music',
   'textures',
+  'models',
   'localization',
 ] as const;
 
@@ -107,12 +108,24 @@ export interface ModDiagnostic {
   detail?: string;
 }
 
+export interface Woa3dAssetMetadata {
+  schemaVersion: number;
+  type: '3d-model';
+  category: string;
+  modCategory: string;
+  canonicalCategory: string;
+  id?: string;
+  name?: string;
+}
+
 export interface ModAssetIndexEntry {
   modId: string;
   sourceId: string;
   category: string;
   relativePath: string;
   sizeBytes: number;
+  woa3dMetadata?: Woa3dAssetMetadata;
+  rawText?: string;
 }
 
 export interface IncompatibleModAsset {
@@ -120,6 +133,7 @@ export interface IncompatibleModAsset {
   relativePath: string;
   sizeBytes: number;
   reason: 'unsupported_format' | 'wrong_category' | 'too_large';
+  detail?: string;
 }
 
 export interface ParsedModContentFile {
@@ -391,4 +405,19 @@ export interface ModGenericEntityDescriptor {
   modelPath?: string;
   lootTableId?: string;
   raw: Record<string, unknown>;
+}
+
+export interface Woa3dModelDescriptor {
+  id: string;
+  modId: string;
+  relativePath: string;
+  canonicalRef: string;
+  category: string;
+  type: '3d-model';
+  modCategory: string;
+  canonicalCategory: string;
+  schemaVersion: number;
+  name: string;
+  sizeBytes: number;
+  raw?: Record<string, unknown>;
 }
