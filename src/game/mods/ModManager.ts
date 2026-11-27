@@ -36,6 +36,8 @@ import {
   type WorldModMetadataSnapshot,
   type WorldModSelectionEntry,
 } from './modTypes';
+import type { ModSpawnDefinition, ModSpawnDiagnosticEntry } from './ModSpawnConfig';
+import { setExternalWoa3dModelProvider } from './Woa3dModelBuilder';
 
 const MAX_LOG_ENTRIES = 120;
 
@@ -62,6 +64,8 @@ export class ModManager {
 
   private snapshot: ModsSnapshot;
   private readonly listeners = new Set<(snap: ModsSnapshot) => void>();
+  private runtimeSpawnDiagnostics: ModSpawnDiagnosticEntry[] = [];
+  private runtimeSpawnDiagSignature = '';
   private initPromise: Promise<ModsSnapshot> | null = null;
   private refreshPromise: Promise<ModsSnapshot> | null = null;
   private logCounter = 0;
@@ -81,6 +85,9 @@ export class ModManager {
     );
     AudioManager.setExternalModSoundProvider((soundId) =>
       this.contentStore.getModSound(soundId),
+    );
+    setExternalWoa3dModelProvider((modelRef) =>
+      this.contentStore.getModModel(modelRef),
     );
 
     this.snapshot = {
@@ -257,6 +264,77 @@ export class ModManager {
     return this.contentStore.getDescriptors(category);
   }
 
+  public getAllModSpawnRules(): ModSpawnDefinition[] {
+    return this.contentStore.getAllModSpawns();
+  }
+
+  public getModSpawnRules(modId: string): ModSpawnDefinition[] {
+    return this.contentStore.getModSpawnsForMod(modId);
+  }
+
+  public resolveContentForSpawn(spawn: ModSpawnDefinition) {
+    return this.contentStore.resolveContentForSpawn(spawn);
+  }
+
+  public setRuntimeSpawnDiagnostics(entries: ModSpawnDiagnosticEntry[]): void {
+    const signature = entries
+      .map(
+        (e) =>
+          `${e.modId}:${e.spawnId}:${e.status}:${e.instanceCount}:${e.saved ? 1 : 0}:${e.errorCode ?? ''}:${e.failedCondition ?? ''}:${
+            e.resolvedCoords
+              ? `${e.resolvedCoords.x.toFixed(2)},${e.resolvedCoords.y.toFixed(2)},${e.resolvedCoords.z.toFixed(2)}`
+              : ''
+          }`,
+      )
+      .join('|');
+    this.runtimeSpawnDiagnostics = entries.map((e) => ({
+      ...e,
+      configuredCoords: { ...e.configuredCoords },
+      resolvedCoords: e.resolvedCoords ? { ...e.resolvedCoords } : null,
+      rotation: { ...e.rotation },
+      scale: { ...e.scale },
+    }));
+    if (signature !== this.runtimeSpawnDiagSignature) {
+      this.runtimeSpawnDiagSignature = signature;
+      if (this.listeners.size > 0) {
+        this.emit();
+      }
+    }
+  }
+
+  public clearRuntimeSpawnDiagnostics(): void {
+    this.runtimeSpawnDiagnostics = [];
+    this.runtimeSpawnDiagSignature = '';
+  }
+
+  public getSpawnDiagnostics(modId?: string): ModSpawnDiagnosticEntry[] {
+    if (this.runtimeSpawnDiagnostics.length > 0) {
+      return modId
+        ? this.runtimeSpawnDiagnostics.filter((d) => d.modId === modId)
+        : this.runtimeSpawnDiagnostics;
+    }
+    const rules = modId ? this.getModSpawnRules(modId) : this.getAllModSpawnRules();
+    return rules.map((r) => ({
+      modId: r.modId,
+      contentId: r.contentId,
+      spawnId: r.spawnId,
+      contentType: r.contentType,
+      mode: r.unsupportedMode ?? r.mode,
+      configuredCoords: { ...r.position },
+      resolvedCoords: null,
+      rotation: { ...r.rotation },
+      scale: { ...r.scale },
+      status: r.validationError ? 'failed' : !r.enabled ? 'disabled' : 'pending_condition',
+      targetChunk: null,
+      alreadySpawned: false,
+      saved: false,
+      instanceCount: 0,
+      ...(r.validationError
+        ? { errorCode: r.validationError.code, error: r.validationError.message }
+        : {}),
+    }));
+  }
+
   public async initialize(): Promise<ModsSnapshot> {
     if (this.initPromise) return this.initPromise;
     this.initPromise = (async () => {
@@ -361,6 +439,18 @@ export class ModManager {
             assets: rec.assets,
           });
           rec.diagnostics.push(...loadRes.diagnostics);
+
+          if (loadRes.ok) {
+            const spawnDiags = this.contentStore.validateSpawnsForMod(modId, rec.assets);
+            if (spawnDiags.length > 0) {
+              rec.diagnostics.push(...spawnDiags);
+              for (const sd of spawnDiags) {
+                if (sd.severity === 'error' || sd.severity === 'warning') {
+                  this.appendLog('warn', sd.message, modId, rec.sourceId);
+                }
+              }
+            }
+          }
 
           if (!loadRes.ok) {
             this.assetResolver.removeModAssets(modId);

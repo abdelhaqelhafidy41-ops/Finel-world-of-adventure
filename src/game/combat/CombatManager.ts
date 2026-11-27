@@ -40,6 +40,7 @@ import type {
   CombatTarget,
   DamagePacket,
   DamageResult,
+  EnemyArchetypeConfig,
   EnemyArchetypeId,
 } from './combatTypes';
 import type {
@@ -106,6 +107,7 @@ export interface EnemyBlueprintRecord {
   readonly id: string;
   readonly archetypeId: EnemyArchetypeId;
   x: number;
+  y?: number;
   z: number;
   readonly seed: number;
   chunkId: string;
@@ -114,6 +116,19 @@ export interface EnemyBlueprintRecord {
   controller: EnemyController | null;
   questTarget?: QuestTargetBinding;
   isDynamicQuestSpawn?: boolean;
+  exactPosition?: boolean;
+  rotationX?: number;
+  rotationY?: number;
+  rotationZ?: number;
+  scaleX?: number;
+  scaleY?: number;
+  scaleZ?: number;
+  customArchetype?: Partial<EnemyArchetypeConfig>;
+  respawnEnabled?: boolean;
+  respawnDelaySeconds?: number;
+  isModSpawn?: boolean;
+  modId?: string;
+  modSpawnId?: string;
 }
 
 export class CombatManager {
@@ -1658,12 +1673,89 @@ export class CombatManager {
     }
   }
 
+  public registerModEnemyBlueprint(opts: {
+    id: string;
+    archetypeId: EnemyArchetypeId;
+    x: number;
+    y?: number;
+    z: number;
+    seed: number;
+    rotationX?: number;
+    rotationY?: number;
+    rotationZ?: number;
+    scaleX?: number;
+    scaleY?: number;
+    scaleZ?: number;
+    customArchetype?: Partial<EnemyArchetypeConfig>;
+    respawnEnabled?: boolean;
+    respawnDelaySeconds?: number;
+    defeated?: boolean;
+    modId?: string;
+    modSpawnId?: string;
+    materializeNow?: boolean;
+  }): EnemyBlueprintRecord {
+    this.unregisterModEnemyBlueprint(opts.id);
+    const bp: EnemyBlueprintRecord = {
+      id: opts.id,
+      archetypeId: opts.archetypeId,
+      x: opts.x,
+      y: opts.y,
+      z: opts.z,
+      seed: opts.seed,
+      chunkId: resolveChunkIdAt(opts.x, opts.z),
+      defeated: Boolean(opts.defeated),
+      savedHp: null,
+      controller: null,
+      exactPosition: true,
+      rotationX: opts.rotationX,
+      rotationY: opts.rotationY,
+      rotationZ: opts.rotationZ,
+      scaleX: opts.scaleX,
+      scaleY: opts.scaleY,
+      scaleZ: opts.scaleZ,
+      customArchetype: opts.customArchetype,
+      respawnEnabled: opts.respawnEnabled,
+      respawnDelaySeconds: opts.respawnDelaySeconds,
+      isModSpawn: true,
+      modId: opts.modId,
+      modSpawnId: opts.modSpawnId,
+    };
+    this.enemyBlueprints.push(bp);
+    if (opts.materializeNow !== false && !bp.defeated) {
+      this.materializeEnemy(bp);
+    }
+    return bp;
+  }
+
+  public unregisterModEnemyBlueprint(id: string): void {
+    for (let i = this.enemyBlueprints.length - 1; i >= 0; i--) {
+      const bp = this.enemyBlueprints[i];
+      if (bp.id !== id) continue;
+      if (bp.controller) {
+        if (this.recentTarget === bp.controller) {
+          this.recentTarget = null;
+          this.recentTargetTimer = 0;
+        }
+        const idx = this.enemies.indexOf(bp.controller);
+        if (idx !== -1) this.enemies.splice(idx, 1);
+        bp.controller.dispose();
+        bp.controller = null;
+      }
+      this.enemyBlueprints.splice(i, 1);
+    }
+  }
+
+  public isEnemyBlueprintDefeated(id: string): boolean {
+    const bp = this.enemyBlueprints.find((b) => b.id === id);
+    return Boolean(bp?.defeated);
+  }
+
   private materializeEnemy(
     bp: EnemyBlueprintRecord,
     queryCollidersNear?: (x: number, z: number) => WorldCollider[],
   ): void {
     if (bp.controller || bp.defeated) return;
-    if (queryCollidersNear) {
+    if (queryCollidersNear && !bp.exactPosition) {
       const h = groundHeightAt(bp.x, bp.z);
       const cols = queryCollidersNear(bp.x, bp.z);
       if (h < WATER_LEVEL + 0.5 || isPointBlockedByColliders(bp.x, bp.z, 0.75, cols, { y: h })) {
@@ -1689,8 +1781,19 @@ export class CombatManager {
         id: bp.id,
         archetypeId: bp.archetypeId,
         x: bp.x,
+        y: bp.y,
         z: bp.z,
         seed: bp.seed,
+        exactPosition: bp.exactPosition,
+        rotationX: bp.rotationX,
+        rotationY: bp.rotationY,
+        rotationZ: bp.rotationZ,
+        scaleX: bp.scaleX,
+        scaleY: bp.scaleY,
+        scaleZ: bp.scaleZ,
+        customArchetype: bp.customArchetype,
+        respawnEnabled: bp.respawnEnabled,
+        respawnDelaySeconds: bp.respawnDelaySeconds,
         onDefeated: (defeated) => {
           bp.defeated = true;
           if (bp.questTarget) {

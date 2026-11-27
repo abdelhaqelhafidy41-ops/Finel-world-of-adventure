@@ -28,6 +28,7 @@ export const MOD_CONTENT_TYPES = [
   'textures',
   'models',
   'localization',
+  'spawns',
 ] as const;
 
 export type ModContentType = (typeof MOD_CONTENT_TYPES)[number];
@@ -55,6 +56,7 @@ export const STANDARD_MOD_FOLDERS = [
   'quests',
   'loot_tables',
   'localization',
+  'spawns',
 ] as const;
 
 export type StandardModFolder = (typeof STANDARD_MOD_FOLDERS)[number];

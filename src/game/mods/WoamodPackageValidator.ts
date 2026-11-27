@@ -100,6 +100,7 @@ const MOD_CONTENT_FOLDERS = new Set<string>([
   'music',
   'textures',
   'localization',
+  'spawns',
 ]);
 
 export interface WoamodZipEntryHeader {

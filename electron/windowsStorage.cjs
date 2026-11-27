@@ -44,6 +44,7 @@ const STANDARD_MOD_FOLDERS = Object.freeze([
   'quests',
   'loot_tables',
   'localization',
+  'spawns',
 ]);
 
 const MOD_CONTENT_FOLDERS = new Set([
@@ -64,6 +65,7 @@ const MOD_CONTENT_FOLDERS = new Set([
   'quests',
   'loot_tables',
   'localization',
+  'spawns',
 ]);
 
 const MOD_ASSET_FOLDERS = new Set([

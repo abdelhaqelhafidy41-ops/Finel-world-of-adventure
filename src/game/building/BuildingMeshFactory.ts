@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import type { BuildingBlueprint } from './buildingTypes';
 import type { ProceduralTextureSet } from '../world/textures';
+import {
+  buildGroupFromWoa3dModel,
+  resolveExternalWoa3dModel,
+} from '../mods/Woa3dModelBuilder';
 
 export interface BuiltStructureMeshRefs {
   group: THREE.Group;
@@ -868,9 +872,18 @@ export class BuildingMeshFactory {
       }
 
       default: {
-        group.add(
-          this.makeBox(bp.width, bp.height, bp.depth, this.palette.plankOak, 0, bp.height * 0.5, 0),
-        );
+        const woa3d = bp.modelPath ? resolveExternalWoa3dModel(bp.modelPath) : undefined;
+        if (woa3d) {
+          const built = buildGroupFromWoa3dModel(woa3d, {
+            categoryHint: bp.category === 'decor' ? 'decorations' : 'buildings',
+          });
+          group.add(built.group);
+          this.disposables.push(...built.disposables);
+        } else {
+          group.add(
+            this.makeBox(bp.width, bp.height, bp.depth, this.palette.plankOak, 0, bp.height * 0.5, 0),
+          );
+        }
         break;
       }
     }

@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import {
+  buildGroupFromWoa3dModel,
+  resolveExternalWoa3dModel,
+} from '../../mods/Woa3dModelBuilder';
 import { AxeWeapon } from './AxeWeapon';
 import { BowWeapon } from './BowWeapon';
 import { KnifeWeapon } from './KnifeWeapon';
@@ -15,6 +19,13 @@ export class ModDataWeapon extends Weapon {
   }
 
   protected buildViewMesh(): THREE.Group {
+    const model = resolveExternalWoa3dModel(this.stats.modelPath);
+    if (model) {
+      const built = buildGroupFromWoa3dModel(model, { categoryHint: 'weapons' });
+      this.disposables.push(...built.disposables);
+      return built.group;
+    }
+
     const group = new THREE.Group();
     const gripMat = new THREE.MeshStandardMaterial({
       color: 0x5c3c28,

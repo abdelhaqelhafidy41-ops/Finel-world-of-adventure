@@ -29,6 +29,7 @@ const CATEGORY_LOAD_PRIORITY: ReadonlyArray<string> = [
   'quests',
   'assets',
   'models',
+  'spawns',
 ];
 
 function sortModCategories(categories: string[]): string[] {

@@ -167,6 +167,7 @@ import {
   type RoomContainerState,
   type RoomQuestObjectState,
   type SyncedEntityDelta,
+  type SyncedModSpawnEntry,
   type VillageDevelopmentSyncRecord,
   type WorldSettingsPermission,
 } from '../../../shared/multiplayerProtocol';
@@ -212,6 +213,7 @@ import type {
   VillageDevelopmentSnapshot,
 } from '../village/villageDevTypes';
 import {
+  ModWorldSpawner,
   evaluateMultiplayerHostClientCompatibility,
   formatMultiplayerModRejectionMessage,
   getModManager,
@@ -499,6 +501,10 @@ export class GameEngine {
   private readonly storyLocalInteractables = new Map<string, WorldInteractable>();
   private readonly sideQuestLocalInteractables = new Map<string, WorldInteractable>();
   private readonly spawnedSideQuestNpcIds = new Set<string>();
+  private modSpawner: ModWorldSpawner | null = null;
+  private pendingModSpawnBatch: SyncedModSpawnEntry[] = [];
+  private lastSyncedModSpawnsDigest = '';
+  private modSpawnSyncCheckTimer = 0;
 
   private cameraSettings: CameraSettings = loadExtendedSettings().camera;
   private footstepVolume = loadExtendedSettings().audio.footstepVolume;
@@ -933,6 +939,11 @@ export class GameEngine {
           });
         }
         this.inventoryManager.addItem(item.id, qty);
+        const itemCategory = this.itemManager.getItem(item.id)?.category;
+        if (itemCategory === 'weapon' || itemCategory === 'armor') {
+          this.syncEquipmentBonuses();
+          this.syncEquippedWeaponFromInventory();
+        }
         this.emitInventorySnapshot();
       },
       consumeItem: (itemId, count) => {
@@ -2072,6 +2083,10 @@ export class GameEngine {
     }
 
     this.input?.dispose();
+    this.modSpawner?.clearAllSpawnedEntities();
+    this.modSpawner = null;
+    this.pendingModSpawnBatch = [];
+    this.lastSyncedModSpawnsDigest = '';
     this.combat?.dispose();
     this.player?.dispose();
     this.worldGenDebugRenderer?.dispose();
@@ -4579,8 +4594,125 @@ export class GameEngine {
     });
   }
 
+  private createModSpawner(): ModWorldSpawner {
+    return new ModWorldSpawner({
+      modManager: getModManager(),
+      itemManager: this.itemManager,
+      buildings: this.world.buildings,
+      combat: this.combat,
+      npcs: this.world.npcs,
+      wildlife: this.world.wildlife,
+      spawnPickup: (opts) => this.world.spawnConfiguredPickup(opts),
+      removePickup: (id) => this.world.removeConfiguredPickup(id),
+      restorePickup: (id) => this.world.restoreConfiguredPickup(id),
+      getActiveChunkKeys: () => this.world.getActiveChunkKeys(),
+      getLandmarks: () => this.landmarks,
+      getVillageAnchors: () =>
+        this.world.village.villages.map((v) => ({
+          id: v.id,
+          name: v.name,
+          x: v.centerX,
+          y: groundHeightAt(v.centerX, v.centerZ),
+          z: v.centerZ,
+        })),
+      getWorldSpawnPoint: () => ({
+        x: 0,
+        y: groundHeightAt(0, 4),
+        z: 4,
+      }),
+      getPlayerPosition: () =>
+        this.controller?.position ?? this.defaultPlayerPosScratch,
+      getWorldHours: () => this.timeManager.getWorldHours(),
+      getRoutinePeriod: () => this.timeManager.getRoutinePeriod(),
+      getWeatherState: () => this.weatherManager.getSnapshot().currentState,
+      getQuestStatus: (questId) =>
+        this.dialogueEngine.quests.getQuestStatus(questId),
+      hasDialogueFlag: (flag) => this.dialogueEngine.hasFlag(flag),
+      getLocalPlayerId: () => this.localMultiplayerPlayerId ?? 'local',
+    });
+  }
+
+  private getOrCreateModSpawner(): ModWorldSpawner {
+    if (!this.modSpawner) {
+      this.modSpawner = this.createModSpawner();
+    }
+    return this.modSpawner;
+  }
+
+  private sendHostModSpawnsSync(force = false): void {
+    if (
+      !this.multiplayerSessionActive ||
+      !this.multiplayerService ||
+      !this.isLocalMultiplayerHost() ||
+      !this.modSpawner
+    ) {
+      return;
+    }
+    const entries = this.modSpawner.exportSyncedSpawns();
+    const digest = JSON.stringify(
+      entries.map((e) => [
+        e.instanceId,
+        e.x,
+        e.y,
+        e.z,
+        e.collected ? 1 : 0,
+        e.defeated ? 1 : 0,
+      ]),
+    );
+    if (!force && digest === this.lastSyncedModSpawnsDigest) {
+      return;
+    }
+    this.lastSyncedModSpawnsDigest = digest;
+
+    if (entries.length === 0) {
+      this.multiplayerService.sendGameEvent('MOD_SPAWNS_SYNC', {
+        modSpawns: [],
+        replace: true,
+        done: true,
+      });
+      return;
+    }
+
+    // Batch under MAX_WS_MESSAGE_BYTES (4096 bytes)
+    const MAX_BATCH_JSON_BYTES = 2400;
+    const batches: SyncedModSpawnEntry[][] = [];
+    let currentBatch: SyncedModSpawnEntry[] = [];
+    let currentBytes = 0;
+    for (const entry of entries) {
+      const approxBytes = JSON.stringify(entry).length + 2;
+      if (currentBatch.length > 0 && currentBytes + approxBytes > MAX_BATCH_JSON_BYTES) {
+        batches.push(currentBatch);
+        currentBatch = [];
+        currentBytes = 0;
+      }
+      currentBatch.push(entry);
+      currentBytes += approxBytes;
+    }
+    if (currentBatch.length > 0) {
+      batches.push(currentBatch);
+    }
+
+    for (let i = 0; i < batches.length; i++) {
+      this.multiplayerService.sendGameEvent('MOD_SPAWNS_SYNC', {
+        modSpawns: batches[i],
+        replace: i === 0,
+        done: i === batches.length - 1,
+      });
+    }
+  }
+
   private wireWorldAndCombatLinks(): void {
     if (!this.world || !this.combat) return;
+    this.modSpawner?.clearAllSpawnedEntities();
+    this.modSpawner = this.createModSpawner();
+    this.world.setModChunkHooks({
+      onActivate: (chunkKey) => {
+        this.modSpawner?.onChunkActivated(chunkKey);
+      },
+      onDeactivate: (chunkKey) => {
+        this.modSpawner?.onChunkDeactivated(chunkKey);
+      },
+    });
     this.combat.setWildlifeManager(this.world.wildlife);
     this.combat.setWorldQueryCallbacks({
       isChunkLoaded: (cx, cz) => this.world?.chunkManager.isChunkLoaded(cx, cz) ?? true,
@@ -4997,6 +5129,7 @@ export class GameEngine {
         waypoint: this.waypoint ? { ...this.waypoint } : null,
         npcStates: this.world.npcs.exportSaveNpcStates(),
         playerBuildings: mergedBuildings,
+        ...(this.modSpawner ? { modSpawnState: this.modSpawner.exportSaveState() } : {}),
       },
       camera: {
         ...this.cameraSettings,
@@ -5558,6 +5691,9 @@ export class GameEngine {
       } else if (ev.type === 'connection-changed') {
         if (ev.state === 'connected') {
           this.syncLocalMultiplayerState(0.05, true);
+          if (this.isLocalMultiplayerHost()) {
+            this.sendHostModSpawnsSync(true);
+          }
         }
       } else if (ev.type === 'host-transferred') {
         this.updateMultiplayerAuthorityMode();
@@ -6013,6 +6149,12 @@ export class GameEngine {
         this.world.buildings.restoreSavedBuildings(
           hydrated,
           this.world.chunkManager.getActiveChunkKeys(),
+        );
+      }
+      if (Array.isArray(snap.modSpawns) && !this.isLocalMultiplayerHost()) {
+        this.getOrCreateModSpawner().applyHostSyncedSpawns(
+          snap.modSpawns,
+          this.localMultiplayerPlayerId ?? undefined,
         );
       }
       if (Array.isArray(snap.villagesDev)) {
@@ -6682,10 +6824,47 @@ export class GameEngine {
         if (pickedUpBy === this.localMultiplayerPlayerId) return;
         const pickupId = typeof data.pickupId === 'string' ? data.pickupId : '';
         if (!pickupId) return;
-        if (data.isPlayerDrop) {
-          this.world.removePickupById(pickupId);
+        if (data.perPlayer) {
+          this.modSpawner?.handleRemotePickupCollected(
+            pickupId,
+            pickedUpBy,
+            this.localMultiplayerPlayerId ?? 'local',
+          );
         } else {
-          this.world.markPickupCollectedRemote(pickupId);
+          if (data.isPlayerDrop) {
+            this.world.removePickupById(pickupId);
+          } else {
+            this.world.markPickupCollectedRemote(pickupId);
+          }
+          this.modSpawner?.handleRemotePickupCollected(
+            pickupId,
+            pickedUpBy,
+            this.localMultiplayerPlayerId ?? 'local',
+          );
+        }
+        break;
+      }
+
+      case 'MOD_SPAWNS_SYNC': {
+        if (this.isLocalMultiplayerHost()) return;
+        const incoming = Array.isArray(data.modSpawns)
+          ? (data.modSpawns as SyncedModSpawnEntry[])
+          : null;
+        if (!incoming) return;
+        if (data.replace !== false) {
+          this.pendingModSpawnBatch = [];
+        }
+        for (const item of incoming) {
+          if (item && typeof item.instanceId === 'string') {
+            this.pendingModSpawnBatch.push(item);
+          }
+        }
+        if (data.done !== false) {
+          this.getOrCreateModSpawner().applyHostSyncedSpawns(
+            this.pendingModSpawnBatch,
+            this.localMultiplayerPlayerId ?? undefined,
+          );
+          this.pendingModSpawnBatch = [];
         }
         break;
       }
@@ -7262,6 +7441,13 @@ export class GameEngine {
 
     this.sideQuestManager.update(this.sideQuestBridge);
     this.syncSideQuestLocalEntities();
+    const loadedSpawner = this.getOrCreateModSpawner();
+    loadedSpawner.restoreSaveState(data.world.modSpawnState, data.world.worldSeed);
+    loadedSpawner.initializeForWorld({
+      worldSeed: data.world.worldSeed,
+      lifecycle: 'world_load',
+      isRemoteClient: false,
+    });
     this.emitInventorySnapshot();
     this.emitHud();
   }
@@ -7472,6 +7658,12 @@ export class GameEngine {
       this.getTotalWorldHours(),
       this.isCurrentlyRaining(),
     );
+
+    this.getOrCreateModSpawner().initializeForWorld({
+      worldSeed: this.world.seed,
+      lifecycle: 'new_world',
+      isRemoteClient: false,
+    });
 
     // Save initial world state immediately so it appears in Load World & Continue
     this.saveManager.saveToSlot(worldId, this.captureSaveSource(true));
@@ -7839,10 +8031,35 @@ export class GameEngine {
         this.playerLevel = Math.max(1, cachedProg.level);
       }
     }
+    const isHostRole = Boolean(room && localId && room.hostId === localId);
+    const mpSpawner = this.getOrCreateModSpawner();
+    this.lastSyncedModSpawnsDigest = '';
+    this.pendingModSpawnBatch = [];
+    if (isHostRole) {
+      if (saved?.world.modSpawnState) {
+        mpSpawner.restoreSaveState(saved.world.modSpawnState, this.world.seed);
+      }
+      mpSpawner.initializeForWorld({
+        worldSeed: this.world.seed,
+        lifecycle: saved ? 'world_load' : 'new_world',
+        isRemoteClient: false,
+      });
+    } else {
+      mpSpawner.reset({
+        worldSeed: this.world.seed,
+        lifecycle: 'world_load',
+        isRemoteClient: true,
+      });
+    }
+
     const cachedSnap = this.multiplayerService?.getLatestWorldSnapshot?.();
     if (cachedSnap) {
       this.applyRemoteWorldSnapshot(cachedSnap);
       this.syncLocalMultiplayerState(0.05, true);
+    }
+
+    if (isHostRole) {
+      this.sendHostModSpawnsSync(true);
     }
 
     if (isLanHost && this.hostLanWorldSlotId) {
@@ -8968,6 +9185,14 @@ export class GameEngine {
       this.queryCollidersCb,
       this.isVillageClearanceCb,
     );
+    this.modSpawner?.update(dt, this.elapsed);
+    if (this.multiplayerSessionActive && this.isLocalMultiplayerHost()) {
+      this.modSpawnSyncCheckTimer += dt;
+      if (this.modSpawnSyncCheckTimer >= 0.75) {
+        this.modSpawnSyncCheckTimer = 0;
+        this.sendHostModSpawnsSync(false);
+      }
+    }
     this.timeManager.update(dt);
     this.weatherManager.update(dt, getBiomeAt(px, pz));
     const weatherSnap = this.weatherManager.getSnapshot();
@@ -9710,7 +9935,8 @@ export class GameEngine {
         if (this.multiplayerSessionActive) {
           this.multiplayerService?.sendNpcDialogueState?.(target.id, 'talking');
         }
-        const snapshot = this.dialogueEngine.startDialogue(profile);
+        const customTree = this.world.npcs.getCustomDialogueTree(target.id);
+        const snapshot = this.dialogueEngine.startDialogue(profile, customTree);
         this.callbacks.onDialogueChange(snapshot);
       }
       return;
@@ -9815,11 +10041,19 @@ export class GameEngine {
       this.sound.playItemPickup(pickupCategory, target);
       this.spawnDustBurst(target.x, target.y, target.z, 6);
       this.inventoryManager.addItem(target.itemId, qty);
+      if (target.isModSpawn) {
+        this.modSpawner?.handlePickupCollected(
+          target.id,
+          this.localMultiplayerPlayerId ?? 'local',
+        );
+      }
       if (this.multiplayerSessionActive && this.multiplayerService) {
         this.multiplayerService.sendGameEvent('ITEM_PICKED_UP', {
           pickupId: target.id,
           itemId: target.itemId,
           count: qty,
+          ...(target.isModSpawn ? { isModSpawn: true } : {}),
+          ...(target.perPlayerPickup ? { perPlayer: true } : {}),
           x: Math.round(target.x * 100) / 100,
           y: Math.round(target.y * 100) / 100,
           z: Math.round(target.z * 100) / 100,

@@ -29,8 +29,14 @@ import {
   resolveModCrossReference,
   resolveModObjectIdentifier,
 } from '../ModNamespaceRegistry';
-import { SUPPORTED_MOD_SCHEMA_VERSIONS, type Woa3dModelDescriptor } from '../modTypes';
-import { parseAndValidateWoa3dText } from '../woa3dMetadata';
+import { SUPPORTED_MOD_SCHEMA_VERSIONS, type ModAssetIndexEntry, type Woa3dModelDescriptor } from '../modTypes';
+import { normalizeModRelativeAssetPathForLookup, parseAndValidateWoa3dText } from '../woa3dMetadata';
+import {
+  extractInlineSpawnDefinitions,
+  sanitizeModSpawnDefinition,
+  type ModSpawnContentType,
+  type ModSpawnDefinition,
+} from '../ModSpawnConfig';
 import type {
   ModContentHandler,
   ModContentHandlerResult,
@@ -1115,6 +1121,7 @@ export interface ModContentRegistryMap {
   textures: NamespacedContentRegistry<ModTextureDescriptor>;
   models: NamespacedContentRegistry<Woa3dModelDescriptor>;
   localization: NamespacedContentRegistry<ModLocalizationEntry>;
+  spawns: NamespacedContentRegistry<ModSpawnDefinition>;
 }
 
 export class DefaultModContentStore {
@@ -1139,10 +1146,12 @@ export class DefaultModContentStore {
     textures: new NamespacedContentRegistry<ModTextureDescriptor>('textures'),
     models: new NamespacedContentRegistry<Woa3dModelDescriptor>('models'),
     localization: new NamespacedContentRegistry<ModLocalizationEntry>('localization'),
+    spawns: new NamespacedContentRegistry<ModSpawnDefinition>('spawns'),
   };
 
   public readonly weaponStatsRegistry = new NamespacedContentRegistry<WeaponStats>('weapons');
   public readonly modelsRegistry = this.registries.models;
+  private readonly inlineSpawnIdsByModAndCat = new Map<string, string[]>();
 
   private readonly descriptorsByCategory = new Map<
     string,
@@ -1221,6 +1230,189 @@ export class DefaultModContentStore {
 
   public getAllModModels(): Woa3dModelDescriptor[] {
     return this.modelsRegistry.getAll();
+  }
+
+  public getAllModSpawns(): ModSpawnDefinition[] {
+    return this.registries.spawns.getAll();
+  }
+
+  public getModSpawnsForMod(modId: string): ModSpawnDefinition[] {
+    return this.registries.spawns
+      .getAllEntries()
+      .filter((e) => e.modId === modId)
+      .map((e) => e.data);
+  }
+
+  public getItemDefinition(itemId: string): ItemDefinition | undefined {
+    return (
+      this.registries.items.get(itemId) ??
+      this.registries.weapons.get(itemId) ??
+      this.registries.armor.get(itemId) ??
+      this.registries.tools.get(itemId) ??
+      this.registries.consumables.get(itemId) ??
+      this.registries.resources.get(itemId)
+    );
+  }
+
+  public getBlueprint(blueprintId: string): BuildingBlueprint | undefined {
+    return (
+      this.registries.buildings.get(blueprintId) ??
+      this.registries.decorations.get(blueprintId)
+    );
+  }
+
+  public getEntityDescriptor(
+    category: 'characters' | 'animals' | 'monsters' | 'npcs',
+    id: string,
+  ): ModGenericEntityDescriptor | undefined {
+    return this.registries[category].get(id);
+  }
+
+  public resolveContentForSpawn(spawn: ModSpawnDefinition): {
+    found: boolean;
+    modelPath?: string;
+    item?: ItemDefinition;
+    blueprint?: BuildingBlueprint;
+    entity?: ModGenericEntityDescriptor;
+  } {
+    switch (spawn.contentType) {
+      case 'item':
+      case 'weapon':
+      case 'armor':
+      case 'tool':
+      case 'consumable':
+      case 'resource': {
+        const item = this.getItemDefinition(spawn.contentId);
+        return item ? { found: true, modelPath: item.modelPath, item } : { found: false };
+      }
+      case 'building':
+      case 'decoration': {
+        const blueprint = this.getBlueprint(spawn.contentId);
+        return blueprint
+          ? { found: true, modelPath: blueprint.modelPath, blueprint }
+          : { found: false };
+      }
+      case 'npc': {
+        const entity =
+          this.registries.npcs.get(spawn.contentId) ??
+          this.registries.characters.get(spawn.contentId);
+        return entity
+          ? { found: true, modelPath: entity.modelPath, entity }
+          : { found: false };
+      }
+      case 'character': {
+        const entity =
+          this.registries.characters.get(spawn.contentId) ??
+          this.registries.npcs.get(spawn.contentId);
+        return entity
+          ? { found: true, modelPath: entity.modelPath, entity }
+          : { found: false };
+      }
+      case 'monster': {
+        const entity = this.registries.monsters.get(spawn.contentId);
+        return entity
+          ? { found: true, modelPath: entity.modelPath, entity }
+          : { found: false };
+      }
+      case 'animal': {
+        const entity = this.registries.animals.get(spawn.contentId);
+        return entity
+          ? { found: true, modelPath: entity.modelPath, entity }
+          : { found: false };
+      }
+      default:
+        return { found: false };
+    }
+  }
+
+  public validateSpawnsForMod(
+    modId: string,
+    assets: ModAssetIndexEntry[],
+  ): ModDiagnostic[] {
+    const diagnostics: ModDiagnostic[] = [];
+    const assetPaths = new Set<string>(
+      assets.map((a) => normalizeModRelativeAssetPathForLookup(a.relativePath, modId) ?? a.relativePath.toLowerCase()),
+    );
+    for (const entry of this.registries.spawns.getAllEntries()) {
+      if (entry.modId !== modId) continue;
+      const spawn = entry.data;
+      if (spawn.validationError) continue;
+
+      const resolved = this.resolveContentForSpawn(spawn);
+      if (!resolved.found) {
+        const msg = `Spawn "${spawn.spawnId}" references unregistered ${spawn.contentType} content "${spawn.contentId}".`;
+        spawn.validationError = {
+          code: 'SPAWN_CONTENT_NOT_REGISTERED',
+          message: msg,
+        };
+        diagnostics.push({
+          code: 'SPAWN_CONTENT_NOT_REGISTERED',
+          severity: 'warning',
+          message: msg,
+        });
+        continue;
+      }
+
+      if (resolved.modelPath) {
+        const byModel = this.getModModel(resolved.modelPath);
+        const relLookup = normalizeModRelativeAssetPathForLookup(resolved.modelPath, modId);
+        const hasAssetFile = relLookup ? assetPaths.has(relLookup) : false;
+        if (!byModel && !hasAssetFile) {
+          const msg = `Spawn "${spawn.spawnId}" references content "${spawn.contentId}" whose model "${resolved.modelPath}" is missing or invalid.`;
+          spawn.validationError = {
+            code: 'SPAWN_MODEL_MISSING',
+            message: msg,
+          };
+          diagnostics.push({
+            code: 'SPAWN_MODEL_MISSING',
+            severity: 'warning',
+            message: msg,
+          });
+        }
+      }
+    }
+    return diagnostics;
+  }
+
+  private registerInlineSpawns(
+    modId: string,
+    sourceCat: string,
+    spawns: ModSpawnDefinition[],
+    diagnostics: ModDiagnostic[],
+  ): void {
+    const bucketKey = `${modId}:${sourceCat}`;
+    const existing = this.inlineSpawnIdsByModAndCat.get(bucketKey) ?? [];
+    for (const sp of spawns) {
+      let candidateId = sp.id;
+      let suffix = 1;
+      while (this.registries.spawns.has(candidateId)) {
+        suffix += 1;
+        candidateId = `${sp.id}_${suffix}`;
+      }
+      const normalized = candidateId === sp.id ? sp : { ...sp, id: candidateId };
+      const regRes = this.registries.spawns.register(modId, normalized.id, normalized);
+      if (!regRes.ok) {
+        diagnostics.push({
+          code: regRes.code,
+          severity: 'warning',
+          message: `${sp.sourceFile}: ${regRes.message}`,
+        });
+        continue;
+      }
+      existing.push(normalized.id);
+    }
+    this.inlineSpawnIdsByModAndCat.set(bucketKey, existing);
+  }
+
+  private unloadInlineSpawns(modId: string, sourceCat: string): void {
+    const bucketKey = `${modId}:${sourceCat}`;
+    const ids = this.inlineSpawnIdsByModAndCat.get(bucketKey);
+    if (ids && ids.length > 0) {
+      for (const id of ids) {
+        this.registries.spawns.unregister(id);
+      }
+    }
+    this.inlineSpawnIdsByModAndCat.delete(bucketKey);
   }
 
   public getDescriptors(category: string): ModDescriptorEntry[] {
@@ -1321,6 +1513,7 @@ export class DefaultModContentStore {
       this.createEntityHandler('npcs', ['npcs'], this.registries.npcs),
       this.createDescriptorHandler('assets', ['assets']),
       this.createModelsHandler(),
+      this.createSpawnsHandler(),
     ];
   }
 
@@ -1329,11 +1522,24 @@ export class DefaultModContentStore {
     containerKeys: string[],
     targetRegistry: NamespacedContentRegistry<ItemDefinition>,
   ): ModContentHandler {
+    const spawnContentType: ModSpawnContentType =
+      mode === 'weapons'
+        ? 'weapon'
+        : mode === 'armor'
+          ? 'armor'
+          : mode === 'tools'
+            ? 'tool'
+            : mode === 'consumables'
+              ? 'consumable'
+              : mode === 'resources'
+                ? 'resource'
+                : 'item';
     return {
       contentType: mode,
       validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
         const diagnostics: ModDiagnostic[] = [];
         targetRegistry.unloadMod(ctx.modId);
+        this.unloadInlineSpawns(ctx.modId, mode);
         if (mode === 'weapons') {
           this.weaponStatsRegistry.unloadMod(ctx.modId);
         }
@@ -1393,6 +1599,22 @@ export class DefaultModContentStore {
               }
             }
 
+            const effectiveSpawnType: ModSpawnContentType =
+              parsed.item.category === 'weapon' || parsed.weaponStats
+                ? 'weapon'
+                : spawnContentType;
+            const inlineSpawns = extractInlineSpawnDefinitions(
+              ctx.modId,
+              rawEntry,
+              parsed.item.id,
+              effectiveSpawnType,
+              file.relativePath,
+              diagnostics,
+            );
+            if (inlineSpawns.length > 0) {
+              this.registerInlineSpawns(ctx.modId, mode, inlineSpawns, diagnostics);
+            }
+
             loadedCount += 1;
           }
         }
@@ -1401,12 +1623,14 @@ export class DefaultModContentStore {
       },
       unloadMod: (modId: string) => {
         targetRegistry.unloadMod(modId);
+        this.unloadInlineSpawns(modId, mode);
         if (mode === 'weapons') {
           this.weaponStatsRegistry.unloadMod(modId);
         }
       },
       clearAll: () => {
         targetRegistry.clear();
+        this.inlineSpawnIdsByModAndCat.clear();
         if (mode === 'weapons') {
           this.weaponStatsRegistry.clear();
         }
@@ -1532,11 +1756,13 @@ export class DefaultModContentStore {
     containerKeys: string[],
     targetRegistry: NamespacedContentRegistry<BuildingBlueprint>,
   ): ModContentHandler {
+    const spawnContentType: ModSpawnContentType = isDecoration ? 'decoration' : 'building';
     return {
       contentType,
       validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
         const diagnostics: ModDiagnostic[] = [];
         targetRegistry.unloadMod(ctx.modId);
+        this.unloadInlineSpawns(ctx.modId, contentType);
         let loadedCount = 0;
 
         for (const file of ctx.files) {
@@ -1580,6 +1806,19 @@ export class DefaultModContentStore {
               });
               continue;
             }
+
+            const inlineSpawns = extractInlineSpawnDefinitions(
+              ctx.modId,
+              rawEntry,
+              bp.id,
+              bp.isDecorative ? 'decoration' : spawnContentType,
+              file.relativePath,
+              diagnostics,
+            );
+            if (inlineSpawns.length > 0) {
+              this.registerInlineSpawns(ctx.modId, contentType, inlineSpawns, diagnostics);
+            }
+
             loadedCount += 1;
           }
         }
@@ -1588,9 +1827,11 @@ export class DefaultModContentStore {
       },
       unloadMod: (modId: string) => {
         targetRegistry.unloadMod(modId);
+        this.unloadInlineSpawns(modId, contentType);
       },
       clearAll: () => {
         targetRegistry.clear();
+        this.inlineSpawnIdsByModAndCat.clear();
       },
     };
   }
@@ -1786,11 +2027,20 @@ export class DefaultModContentStore {
       contentType === 'creatures'
         ? 'animals'
         : (contentType as ModContentType);
+    const spawnContentType: ModSpawnContentType =
+      logicalCategory === 'npcs'
+        ? 'npc'
+        : logicalCategory === 'characters'
+          ? 'character'
+          : logicalCategory === 'monsters'
+            ? 'monster'
+            : 'animal';
 
     return {
       contentType,
       validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
         const diagnostics: ModDiagnostic[] = [];
+        this.unloadInlineSpawns(ctx.modId, contentType);
         let loadedCount = 0;
 
         for (const file of ctx.files) {
@@ -1821,6 +2071,19 @@ export class DefaultModContentStore {
               });
               continue;
             }
+
+            const inlineSpawns = extractInlineSpawnDefinitions(
+              ctx.modId,
+              rawEntry,
+              entity.id,
+              spawnContentType,
+              file.relativePath,
+              diagnostics,
+            );
+            if (inlineSpawns.length > 0) {
+              this.registerInlineSpawns(ctx.modId, contentType, inlineSpawns, diagnostics);
+            }
+
             loadedCount += 1;
           }
         }
@@ -1829,9 +2092,11 @@ export class DefaultModContentStore {
       },
       unloadMod: (modId: string) => {
         targetRegistry.unloadMod(modId);
+        this.unloadInlineSpawns(modId, contentType);
       },
       clearAll: () => {
         targetRegistry.clear();
+        this.inlineSpawnIdsByModAndCat.clear();
       },
     };
   }
@@ -2106,6 +2371,44 @@ export class DefaultModContentStore {
       clearAll: () => {
         this.modelsRegistry.clear();
         this.descriptorsByCategory.get(category)?.clear();
+      },
+    };
+  }
+
+  private createSpawnsHandler(): ModContentHandler {
+    return {
+      contentType: 'spawns',
+      validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
+        const diagnostics: ModDiagnostic[] = [];
+        this.unloadInlineSpawns(ctx.modId, 'spawns_file');
+        let loadedCount = 0;
+
+        for (const file of ctx.files) {
+          const entries = extractEntriesList(file.data, ['spawns', 'spawnConfigs', 'rules']);
+          const list = entries.length > 0 ? entries : isRecord(file.data) ? [file.data] : [];
+          for (let i = 0; i < list.length; i++) {
+            const spawn = sanitizeModSpawnDefinition(
+              ctx.modId,
+              list[i],
+              file.relativePath,
+              diagnostics,
+              { index: i },
+            );
+            if (!spawn) continue;
+            this.registerInlineSpawns(ctx.modId, 'spawns_file', [spawn], diagnostics);
+            loadedCount += 1;
+          }
+        }
+
+        return { loadedCount, diagnostics };
+      },
+      unloadMod: (modId: string) => {
+        this.unloadInlineSpawns(modId, 'spawns_file');
+        this.registries.spawns.unloadMod(modId);
+      },
+      clearAll: () => {
+        this.inlineSpawnIdsByModAndCat.clear();
+        this.registries.spawns.clear();
       },
     };
   }

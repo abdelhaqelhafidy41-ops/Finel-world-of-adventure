@@ -8,7 +8,7 @@ import type {
   NpcRoutinePeriod,
   WorldCollider,
 } from '../types';
-import type { DialogueNpcProfile } from '../dialogue/dialogueTypes';
+import type { DialogueNpcProfile, DialogueTree } from '../dialogue/dialogueTypes';
 import type { EnemyController } from '../combat/EnemyController';
 import type { DamageSystem } from '../combat/DamageSystem';
 import {
@@ -85,6 +85,15 @@ export interface NpcConfig {
   suggestedPromptsAr?: string[];
   chunkKey?: string;
   seed?: number;
+  spawnY?: number;
+  exactPosition?: boolean;
+  initialRotation?: { x: number; y: number; z: number };
+  initialScale?: { x: number; y: number; z: number };
+  stationary?: boolean;
+  customDialogueTree?: DialogueTree;
+  isModSpawn?: boolean;
+  modSpawnId?: string;
+  modId?: string;
 }
 
 export interface NpcTickContext {
@@ -673,6 +682,14 @@ export abstract class NPCBase {
   public hp: number;
   public isDead = false;
   public isSpawnValid = true;
+  public readonly exactPosition: boolean;
+  public readonly isModSpawn: boolean;
+  public readonly modSpawnId?: string;
+  public readonly modId?: string;
+  public readonly stationary: boolean;
+  public readonly initialRotation: { x: number; y: number; z: number };
+  public readonly initialScale: { x: number; y: number; z: number };
+  public readonly customDialogueTree?: DialogueTree;
 
   private yaw = 0;
   private readonly walkSpeed: number;
@@ -706,6 +723,22 @@ export abstract class NPCBase {
     this.role = config.role;
     this.title = config.title;
     this.chunkKey = config.chunkKey ?? null;
+    this.exactPosition = Boolean(config.exactPosition);
+    this.isModSpawn = Boolean(config.isModSpawn);
+    this.modSpawnId = config.modSpawnId;
+    this.modId = config.modId;
+    this.stationary = Boolean(config.stationary);
+    this.initialRotation = config.initialRotation
+      ? { ...config.initialRotation }
+      : { x: 0, y: 0, z: 0 };
+    this.initialScale = config.initialScale
+      ? {
+          x: Math.max(0.05, config.initialScale.x),
+          y: Math.max(0.05, config.initialScale.y),
+          z: Math.max(0.05, config.initialScale.z),
+        }
+      : { x: 1, y: 1, z: 1 };
+    this.customDialogueTree = config.customDialogueTree;
     this.homeId = config.homeId;
     this.homeDoorId = config.homeDoorId ?? (config.homeId ? `${config.homeId}-door` : undefined);
     this.bedId = config.bedId;
@@ -721,12 +754,24 @@ export abstract class NPCBase {
     this.hp = this.maxHealth;
     this.rand = seededRandom(config.seed ?? this.hashString(config.id));
 
-    const validSpawn = isValidNPCSpawnLocation(config.spawn.x, config.spawn.z, 0.55)
-      ? { x: config.spawn.x, y: groundHeightAt(config.spawn.x, config.spawn.z), z: config.spawn.z }
-      : findNearestValidLand(config.spawn.x, config.spawn.z, 3.0, 0.34, 80);
+    const validSpawn = this.exactPosition
+      ? {
+          x: config.spawn.x,
+          y:
+            typeof config.spawnY === 'number' && Number.isFinite(config.spawnY)
+              ? config.spawnY
+              : groundHeightAt(config.spawn.x, config.spawn.z),
+          z: config.spawn.z,
+        }
+      : isValidNPCSpawnLocation(config.spawn.x, config.spawn.z, 0.55)
+        ? { x: config.spawn.x, y: groundHeightAt(config.spawn.x, config.spawn.z), z: config.spawn.z }
+        : findNearestValidLand(config.spawn.x, config.spawn.z, 3.0, 0.34, 80);
     this.position.set(validSpawn.x, validSpawn.y, validSpawn.z);
     this.stuckOriginX = validSpawn.x;
     this.stuckOriginZ = validSpawn.z;
+    if (config.initialRotation) {
+      this.yaw = this.initialRotation.y;
+    }
     this.rig = new NpcRig(
       config.name,
       config.role,
@@ -734,6 +779,8 @@ export abstract class NPCBase {
       this.rand() * Math.PI * 2,
     );
     this.rig.root.position.copy(this.position);
+    this.rig.root.rotation.set(this.initialRotation.x, this.yaw, this.initialRotation.z);
+    this.rig.root.scale.set(this.initialScale.x, this.initialScale.y, this.initialScale.z);
 
     const initialSlot = this.getRoutineForPeriod('morning');
     this.blackboard = {
@@ -771,6 +818,10 @@ export abstract class NPCBase {
   public validateSpawnPlacement(
     queryCollidersNear: (x: number, z: number) => WorldCollider[],
   ): boolean {
+    if (this.exactPosition) {
+      this.isSpawnValid = true;
+      return true;
+    }
     // Do not disturb NPCs actively sleeping/walking inside their valid house
     if (
       this.blackboard.sleepStage === 'sleeping' ||
@@ -1478,11 +1529,17 @@ export abstract class NPCBase {
       return;
     }
 
-    this.aiModule.decide(this, ctx);
+    if (this.stationary && !this.talking) {
+      this.behaviorState = 'idle';
+      this.stopMoving();
+    } else {
+      this.aiModule.decide(this, ctx);
+    }
 
     const speed = Math.hypot(this.velocity.x, this.velocity.z);
     this.rig.root.position.copy(this.position);
-    this.rig.root.rotation.y = this.yaw;
+    this.rig.root.rotation.set(this.initialRotation.x, this.yaw, this.initialRotation.z);
+    this.rig.root.scale.set(this.initialScale.x, this.initialScale.y, this.initialScale.z);
     this.rig.updateAnimation(ctx.dt, this.behaviorState, speed);
   }
 

@@ -233,6 +233,36 @@ export interface SavedWorldState {
     z: number;
     label?: string;
   } | null;
+  modSpawnState?: SavedModSpawnState;
+}
+
+export interface SavedModSpawnInstanceState {
+  instanceId: string;
+  modId: string;
+  spawnId: string;
+  contentId: string;
+  contentType: string;
+  x: number;
+  y: number;
+  z: number;
+  rotationX: number;
+  rotationY: number;
+  rotationZ: number;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
+  collected?: boolean;
+  defeated?: boolean;
+  respawnAtElapsed?: number;
+}
+
+export interface SavedModSpawnState {
+  collectedKeys: string[];
+  perPlayerCollectedKeys: string[];
+  oneTimeTriggeredKeys: string[];
+  defeatedKeys: string[];
+  respawnTimers: Record<string, number>;
+  instances: SavedModSpawnInstanceState[];
 }
 
 export interface SaveGameMeta {

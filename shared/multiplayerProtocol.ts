@@ -1454,6 +1454,29 @@ export interface PlayerBuiltStructureSnapshot {
   farmPlantedAtHours?: number;
 }
 
+export interface SyncedModSpawnEntry {
+  instanceId: string;
+  modId: string;
+  spawnId: string;
+  contentId: string;
+  contentType: string;
+  x: number;
+  y: number;
+  z: number;
+  rotationX: number;
+  rotationY: number;
+  rotationZ: number;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
+  perPlayer?: boolean;
+  collected?: boolean;
+  defeated?: boolean;
+  collectedByPlayers?: string[];
+  modelPath?: string;
+  label?: string;
+}
+
 export interface RoomWorldSnapshotPayload {
   openedChests: string[];
   collectedPickups: string[];
@@ -1524,6 +1547,7 @@ export interface RoomWorldSnapshotPayload {
   equippedWeaponId?: string | null;
   partyState?: PartyStateSnapshot;
   modMetadata?: ProtocolWorldModMetadata;
+  modSpawns?: SyncedModSpawnEntry[];
 }
 
 /**
@@ -2011,6 +2035,7 @@ export const CLIENT_COORDINATE_EVENTS = new Set<string>([
   'VILLAGE_DEFENSE_WON',
   'MERCHANT_BUY',
   'MERCHANT_SELL',
+  'MOD_SPAWNS_SYNC',
 ]);
 
 export const SERVER_ONLY_GAME_EVENTS = new Set<string>([

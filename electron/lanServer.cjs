@@ -1451,6 +1451,16 @@ class OfflineLanServer {
       coopQuests: [],
       bossEncounters,
       ...(this.room.modMetadata ? { modMetadata: this.room.modMetadata } : {}),
+      ...(Array.isArray(this.room.modSpawns) && this.room.modSpawns.length > 0
+        ? {
+            modSpawns: this.room.modSpawns.map((entry) => {
+              const collectors = this.room.perPlayerPickups?.get(entry.instanceId);
+              return collectors && collectors.has(playerId)
+                ? { ...entry, collectedByPlayers: [playerId] }
+                : { ...entry };
+            }),
+          }
+        : {}),
       ...(player
         ? {
             coins: player.coins ?? 0,
@@ -1509,9 +1519,83 @@ class OfflineLanServer {
         if (pickupId) {
           if (data.isPlayerDrop) {
             this.room.droppedItems.delete(pickupId);
+          } else if (data.perPlayer) {
+            if (!this.room.perPlayerPickups) {
+              this.room.perPlayerPickups = new Map();
+            }
+            let set = this.room.perPlayerPickups.get(pickupId);
+            if (!set) {
+              set = new Set();
+              this.room.perPlayerPickups.set(pickupId, set);
+            }
+            set.add(playerId);
           } else {
             this.room.collectedPickups.add(pickupId);
+            if (Array.isArray(this.room.modSpawns)) {
+              const entry = this.room.modSpawns.find((m) => m.instanceId === pickupId);
+              if (entry) entry.collected = true;
+            }
           }
+        }
+        break;
+      }
+      case 'MOD_SPAWNS_SYNC': {
+        if (playerId !== this.room.hostId) break;
+        const list = Array.isArray(data.modSpawns) ? data.modSpawns : null;
+        if (!list) break;
+        const replace = data.replace !== false;
+        const sanitized = [];
+        for (const item of list.slice(0, 64)) {
+          if (!item || typeof item !== 'object') continue;
+          if (
+            typeof item.instanceId !== 'string' ||
+            typeof item.modId !== 'string' ||
+            typeof item.spawnId !== 'string' ||
+            typeof item.contentId !== 'string' ||
+            typeof item.contentType !== 'string' ||
+            typeof item.x !== 'number' ||
+            typeof item.y !== 'number' ||
+            typeof item.z !== 'number'
+          ) {
+            continue;
+          }
+          const instanceId = item.instanceId.slice(0, 128);
+          const perPlayer = Boolean(item.perPlayer);
+          sanitized.push({
+            instanceId,
+            modId: item.modId.slice(0, 64),
+            spawnId: item.spawnId.slice(0, 64),
+            contentId: item.contentId.slice(0, 96),
+            contentType: item.contentType.slice(0, 32),
+            x: item.x,
+            y: item.y,
+            z: item.z,
+            rotationX: typeof item.rotationX === 'number' ? item.rotationX : 0,
+            rotationY: typeof item.rotationY === 'number' ? item.rotationY : 0,
+            rotationZ: typeof item.rotationZ === 'number' ? item.rotationZ : 0,
+            scaleX: typeof item.scaleX === 'number' ? item.scaleX : 1,
+            scaleY: typeof item.scaleY === 'number' ? item.scaleY : 1,
+            scaleZ: typeof item.scaleZ === 'number' ? item.scaleZ : 1,
+            ...(perPlayer ? { perPlayer: true } : {}),
+            collected:
+              Boolean(item.collected) ||
+              (!perPlayer && this.room.collectedPickups.has(instanceId)),
+            defeated: Boolean(item.defeated),
+            ...(typeof item.modelPath === 'string'
+              ? { modelPath: item.modelPath.slice(0, 200) }
+              : {}),
+            ...(typeof item.label === 'string' ? { label: item.label.slice(0, 96) } : {}),
+          });
+        }
+        if (replace) {
+          this.room.modSpawns = sanitized;
+        } else {
+          const existing = Array.isArray(this.room.modSpawns) ? this.room.modSpawns : [];
+          const byId = new Map(existing.map((e) => [e.instanceId, e]));
+          for (const item of sanitized) {
+            byId.set(item.instanceId, item);
+          }
+          this.room.modSpawns = Array.from(byId.values()).slice(0, 256);
         }
         break;
       }
@@ -2038,6 +2122,8 @@ class OfflineLanServer {
       playerBuildings,
       villagesDev,
       discoveredLandmarks,
+      modSpawns: [],
+      perPlayerPickups: new Map(),
       worldTime: {
         worldHours: initHours,
         dayCount: initDayCount,
@@ -3732,6 +3818,7 @@ class OfflineLanServer {
           break;
         }
 
+        this.recordWorldStateGameEvent(eventName, eventData, playerId, now);
         // Relay non-combat gameplay events (doors, chests, beds, drops, gathering, buildings, farming, etc.)
         this.broadcast('GAME_EVENT', playerId, {
           event: eventName,

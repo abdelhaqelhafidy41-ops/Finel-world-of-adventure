@@ -109,7 +109,8 @@ public final class AndroidExternalStorageManager {
         "decorations",
         "quests",
         "loot_tables",
-        "localization"
+        "localization",
+        "spawns"
     );
 
     private static final Set<String> MOD_CONTENT_FOLDERS = new HashSet<>(Arrays.asList(
@@ -129,7 +130,8 @@ public final class AndroidExternalStorageManager {
         "decorations",
         "quests",
         "loot_tables",
-        "localization"
+        "localization",
+        "spawns"
     ));
 
     private static final Set<String> MOD_ASSET_FOLDERS = new HashSet<>(Arrays.asList(

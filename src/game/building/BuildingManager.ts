@@ -755,6 +755,7 @@ export class BuildingManager {
   public exportSavedBuildings(): SavedPlayerBuilding[] {
     const out: SavedPlayerBuilding[] = [];
     this.structures.forEach((st) => {
+      if (st.isModSpawn) return;
       out.push({
         id: st.id,
         blueprintId: st.blueprintId,
@@ -888,7 +889,14 @@ export class BuildingManager {
 
     const refs = this.factory.buildStructure(bp, this.shadowsEnabled, false);
     refs.group.position.set(st.x, st.y, st.z);
-    refs.group.rotation.set(0, st.yaw, 0);
+    refs.group.rotation.set(st.rotationX ?? 0, st.yaw, st.rotationZ ?? 0);
+    const sx = st.scaleX ?? 1;
+    const sy = st.scaleY ?? 1;
+    const sz = st.scaleZ ?? 1;
+    refs.group.scale.set(sx, sy, sz);
+    if (st.isModSpawn) {
+      refs.group.userData.isModSpawn = true;
+    }
     this.rootGroup.add(refs.group);
 
     if (st.farmState) {
@@ -1025,10 +1033,10 @@ export class BuildingManager {
           kind: 'box',
           x: st.x,
           z: st.z,
-          halfW: bp.width * 0.5,
-          halfD: bp.depth * 0.5,
-          minY: st.y - 0.3,
-          maxY: st.y + bp.height,
+          halfW: bp.width * 0.5 * Math.abs(sx),
+          halfD: bp.depth * 0.5 * Math.abs(sz),
+          minY: st.y - 0.3 * Math.abs(sy),
+          maxY: st.y + bp.height * Math.abs(sy),
           yaw: st.yaw,
           walkableTop: Boolean(bp.isStairsPiece),
           tag: bp.isWallPiece ? 'wall' : 'prop',

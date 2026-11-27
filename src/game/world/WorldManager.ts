@@ -65,6 +65,10 @@ import type { SavedPlayerBuilding } from '../building/buildingTypes';
 import type { PlacementEnvironmentContext } from '../building/PlayerBuildingValidator';
 import { FarmAnimalManager } from '../farming/FarmAnimalManager';
 import { VillageDevelopmentManager } from '../village/VillageDevelopmentManager';
+import {
+  buildGroupFromWoa3dModel,
+  resolveExternalWoa3dModel,
+} from '../mods/Woa3dModelBuilder';
 
 export type WorldResourceKind =
   | 'wood'
@@ -115,6 +119,13 @@ export interface WorldInteractable extends InteractableInfo {
   isPlacedBed?: boolean;
   isPlacedStation?: boolean;
   isOpen?: boolean;
+  isModSpawn?: boolean;
+  modSpawnId?: string;
+  modId?: string;
+  perPlayerPickup?: boolean;
+  modRespawnEnabled?: boolean;
+  modRespawnDelaySec?: number;
+  hoverBob?: boolean;
 }
 
 interface SharedWorldAssets {
@@ -261,6 +272,10 @@ export class WorldManager {
   private readonly sharedAssets: SharedWorldAssets;
   private readonly villageChunkKey: string;
   private lastElapsed = 0;
+  private modChunkHooks: {
+    onActivate?: (chunkKey: string) => void;
+    onDeactivate?: (chunkKey: string) => void;
+  } = {};
 
   private waterMesh!: THREE.Mesh;
   private waterMat!: THREE.MeshStandardMaterial;
@@ -2254,6 +2269,7 @@ export class WorldManager {
       this.isVillageClearanceCb,
     );
     this.buildings.onChunkActivated(chunk.key);
+    this.modChunkHooks.onActivate?.(chunk.key);
   }
 
   private deactivateChunkContent(chunk: ManagedChunk): void {
@@ -2262,6 +2278,7 @@ export class WorldManager {
     this.npcs.unloadChunkNpcs(chunk.key);
     this.wildlife.unloadChunkWildlife(chunk.key);
     this.buildings.onChunkDeactivated(chunk.key);
+    this.modChunkHooks.onDeactivate?.(chunk.key);
   }
 
   private registerExplorationResource(res: ExplorationResourcePlacement): void {
@@ -3432,6 +3449,138 @@ export class WorldManager {
     return entry;
   }
 
+  public setModChunkHooks(hooks: {
+    onActivate?: (chunkKey: string) => void;
+    onDeactivate?: (chunkKey: string) => void;
+  }): void {
+    this.modChunkHooks = hooks;
+  }
+
+  public getActiveChunkKeys(): Set<string> {
+    return this.chunkManager.getActiveChunkKeys();
+  }
+
+  public spawnConfiguredPickup(opts: {
+    id: string;
+    itemId: string;
+    count: number;
+    label: string;
+    x: number;
+    y: number;
+    z: number;
+    rotationX?: number;
+    rotationY?: number;
+    rotationZ?: number;
+    scaleX?: number;
+    scaleY?: number;
+    scaleZ?: number;
+    modelPath?: string;
+    categoryHint?: string;
+    chunkKey?: string;
+    perPlayer?: boolean;
+    respawnEnabled?: boolean;
+    respawnDelaySec?: number;
+    modId?: string;
+    modSpawnId?: string;
+    hoverBob?: boolean;
+  }): WorldInteractable {
+    this.removeConfiguredPickup(opts.id);
+
+    const woa3d = opts.modelPath ? resolveExternalWoa3dModel(opts.modelPath) : undefined;
+    let mesh: THREE.Group;
+    if (woa3d) {
+      const built = buildGroupFromWoa3dModel(woa3d, {
+        categoryHint: opts.categoryHint ?? 'items',
+      });
+      mesh = built.group;
+      mesh.userData.isCustomWoa3d = true;
+      mesh.userData.woa3dDisposables = built.disposables;
+      mesh.traverse((obj) => {
+        if ((obj as THREE.Mesh).isMesh) {
+          const m = obj as THREE.Mesh;
+          m.userData.__origCastShadow = m.castShadow;
+          m.castShadow =
+            Boolean(m.userData.__origCastShadow) &&
+            this.currentPropShadows &&
+            !this.isSoftwareGl;
+        }
+      });
+    } else {
+      mesh = this.acquirePickupMesh(opts.itemId);
+    }
+
+    const rx = opts.rotationX ?? 0;
+    const ry = opts.rotationY ?? 0;
+    const rz = opts.rotationZ ?? 0;
+    const sx = opts.scaleX ?? 1;
+    const sy = opts.scaleY ?? 1;
+    const sz = opts.scaleZ ?? 1;
+    mesh.position.set(opts.x, opts.y, opts.z);
+    mesh.rotation.set(rx, ry, rz);
+    mesh.scale.set(sx, sy, sz);
+    mesh.visible = true;
+    mesh.userData.baseY = opts.y;
+    mesh.userData.preserveExactTransform = !opts.hoverBob;
+    this.worldGroup.add(mesh);
+
+    const entry: WorldInteractable = {
+      id: opts.id,
+      label: opts.count > 1 ? `${opts.label} ×${opts.count}` : opts.label,
+      actionVerb: 'Pick up',
+      kind: 'pickup',
+      x: opts.x,
+      y: opts.y,
+      z: opts.z,
+      radius: 2.8,
+      collected: false,
+      meshGroup: mesh,
+      message: `Picked up ${opts.label}${opts.count > 1 ? ` ×${opts.count}` : ''}.`,
+      itemId: opts.itemId,
+      count: opts.count,
+      isPlayerDrop: false,
+      chunkKey: opts.chunkKey,
+      isModSpawn: true,
+      modSpawnId: opts.modSpawnId,
+      modId: opts.modId,
+      perPlayerPickup: Boolean(opts.perPlayer),
+      modRespawnEnabled: Boolean(opts.respawnEnabled),
+      modRespawnDelaySec: opts.respawnDelaySec,
+      hoverBob: Boolean(opts.hoverBob),
+    };
+    this.interactables.push(entry);
+    this.activePickups.push(entry);
+    return entry;
+  }
+
+  public removeConfiguredPickup(id: string): void {
+    for (let i = this.interactables.length - 1; i >= 0; i--) {
+      const item = this.interactables[i];
+      if (item.id !== id) continue;
+      if (item.meshGroup) {
+        this.releasePickupMesh(item.itemId, item.meshGroup);
+      }
+      this.interactables.splice(i, 1);
+    }
+    for (let i = this.activePickups.length - 1; i >= 0; i--) {
+      if (this.activePickups[i].id === id) {
+        this.activePickups.splice(i, 1);
+      }
+    }
+  }
+
+  public restoreConfiguredPickup(id: string): boolean {
+    const entry = this.interactables.find((i) => i.id === id);
+    if (!entry) return false;
+    entry.collected = false;
+    if (entry.meshGroup) {
+      entry.meshGroup.visible = true;
+      if (entry.meshGroup.parent !== this.worldGroup) {
+        this.worldGroup.add(entry.meshGroup);
+      }
+    }
+    return true;
+  }
+
   public spawnAnimalLootDrops(
     x: number,
     z: number,
@@ -3974,7 +4123,7 @@ export class WorldManager {
     const collectedSet = new Set<string>(this.persistedCollectedIds);
     for (let i = 0; i < this.interactables.length; i++) {
       const item = this.interactables[i];
-      if (item.collected && !item.isPlayerDrop && item.kind !== 'resource' && item.kind !== 'chest') {
+      if (item.collected && !item.isPlayerDrop && !item.isModSpawn && item.kind !== 'resource' && item.kind !== 'chest') {
         collectedSet.add(item.id);
         this.modifications.markCollected(item.id);
       }
@@ -4618,6 +4767,7 @@ export class WorldManager {
       const dx = item.x - playerPos.x;
       const dz = item.z - playerPos.z;
       if (dx * dx + dz * dz > 45 * 45) continue;
+      if (item.meshGroup.userData.preserveExactTransform) continue;
       const baseY = (item.meshGroup.userData.baseY as number | undefined) ?? item.y + 0.28;
       item.meshGroup.position.y = baseY + Math.sin(elapsed * 2.4 + item.x) * 0.08;
       item.meshGroup.rotation.y = elapsed * 1.15;
@@ -4752,6 +4902,16 @@ export class WorldManager {
   private releasePickupMesh(itemId: string | undefined, group: THREE.Group): void {
     group.visible = false;
     group.removeFromParent();
+    if (group.userData.isCustomWoa3d) {
+      const disp = group.userData.woa3dDisposables as Array<{ dispose: () => void }> | undefined;
+      if (Array.isArray(disp)) {
+        for (const d of disp) {
+          d.dispose();
+        }
+      }
+      group.userData.woa3dDisposables = undefined;
+      return;
+    }
     const key = this.getPickupPaletteKey(itemId ?? '');
     let bucket = this.pickupMeshPool.get(key);
     if (!bucket) {

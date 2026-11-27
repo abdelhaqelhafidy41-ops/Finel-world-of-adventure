@@ -60,6 +60,7 @@ const DATA_CATEGORY_FOLDERS = new Set([
   'quests',
   'loot_tables',
   'localization',
+  'spawns',
 ]);
 
 function getAssetExtension(relPath: string): string {

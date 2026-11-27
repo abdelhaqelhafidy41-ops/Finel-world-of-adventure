@@ -1307,6 +1307,147 @@ export const ModsPanel: React.FC<ModsPanelProps> = ({
                 )}
               </div>
 
+              {/* World Spawn Rules & Runtime Diagnostics */}
+              {(() => {
+                const modId = selectedModForDetails.manifest.modId;
+                const liveDiagnostics = modManager.getSpawnDiagnostics(modId);
+                const declaredRules = modManager.getModSpawnRules(modId);
+                return (
+                  <div
+                    data-testid="mods-spawn-diagnostics-section"
+                    className="p-3 rounded-xl bg-[#0c1712] border border-white/10 space-y-2"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-[#9eb4a0]">
+                      <span>{t.modsSpawnDiagnosticsTitle}</span>
+                      <span dir="ltr" className="font-mono-num text-white">
+                        {liveDiagnostics.length > 0
+                          ? liveDiagnostics.length
+                          : declaredRules.length}
+                      </span>
+                    </div>
+
+                    {liveDiagnostics.length === 0 && declaredRules.length === 0 ? (
+                      <div className="text-xs text-[#9eb4a0]">{t.modsNoSpawnRules}</div>
+                    ) : liveDiagnostics.length > 0 ? (
+                      <div className="max-h-48 overflow-y-auto space-y-1.5">
+                        {liveDiagnostics.map((entry) => {
+                          const isError = entry.status === 'failed';
+                          const isOk =
+                            entry.status === 'spawned' ||
+                            entry.status === 'collected' ||
+                            entry.status === 'defeated';
+                          return (
+                            <div
+                              key={`${entry.modId}:${entry.spawnId}`}
+                              className={`p-2 rounded-lg border text-[11px] space-y-1 ${
+                                isError
+                                  ? 'bg-[#341616] border-[#c85a53]/45 text-[#f4a5a0]'
+                                  : isOk
+                                    ? 'bg-[#102318] border-[#387451]/45 text-[#d7eadb]'
+                                    : 'bg-[#181f1b] border-white/10 text-[#d3dfd5]'
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span
+                                  dir="ltr"
+                                  className="font-mono-num font-semibold text-white truncate"
+                                >
+                                  [{entry.contentType}] {entry.contentId}
+                                </span>
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                    isError
+                                      ? 'bg-[#c85a53]/30 text-[#ffb8b3]'
+                                      : isOk
+                                        ? 'bg-[#387451]/40 text-[#8be39f]'
+                                        : 'bg-white/10 text-[#f3ca6e]'
+                                  }`}
+                                >
+                                  {t.modsSpawnStatusLabel(entry.status)}
+                                </span>
+                              </div>
+                              <div
+                                dir="ltr"
+                                className="font-mono-num text-[10px] text-[#b4c8b6] flex flex-wrap gap-x-3 gap-y-0.5"
+                              >
+                                <span>
+                                  {t.modsSpawnModeLabel}: {entry.mode}
+                                </span>
+                                <span>
+                                  {t.modsSpawnConfiguredLabel}: ({entry.configuredCoords.x},{' '}
+                                  {entry.configuredCoords.y}, {entry.configuredCoords.z})
+                                </span>
+                                {entry.resolvedCoords && (
+                                  <span>
+                                    {t.modsSpawnResolvedLabel}: (
+                                    {Number(entry.resolvedCoords.x.toFixed(3))},{' '}
+                                    {Number(entry.resolvedCoords.y.toFixed(3))},{' '}
+                                    {Number(entry.resolvedCoords.z.toFixed(3))})
+                                  </span>
+                                )}
+                                {entry.targetChunk && (
+                                  <span>
+                                    {t.modsSpawnChunkLabel}: {entry.targetChunk}
+                                  </span>
+                                )}
+                                <span>
+                                  {t.modsSpawnInstancesLabel}: {entry.instanceCount}
+                                </span>
+                              </div>
+                              {entry.failedCondition && (
+                                <div
+                                  dir="ltr"
+                                  className="font-mono-num text-[10px] text-[#f3ca6e]"
+                                >
+                                  {entry.failedCondition}
+                                </div>
+                              )}
+                              {entry.error && (
+                                <div
+                                  dir="ltr"
+                                  className="font-mono-num text-[10px] text-[#ffb8b3] break-all"
+                                >
+                                  {entry.errorCode ? `[${entry.errorCode}] ` : ''}
+                                  {entry.error}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] text-[#88dfd0]">
+                          {t.modsSpawnMenuPreviewHint}
+                        </div>
+                        <div className="max-h-40 overflow-y-auto space-y-1">
+                          {declaredRules.map((rule) => (
+                            <div
+                              key={rule.id}
+                              dir="ltr"
+                              className="p-2 rounded-lg bg-[#08100c] border border-white/8 font-mono-num text-[10px] text-[#c7d6c6] space-y-0.5"
+                            >
+                              <div className="font-semibold text-white">
+                                [{rule.contentType}] {rule.contentId} ({rule.spawnId})
+                              </div>
+                              <div className="flex flex-wrap gap-x-3 text-[#9fb5a1]">
+                                <span>
+                                  {t.modsSpawnModeLabel}: {rule.unsupportedMode ?? rule.mode}
+                                </span>
+                                <span>
+                                  {t.modsSpawnConfiguredLabel}: ({rule.position.x},{' '}
+                                  {rule.position.y}, {rule.position.z})
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Incompatible Assets if any */}
               {selectedModForDetails.incompatibleAssets.length > 0 && (
                 <div className="p-3 rounded-xl bg-[#271b10] border border-[#c88a36]/45 space-y-1.5">

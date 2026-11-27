@@ -1715,6 +1715,16 @@ export interface UiStrings {
   mpLanIncompatiblePlayersTitle: string;
   mpLanNoIncompatiblePlayers: string;
   mpLanVanillaNoMods: string;
+  // Mod World Spawn Diagnostics
+  modsSpawnDiagnosticsTitle: string;
+  modsNoSpawnRules: string;
+  modsSpawnConfiguredLabel: string;
+  modsSpawnResolvedLabel: string;
+  modsSpawnModeLabel: string;
+  modsSpawnChunkLabel: string;
+  modsSpawnInstancesLabel: string;
+  modsSpawnMenuPreviewHint: string;
+  modsSpawnStatusLabel: (status: string) => string;
 }
 
 export const UI_TEXT: Record<Language, UiStrings> = {
@@ -3076,6 +3086,32 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     mpLanIncompatiblePlayersTitle: 'Incompatible Players',
     mpLanNoIncompatiblePlayers: 'No rejected join attempts.',
     mpLanVanillaNoMods: 'None (Vanilla World)',
+    modsSpawnDiagnosticsTitle: 'World Spawn Rules & Diagnostics',
+    modsNoSpawnRules: 'No world spawn rules declared by this mod.',
+    modsSpawnConfiguredLabel: 'Configured',
+    modsSpawnResolvedLabel: 'Resolved',
+    modsSpawnModeLabel: 'Mode',
+    modsSpawnChunkLabel: 'Chunk',
+    modsSpawnInstancesLabel: 'Active',
+    modsSpawnMenuPreviewHint: 'Defined in package (enter a world to evaluate live runtime coordinates)',
+    modsSpawnStatusLabel: (status) => {
+      switch (status) {
+        case 'spawned':
+          return 'Spawned';
+        case 'pending_chunk':
+          return 'Waiting for Chunk';
+        case 'condition_unmet':
+          return 'Condition Unmet';
+        case 'collected':
+          return 'Collected';
+        case 'defeated':
+          return 'Defeated';
+        case 'failed':
+          return 'Failed';
+        default:
+          return status;
+      }
+    },
   },
   ar: {
     gameTitle: 'عالم المغامرة',
@@ -4434,5 +4470,31 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     mpLanIncompatiblePlayersTitle: 'اللاعبون غير المتوافقين',
     mpLanNoIncompatiblePlayers: 'لا توجد محاولات انضمام مرفوضة.',
     mpLanVanillaNoMods: 'لا شيء (عالم أصلي)',
+    modsSpawnDiagnosticsTitle: 'إعدادات وتشخيص الظهور في العالم',
+    modsNoSpawnRules: 'لا يحتوي هذا المود على قواعد ظهور مخصصة في العالم.',
+    modsSpawnConfiguredLabel: 'الإحداثيات المحددة',
+    modsSpawnResolvedLabel: 'الإحداثيات الفعلية',
+    modsSpawnModeLabel: 'الوضع',
+    modsSpawnChunkLabel: 'المقطع',
+    modsSpawnInstancesLabel: 'النشطة',
+    modsSpawnMenuPreviewHint: 'معرّف في الحزمة (ادخل إلى عالم لتقييم الإحداثيات الفعلية)',
+    modsSpawnStatusLabel: (status) => {
+      switch (status) {
+        case 'spawned':
+          return 'تم الظهور';
+        case 'pending_chunk':
+          return 'بانتظار تحميل المقطع';
+        case 'condition_unmet':
+          return 'الشرط غير متحقق';
+        case 'collected':
+          return 'تم جمعه';
+        case 'defeated':
+          return 'تمت هزيمته';
+        case 'failed':
+          return 'فشل';
+        default:
+          return status;
+      }
+    },
   },
 };

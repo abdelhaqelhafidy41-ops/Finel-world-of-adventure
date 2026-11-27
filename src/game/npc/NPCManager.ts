@@ -18,7 +18,7 @@ import {
   isValidNPCSpawnLocation,
 } from '../world/WorldPlacementValidator';
 import { resolveChunkIdAt } from '../world/WorldEntityRegistry';
-import type { DialogueNpcProfile } from '../dialogue/dialogueTypes';
+import type { DialogueNpcProfile, DialogueTree } from '../dialogue/dialogueTypes';
 import type { ResolvedGraphicsProfile } from '../engine/GraphicsQualityManager';
 import type { VillageHouseRecord, VillageSite, VillageSiteRecord } from '../world/VillageManager';
 import type { EnemyController } from '../combat/EnemyController';
@@ -118,6 +118,7 @@ export class NPCManager {
 
   private readonly villageNpcs = new Map<string, NPCBase[]>();
   private readonly sideQuestNpcs = new Map<string, NPCBase>();
+  private readonly modNpcs = new Map<string, NPCBase>();
   private readonly persistedNpcStates = new Map<string, PersistedNpcLogicalState>();
   private lastQueryCollidersNear?: (x: number, z: number) => WorldCollider[];
 
@@ -347,6 +348,49 @@ export class NPCManager {
       npc.rig.root.visible = true;
       this.persistedNpcStates.set(npc.id, npc.exportLogicalState());
     }
+  }
+
+  public spawnModNpc(cfg: NpcConfig): NPCBase {
+    const existing = this.modNpcs.get(cfg.id);
+    if (existing) {
+      this.removeModNpc(cfg.id);
+    }
+    const npc = createNpcByRole({ ...cfg, isModSpawn: true }, this.assets);
+    npc.setLanguage(this.language);
+    npc.setNetworkRemoteControlled(this.networkRemoteControlled);
+    this.npcs.push(npc);
+    this.modNpcs.set(cfg.id, npc);
+    this.npcGroup.add(npc.rig.root);
+    this.positionCache.push({
+      id: npc.id,
+      x: npc.position.x,
+      z: npc.position.z,
+    });
+    return npc;
+  }
+
+  public removeModNpc(npcId: string): void {
+    const npc = this.modNpcs.get(npcId);
+    if (!npc) return;
+    if (this.activeDialogueNpc === npc) {
+      this.activeDialogueNpc.endDialogue();
+      this.activeDialogueNpc = null;
+    }
+    const idx = this.npcs.indexOf(npc);
+    if (idx !== -1) {
+      this.npcs.splice(idx, 1);
+      if (idx < this.positionCache.length) {
+        this.positionCache.splice(idx, 1);
+      }
+    }
+    this.lastSyncSnapshot.delete(npc.id);
+    this.modNpcs.delete(npcId);
+    npc.dispose();
+  }
+
+  public getCustomDialogueTree(npcId: string): DialogueTree | undefined {
+    const npc = this.modNpcs.get(npcId) ?? this.npcs.find((n) => n.id === npcId);
+    return npc?.customDialogueTree;
   }
 
   public setEnemyCombatProvider(
@@ -2317,6 +2361,7 @@ export class NPCManager {
       merged.set(id, { ...st });
     });
     for (let i = 0; i < this.npcs.length; i++) {
+      if (this.npcs[i].isModSpawn) continue;
       const logical = this.npcs[i].exportLogicalState();
       this.persistedNpcStates.set(logical.id, logical);
       merged.set(logical.id, { ...logical });

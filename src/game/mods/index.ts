@@ -125,3 +125,25 @@ export {
   formatMultiplayerModRejectionMessage,
   resolveLocalMultiplayerModMetadata,
 } from './ModMultiplayerCompatibility';
+export {
+  extractInlineSpawnDefinitions,
+  normalizeModSpawnContentType,
+  normalizeModSpawnMode,
+  sanitizeModSpawnDefinition,
+  type ModSpawnAreaConfig,
+  type ModSpawnConditions,
+  type ModSpawnContentType,
+  type ModSpawnDiagnosticEntry,
+  type ModSpawnDefinition,
+  type ModSpawnMode,
+  type ModSpawnPositionConfig,
+  type ModSpawnRuntimeStatus,
+  type ModSpawnVec3,
+} from './ModSpawnConfig';
+export {
+  buildGroupFromWoa3dModel,
+  resolveExternalWoa3dModel,
+  setExternalWoa3dModelProvider,
+  type BuiltWoa3dModelResult,
+} from './Woa3dModelBuilder';
+export { ModWorldSpawner, type ModWorldSpawnerDeps } from './ModWorldSpawner';

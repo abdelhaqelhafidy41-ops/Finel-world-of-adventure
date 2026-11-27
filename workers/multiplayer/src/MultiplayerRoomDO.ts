@@ -36,6 +36,7 @@ import {
   findForbiddenAuthorityKey,
   generateNetworkEntityId,
   getConnectionQuality,
+  isAllowedMultiplayerWeaponId,
   isValidPlayerId,
   isValidRoomCode,
   isValidRoomId,
@@ -87,6 +88,7 @@ import {
   type RoomWorldSnapshotPayload,
   type ServerMessageType,
   type SyncedEntityKind,
+  type SyncedModSpawnEntry,
   type VillageDevelopmentSyncRecord,
   type WorldEntitySnapshot,
   type WorldSettingsPermission,
@@ -220,6 +222,7 @@ interface StoredWorldLayer {
   buildingStates: Record<string, RoomBuildingState>;
   discoveredLandmarks: string[];
   modMetadata?: ProtocolWorldModMetadata;
+  modSpawns?: SyncedModSpawnEntry[];
 }
 
 /**
@@ -262,6 +265,7 @@ interface StoredSharedObjectsLayer {
   >;
   playerBuildings?: Record<string, PlayerBuiltStructureSnapshot>;
   villagesDev?: Record<string, VillageDevelopmentSyncRecord>;
+  perPlayerPickups?: Record<string, string[]>;
 }
 
 interface RoomQuestEntry {
@@ -732,6 +736,9 @@ export class MultiplayerRoomDO {
     if (!this.sharedObjectsLayer.villagesDev) {
       this.sharedObjectsLayer.villagesDev = {};
     }
+    if (!this.sharedObjectsLayer.perPlayerPickups) {
+      this.sharedObjectsLayer.perPlayerPickups = {};
+    }
     return this.sharedObjectsLayer;
   }
 
@@ -829,12 +836,46 @@ export class MultiplayerRoomDO {
     return data;
   }
 
+  private isActiveRoomModItem(itemId: string): boolean {
+    if (!itemId || itemId.length > 96 || !itemId.includes(':')) return false;
+    const sep = itemId.indexOf(':');
+    if (sep <= 0 || sep >= itemId.length - 1) return false;
+    const modId = itemId.slice(0, sep);
+    const mods = (this.roomLayer?.modMetadata ?? this.worldLayer?.modMetadata)?.mods;
+    if (!Array.isArray(mods)) return false;
+    return mods.some((m) => m.modId === modId);
+  }
+
+  private resolveCombatWeaponSpec(weaponId: string) {
+    const base = SERVER_WEAPON_SPECS[weaponId];
+    if (base) return base;
+    if (isAllowedMultiplayerWeaponId(weaponId) && this.isActiveRoomModItem(weaponId)) {
+      const isRanged = /bow|crossbow/i.test(weaponId);
+      return {
+        id: weaponId,
+        baseDamage: isRanged ? 38 : 48,
+        minDamage: isRanged ? 12 : 48,
+        maxDamage: isRanged ? 58 : 48,
+        range: isRanged ? 54 : 3.4,
+        cooldownMs: 300,
+        isRanged,
+        critMult: 1.65,
+        critChance: 0.25,
+        headshotMult: 2.0,
+        minSpeed: 15,
+        maxSpeed: 48,
+        gravity: 9.8,
+      };
+    }
+    return null;
+  }
+
   private adjustPlayerItemCount(
     pData: StoredPlayerLayer,
     itemId: string,
     delta: number,
   ): void {
-    const cleanId = itemId.trim().slice(0, 32);
+    const cleanId = itemId.trim().slice(0, 96);
     if (!cleanId || !Number.isFinite(delta) || delta === 0) return;
     if (cleanId === 'arrow') {
       pData.inventory.ammoCount = Math.max(
@@ -870,7 +911,7 @@ export class MultiplayerRoomDO {
   }
 
   private getPlayerItemCount(pData: StoredPlayerLayer, itemId: string): number {
-    const cleanId = itemId.trim().slice(0, 32);
+    const cleanId = itemId.trim().slice(0, 96);
     if (!cleanId) return 0;
     if (cleanId === 'arrow') return pData.inventory.ammoCount;
     if (ALLOWED_WEAPON_IDS.has(cleanId)) {
@@ -1703,6 +1744,16 @@ export class MultiplayerRoomDO {
       itemCounts: { ...(pData.inventory.itemCounts ?? {}) },
       equippedWeaponId: pData.weapons.equippedWeaponId,
       partyState: this.buildPartyStateForPlayer(playerId),
+      ...(world.modSpawns && world.modSpawns.length > 0
+        ? {
+            modSpawns: world.modSpawns.map((entry) => {
+              const collectors = shared.perPlayerPickups?.[entry.instanceId];
+              return collectors && collectors.includes(pData.persistentKey)
+                ? { ...entry, collectedByPlayers: [playerId] }
+                : { ...entry };
+            }),
+          }
+        : {}),
       ...((this.roomLayer?.modMetadata ?? world.modMetadata)
         ? { modMetadata: this.roomLayer?.modMetadata ?? world.modMetadata }
         : {}),
@@ -5936,7 +5987,10 @@ export class MultiplayerRoomDO {
             return;
           }
           const weaponId =
-            typeof eventData.weaponId === 'string' && ALLOWED_WEAPON_IDS.has(eventData.weaponId)
+            typeof eventData.weaponId === 'string' &&
+            (ALLOWED_WEAPON_IDS.has(eventData.weaponId) ||
+              (isAllowedMultiplayerWeaponId(eventData.weaponId) &&
+                this.isActiveRoomModItem(eventData.weaponId)))
               ? eventData.weaponId
               : null;
           if (
@@ -6025,7 +6079,7 @@ export class MultiplayerRoomDO {
           }
           const weaponId =
             typeof eventData.weaponId === 'string' ? eventData.weaponId : '';
-          const spec = SERVER_WEAPON_SPECS[weaponId];
+          const spec = this.resolveCombatWeaponSpec(weaponId);
           if (!spec || !spec.isRanged) {
             this.sendToSocket(session.ws, 'ERROR', session.playerId, {
               code: 'INVALID_WEAPON',
@@ -6391,7 +6445,7 @@ export class MultiplayerRoomDO {
             typeof eventData.weaponId === 'string' && eventData.weaponId.length > 0
               ? eventData.weaponId
               : 'unarmed';
-          const spec = SERVER_WEAPON_SPECS[weaponId];
+          const spec = this.resolveCombatWeaponSpec(weaponId);
           if (!spec || spec.isRanged) {
             this.sendToSocket(session.ws, 'ERROR', session.playerId, {
               code: 'INVALID_WEAPON',
@@ -6954,7 +7008,17 @@ export class MultiplayerRoomDO {
             break;
           }
 
-          if (shared.sharedResources[pickupId] || pickupId.startsWith('drop_')) {
+          const isPerPlayer = eventData.perPlayer === true;
+          if (isPerPlayer) {
+            const perList = shared.perPlayerPickups?.[pickupId] ?? [];
+            if (perList.includes(pData.persistentKey)) {
+              this.sendToSocket(session.ws, 'ERROR', session.playerId, {
+                code: 'ALREADY_COLLECTED',
+                message: 'Item has already been collected.',
+              });
+              return;
+            }
+          } else if (shared.sharedResources[pickupId] || pickupId.startsWith('drop_')) {
             this.sendToSocket(session.ws, 'ERROR', session.playerId, {
               code: 'ALREADY_COLLECTED',
               message: 'Item has already been collected.',
@@ -6972,10 +7036,14 @@ export class MultiplayerRoomDO {
           }
           const itemId =
             typeof eventData.itemId === 'string'
-              ? eventData.itemId.trim().slice(0, 32)
+              ? eventData.itemId.trim().slice(0, 96)
               : 'herb';
           const pickupSpec = SERVER_ITEM_CATALOG[itemId];
-          if (!pickupSpec || ALLOWED_WEAPON_IDS.has(itemId) || pickupSpec.forbidStaticPickup) {
+          const isAllowedModStaticPickup = this.isActiveRoomModItem(itemId);
+          if (
+            !isAllowedModStaticPickup &&
+            (!pickupSpec || ALLOWED_WEAPON_IDS.has(itemId) || pickupSpec.forbidStaticPickup)
+          ) {
             this.securityLogger.record({
               category: 'INVENTORY_TAMPER',
               code: 'FORBIDDEN_STATIC_PICKUP',
@@ -7012,13 +7080,30 @@ export class MultiplayerRoomDO {
             return;
           }
           const count = Math.round(rawPickupCount);
-          shared.sharedResources[pickupId] = session.playerId;
+          if (isPerPlayer) {
+            if (!shared.perPlayerPickups) shared.perPlayerPickups = {};
+            const perList = shared.perPlayerPickups[pickupId] ?? [];
+            if (!perList.includes(pData.persistentKey)) {
+              perList.push(pData.persistentKey);
+            }
+            shared.perPlayerPickups[pickupId] = perList;
+          } else {
+            shared.sharedResources[pickupId] = session.playerId;
+            if (Array.isArray(world.modSpawns)) {
+              const matchedModSpawn = world.modSpawns.find((m) => m.instanceId === pickupId);
+              if (matchedModSpawn) {
+                matchedModSpawn.collected = true;
+                this.dirtyWorld = true;
+              }
+            }
+          }
           this.adjustPlayerItemCount(pData, itemId, count);
           pData.updatedAt = now;
           this.touchRoomActivity(now);
           await this.flushDirtyLayers({
             room: true,
             shared: true,
+            world: this.dirtyWorld,
             playerKeys: [pData.persistentKey],
           });
           this.broadcast('GAME_EVENT', session.playerId, {
@@ -7028,6 +7113,8 @@ export class MultiplayerRoomDO {
               itemId,
               count,
               isPlayerDrop: false,
+              ...(isPerPlayer ? { perPlayer: true } : {}),
+              ...(eventData.isModSpawn ? { isModSpawn: true } : {}),
               pickedUpBy: session.playerId,
               x: px,
               y: typeof eventData.y === 'number' ? eventData.y : pData.position.y,
@@ -7040,7 +7127,7 @@ export class MultiplayerRoomDO {
         if (eventName === 'ITEM_USED') {
           if (pData.vitals.isDead) return;
           const itemId =
-            typeof eventData.itemId === 'string' ? eventData.itemId.trim().slice(0, 32) : '';
+            typeof eventData.itemId === 'string' ? eventData.itemId.trim().slice(0, 96) : '';
           if (!itemId) return;
           const useSpec = SERVER_ITEM_CATALOG[itemId];
           if (!useSpec || !useSpec.usable) {
@@ -7385,12 +7472,18 @@ export class MultiplayerRoomDO {
             typeof eventData.structureId === 'string' ? eventData.structureId.trim().slice(0, 64) : '';
           const direction = eventData.direction === 'withdraw' ? 'withdraw' : 'deposit';
           const itemId =
-            typeof eventData.itemId === 'string' ? eventData.itemId.trim().slice(0, 40) : '';
+            typeof eventData.itemId === 'string' ? eventData.itemId.trim().slice(0, 96) : '';
           const count =
             typeof eventData.count === 'number' && Number.isFinite(eventData.count)
               ? Math.max(1, Math.min(200, Math.floor(eventData.count)))
               : 1;
-          if (!structureId || !itemId || !(itemId in SERVER_ITEM_CATALOG)) return;
+          if (
+            !structureId ||
+            !itemId ||
+            (!(itemId in SERVER_ITEM_CATALOG) && !this.isActiveRoomModItem(itemId))
+          ) {
+            return;
+          }
           const shared = this.ensureSharedObjectsLayer();
           const target = shared.playerBuildings?.[structureId];
           if (!target) return;
@@ -8573,6 +8666,75 @@ export class MultiplayerRoomDO {
             1,
             now,
           );
+          break;
+        }
+
+        if (eventName === 'MOD_SPAWNS_SYNC') {
+          if (session.playerId !== this.roomLayer.hostPlayerId) {
+            return;
+          }
+          const rawList = Array.isArray(eventData.modSpawns) ? eventData.modSpawns : null;
+          if (!rawList) return;
+          const replace = eventData.replace !== false;
+          const sanitized: SyncedModSpawnEntry[] = [];
+          const shared = this.ensureSharedObjectsLayer();
+          for (const rawEntry of rawList.slice(0, 64)) {
+            if (!rawEntry || typeof rawEntry !== 'object') continue;
+            const e = rawEntry as Record<string, unknown>;
+            if (
+              typeof e.instanceId !== 'string' ||
+              typeof e.modId !== 'string' ||
+              typeof e.spawnId !== 'string' ||
+              typeof e.contentId !== 'string' ||
+              typeof e.contentType !== 'string' ||
+              typeof e.x !== 'number' ||
+              typeof e.y !== 'number' ||
+              typeof e.z !== 'number'
+            ) {
+              continue;
+            }
+            const instanceId = e.instanceId.slice(0, 128);
+            const perPlayer = Boolean(e.perPlayer);
+            const alreadyCollected =
+              !perPlayer && Boolean(shared.sharedResources[instanceId]);
+            sanitized.push({
+              instanceId,
+              modId: e.modId.slice(0, 64),
+              spawnId: e.spawnId.slice(0, 64),
+              contentId: e.contentId.slice(0, 96),
+              contentType: e.contentType.slice(0, 32),
+              x: e.x,
+              y: e.y,
+              z: e.z,
+              rotationX: typeof e.rotationX === 'number' ? e.rotationX : 0,
+              rotationY: typeof e.rotationY === 'number' ? e.rotationY : 0,
+              rotationZ: typeof e.rotationZ === 'number' ? e.rotationZ : 0,
+              scaleX: typeof e.scaleX === 'number' ? e.scaleX : 1,
+              scaleY: typeof e.scaleY === 'number' ? e.scaleY : 1,
+              scaleZ: typeof e.scaleZ === 'number' ? e.scaleZ : 1,
+              ...(perPlayer ? { perPlayer: true } : {}),
+              collected: Boolean(e.collected) || alreadyCollected,
+              defeated: Boolean(e.defeated),
+              ...(typeof e.modelPath === 'string'
+                ? { modelPath: e.modelPath.slice(0, 200) }
+                : {}),
+              ...(typeof e.label === 'string' ? { label: e.label.slice(0, 96) } : {}),
+            });
+          }
+
+          if (replace) {
+            world.modSpawns = sanitized;
+          } else {
+            const existing = world.modSpawns ?? [];
+            const byId = new Map(existing.map((it) => [it.instanceId, it]));
+            for (const item of sanitized) {
+              byId.set(item.instanceId, item);
+            }
+            world.modSpawns = Array.from(byId.values()).slice(0, 256);
+          }
+          this.touchRoomActivity(now);
+          await this.flushDirtyLayers({ room: true, world: true });
+          this.broadcast('GAME_EVENT', session.playerId, msg.gameEvent);
           break;
         }
 

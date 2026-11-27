@@ -195,6 +195,23 @@ public class LanMultiplayerServer {
         LAN_WEAPON_SPECS.put("silver-sword", new WeaponSpec("silver-sword", 40, 3.0, 390, 1.5, 0.24));
         LAN_WEAPON_SPECS.put("hunter-bow", new WeaponSpec("hunter-bow", 32, 10, 50, 52, 360, true, 1.65, 0.24, 2.0, 15, 45, 9.8));
         LAN_WEAPON_SPECS.put("crossbow", new WeaponSpec("crossbow", 46, 16, 66, 58, 560, true, 1.65, 0.28, 2.0, 22, 56, 6.2));
+    }
+
+    private static WeaponSpec resolveLanWeaponSpec(String weaponId) {
+        if (weaponId == null || weaponId.isEmpty()) return null;
+        WeaponSpec spec = LAN_WEAPON_SPECS.get(weaponId);
+        if (spec != null) return spec;
+        if (weaponId.length() <= 96 && weaponId.matches("^[a-zA-Z0-9][a-zA-Z0-9._-]{1,63}:[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")) {
+            String lower = weaponId.toLowerCase(Locale.ROOT);
+            if (lower.contains("bow") || lower.contains("crossbow")) {
+                return new WeaponSpec(weaponId, 32, 10, 50, 52, 420, true, 1.6, 0.2, 2.0, 15, 45, 9.8);
+            }
+            return new WeaponSpec(weaponId, 48, 3.4, 300, 1.6, 0.24);
+        }
+        return null;
+    }
+
+    static {
 
         LAN_ENEMY_MAX_HP.put("bandit_scout", 65);
         LAN_ENEMY_MAX_HP.put("thorn_stalker", 50);
@@ -371,6 +388,8 @@ public class LanMultiplayerServer {
         final Map<String, JSONObject> placedStations = new LinkedHashMap<>();
         final Map<String, JSONObject> playerBuildings = new LinkedHashMap<>();
         final Map<String, JSONObject> villagesDev = new LinkedHashMap<>();
+        final List<JSONObject> modSpawns = new ArrayList<>();
+        final Map<String, Set<String>> perPlayerPickups = new LinkedHashMap<>();
     }
 
     private static final class PlayerRecord {
@@ -1685,6 +1704,21 @@ public class LanMultiplayerServer {
         if (room.modMetadata != null) {
             ws.put("modMetadata", new JSONObject(room.modMetadata.toString()));
         }
+        if (!room.modSpawns.isEmpty()) {
+            JSONArray modSpawnsArr = new JSONArray();
+            for (JSONObject entry : room.modSpawns) {
+                JSONObject copy = new JSONObject(entry.toString());
+                String instanceId = entry.optString("instanceId", "");
+                Set<String> collectors = room.perPlayerPickups.get(instanceId);
+                if (collectors != null && collectors.contains(playerId)) {
+                    JSONArray cbp = new JSONArray();
+                    cbp.put(playerId);
+                    copy.put("collectedByPlayers", cbp);
+                }
+                modSpawnsArr.put(copy);
+            }
+            ws.put("modSpawns", modSpawnsArr);
+        }
 
         JSONArray bossArr = new JSONArray();
         for (JSONObject b : room.bossEncounters.values()) {
@@ -1750,8 +1784,56 @@ public class LanMultiplayerServer {
                     if (!pickupId.isEmpty()) {
                         if (data.optBoolean("isPlayerDrop", false)) {
                             room.droppedItems.remove(pickupId);
+                        } else if (data.optBoolean("perPlayer", false)) {
+                            Set<String> set = room.perPlayerPickups.get(pickupId);
+                            if (set == null) {
+                                set = new LinkedHashSet<>();
+                                room.perPlayerPickups.put(pickupId, set);
+                            }
+                            set.add(playerId);
                         } else {
                             room.collectedPickups.add(pickupId);
+                            for (JSONObject entry : room.modSpawns) {
+                                if (pickupId.equals(entry.optString("instanceId", ""))) {
+                                    entry.put("collected", true);
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+                case "MOD_SPAWNS_SYNC": {
+                    if (!playerId.equals(room.hostId)) break;
+                    JSONArray arr = data.optJSONArray("modSpawns");
+                    if (arr == null) break;
+                    boolean replace = data.optBoolean("replace", true);
+                    if (replace) {
+                        room.modSpawns.clear();
+                    }
+                    Map<String, Integer> indexById = new LinkedHashMap<>();
+                    for (int i = 0; i < room.modSpawns.size(); i++) {
+                        indexById.put(room.modSpawns.get(i).optString("instanceId", ""), i);
+                    }
+                    int limit = Math.min(arr.length(), 64);
+                    for (int i = 0; i < limit; i++) {
+                        JSONObject item = arr.optJSONObject(i);
+                        if (item == null) continue;
+                        String instanceId = item.optString("instanceId", "");
+                        if (instanceId.isEmpty() || item.optString("modId", "").isEmpty()
+                                || item.optString("spawnId", "").isEmpty()
+                                || item.optString("contentId", "").isEmpty()) {
+                            continue;
+                        }
+                        JSONObject copy = new JSONObject(item.toString());
+                        if (!copy.optBoolean("perPlayer", false) && room.collectedPickups.contains(instanceId)) {
+                            copy.put("collected", true);
+                        }
+                        Integer existingIdx = indexById.get(instanceId);
+                        if (existingIdx != null) {
+                            room.modSpawns.set(existingIdx, copy);
+                        } else if (room.modSpawns.size() < 256) {
+                            indexById.put(instanceId, room.modSpawns.size());
+                            room.modSpawns.add(copy);
                         }
                     }
                     break;
@@ -3589,7 +3671,7 @@ public class LanMultiplayerServer {
                             if (player.isDead) return;
                             String weaponId = eventData.optString("weaponId", "");
                             if (weaponId.isEmpty()) weaponId = "hunter-bow";
-                            WeaponSpec spec = LAN_WEAPON_SPECS.get(weaponId);
+                            WeaponSpec spec = resolveLanWeaponSpec(weaponId);
                             if (spec == null || !spec.isRanged) {
                                 JSONObject err = new JSONObject();
                                 err.put("code", "INVALID_WEAPON");
@@ -3713,7 +3795,7 @@ public class LanMultiplayerServer {
                                 room.activeArrows.remove(arrowId);
                                 return;
                             }
-                            WeaponSpec spec = LAN_WEAPON_SPECS.get(arrow.weaponId);
+                            WeaponSpec spec = resolveLanWeaponSpec(arrow.weaponId);
                             if (spec == null) {
                                 room.activeArrows.remove(arrowId);
                                 return;
@@ -3834,7 +3916,7 @@ public class LanMultiplayerServer {
                             }
                             String weaponId = eventData.optString("weaponId", "");
                             if (weaponId.isEmpty()) weaponId = "unarmed";
-                            WeaponSpec spec = LAN_WEAPON_SPECS.get(weaponId);
+                            WeaponSpec spec = resolveLanWeaponSpec(weaponId);
                             if (spec == null || spec.isRanged) {
                                 JSONObject err = new JSONObject();
                                 err.put("code", "INVALID_WEAPON");

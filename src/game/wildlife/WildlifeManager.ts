@@ -253,6 +253,53 @@ export class WildlifeManager {
     }
   }
 
+  public spawnModAnimal(config: AnimalConfig): Animal {
+    this.removeModAnimal(config.id);
+    const fullCfg: AnimalConfig = { ...config, isModSpawn: true };
+    let animal: Animal;
+    switch (fullCfg.species) {
+      case 'rabbit':
+        animal = new RabbitAnimal(fullCfg);
+        break;
+      case 'wolf':
+        animal = new WolfAnimal(fullCfg);
+        break;
+      case 'bear':
+        animal = new BearAnimal(fullCfg);
+        break;
+      case 'bird':
+        animal = new BirdAnimal(fullCfg);
+        break;
+      case 'cow':
+        animal = new CowAnimal(fullCfg);
+        break;
+      case 'sheep':
+        animal = new SheepAnimal(fullCfg);
+        break;
+      case 'chicken':
+        animal = new ChickenAnimal(fullCfg);
+        break;
+      default:
+        animal = new DeerAnimal(fullCfg);
+        break;
+    }
+    animal.setNetworkRemoteControlled(this.networkRemoteControlled);
+    this.animals.push(animal);
+    return animal;
+  }
+
+  public removeModAnimal(id: string): void {
+    for (let i = this.animals.length - 1; i >= 0; i--) {
+      const a = this.animals[i];
+      if (a.id !== id) continue;
+      if (a.rig) {
+        this.rigPool.release(a.rig);
+        a.rig = null;
+      }
+      this.animals.splice(i, 1);
+    }
+  }
+
   private createSpeciesLodMesh(
     species: AnimalSpecies,
     maxCount: number,

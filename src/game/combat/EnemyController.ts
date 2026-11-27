@@ -198,8 +198,19 @@ export interface EnemySpawnConfig {
   id: string;
   archetypeId: EnemyArchetypeId;
   x: number;
+  y?: number;
   z: number;
   seed: number;
+  exactPosition?: boolean;
+  rotationX?: number;
+  rotationY?: number;
+  rotationZ?: number;
+  scaleX?: number;
+  scaleY?: number;
+  scaleZ?: number;
+  customArchetype?: Partial<EnemyArchetypeConfig>;
+  respawnEnabled?: boolean;
+  respawnDelaySeconds?: number;
   onDefeated?: (enemy: EnemyController) => void;
 }
 
@@ -234,6 +245,12 @@ export class EnemyController implements CombatTarget {
   private readonly patrolTarget = new THREE.Vector3();
   private readonly onDefeatedCb?: (enemy: EnemyController) => void;
   private readonly isSoftwareGl: boolean;
+  private readonly respawnEnabled: boolean;
+  private readonly initialRotationX: number;
+  private readonly initialRotationZ: number;
+  private readonly initialScaleX: number;
+  private readonly initialScaleY: number;
+  private readonly initialScaleZ: number;
 
   private rngState: number;
   private stateTimer = 1.5;
@@ -274,7 +291,22 @@ export class EnemyController implements CombatTarget {
     isSoftwareGl: boolean,
   ) {
     this.isSoftwareGl = isSoftwareGl;
-    const archetype = ENEMY_ARCHETYPES[config.archetypeId];
+    const baseArchetype = ENEMY_ARCHETYPES[config.archetypeId];
+    const archetype: EnemyArchetypeConfig = config.customArchetype
+      ? {
+          ...baseArchetype,
+          ...config.customArchetype,
+          respawnDelay:
+            config.respawnDelaySeconds ??
+            config.customArchetype.respawnDelay ??
+            baseArchetype.respawnDelay,
+        }
+      : {
+          ...baseArchetype,
+          ...(typeof config.respawnDelaySeconds === 'number'
+            ? { respawnDelay: config.respawnDelaySeconds }
+            : {}),
+        };
     this.id = config.id;
     this.archetype = archetype;
     this.name = archetype.name;
@@ -282,10 +314,19 @@ export class EnemyController implements CombatTarget {
     this.hitRadius = archetype.hitRadius;
     this.hitHeight = archetype.hitHeight;
     this.onDefeatedCb = config.onDefeated;
+    this.respawnEnabled = config.respawnEnabled !== false;
+    this.initialRotationX = config.rotationX ?? 0;
+    this.initialRotationZ = config.rotationZ ?? 0;
+    this.initialScaleX = Math.max(0.05, config.scaleX ?? 1);
+    this.initialScaleY = Math.max(0.05, config.scaleY ?? 1);
+    this.initialScaleZ = Math.max(0.05, config.scaleZ ?? 1);
 
     this.rngState = ((config.seed * 2654435761) >>> 0) || 4242;
     this.frameTick = config.seed & 3;
-    this.yaw = this.nextRand() * Math.PI * 2 - Math.PI;
+    this.yaw =
+      typeof config.rotationY === 'number' && Number.isFinite(config.rotationY)
+        ? config.rotationY
+        : this.nextRand() * Math.PI * 2 - Math.PI;
 
     this.health = new HealthComponent({
       maxHealth: archetype.maxHealth,
@@ -293,14 +334,18 @@ export class EnemyController implements CombatTarget {
       damageReduction: archetype.damageReduction,
     });
 
-    const y = groundHeightAt(config.x, config.z);
+    const y =
+      typeof config.y === 'number' && Number.isFinite(config.y)
+        ? config.y
+        : groundHeightAt(config.x, config.z);
     this.position.set(config.x, y, config.z);
     this.homePosition.copy(this.position);
     this.patrolTarget.copy(this.position);
 
     this.rig = new EnemyRigClass(archetype.id, assets, isSoftwareGl);
     this.rig.root.position.copy(this.position);
-    this.rig.root.rotation.y = this.yaw;
+    this.rig.root.rotation.set(this.initialRotationX, this.yaw, this.initialRotationZ);
+    this.rig.root.scale.set(this.initialScaleX, this.initialScaleY, this.initialScaleZ);
     scene.add(this.rig.root);
 
     this.pickNextPatrolPoint();
@@ -750,7 +795,12 @@ export class EnemyController implements CombatTarget {
         this.rig.root.visible = false;
       }
 
-      if (!this.networkRemoteControlled && this.respawnTimer <= 0 && minDistSqToAnyPlayer > 28 * 28) {
+      if (
+        this.respawnEnabled &&
+        !this.networkRemoteControlled &&
+        this.respawnTimer <= 0 &&
+        minDistSqToAnyPlayer > 28 * 28
+      ) {
         this.respawnAtHome();
       }
       return;
@@ -806,7 +856,8 @@ export class EnemyController implements CombatTarget {
       }
 
       this.rig.root.position.copy(this.position);
-      this.rig.root.rotation.y = this.yaw;
+      this.rig.root.rotation.set(this.initialRotationX, this.yaw, this.initialRotationZ);
+      this.rig.root.scale.set(this.initialScaleX, this.initialScaleY, this.initialScaleZ);
       if (visibleToLocalViewer) {
         const animStride =
           distSqToViewer > midDistSq
@@ -1026,7 +1077,8 @@ export class EnemyController implements CombatTarget {
     }
 
     this.rig.root.position.copy(this.position);
-    this.rig.root.rotation.y = this.yaw;
+    this.rig.root.rotation.set(this.initialRotationX, this.yaw, this.initialRotationZ);
+    this.rig.root.scale.set(this.initialScaleX, this.initialScaleY, this.initialScaleZ);
 
     if (visibleToLocalViewer) {
       const animSkip =

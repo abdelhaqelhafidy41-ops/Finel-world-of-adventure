@@ -91,17 +91,47 @@ export abstract class Animal {
   private remoteTargetAltitude = 0;
   private remoteTargetYaw = 0;
   private hasRemoteTarget = false;
+  public readonly exactPosition: boolean;
+  public readonly isModSpawn: boolean;
+  public readonly stationary: boolean;
+  public readonly initialRotationX: number;
+  public readonly initialRotationZ: number;
+  public readonly scaleVec: { x: number; y: number; z: number };
 
   protected constructor(config: AnimalConfig, traits: AnimalTraits) {
     this.id = config.id;
     this.species = config.species;
     this.diet = traits.diet;
-    this.traits = traits;
-    this.maxHp = traits.maxHp;
-    this.hp = config.dead ? 0 : traits.maxHp;
+    this.traits = {
+      ...traits,
+      ...(typeof config.maxHpOverride === 'number' ? { maxHp: config.maxHpOverride } : {}),
+      ...(typeof config.attackDamageOverride === 'number'
+        ? { attackDamage: config.attackDamageOverride }
+        : {}),
+      ...(typeof config.walkSpeedOverride === 'number'
+        ? { walkSpeed: config.walkSpeedOverride }
+        : {}),
+      ...(typeof config.runSpeedOverride === 'number'
+        ? { runSpeed: config.runSpeedOverride }
+        : {}),
+    };
+    this.exactPosition = Boolean(config.exactPosition);
+    this.isModSpawn = Boolean(config.isModSpawn);
+    this.stationary = Boolean(config.stationary);
+    this.initialRotationX = config.rotationX ?? 0;
+    this.initialRotationZ = config.rotationZ ?? 0;
+    this.maxHp = this.traits.maxHp;
+    this.hp = config.dead ? 0 : this.traits.maxHp;
     this.isDead = Boolean(config.dead);
-    const rawH = groundHeightAt(config.home.x, config.home.z);
-    if (!traits.canFly && (rawH < WATER_LEVEL + 0.55 || isWater(config.home.x, config.home.z, rawH))) {
+    const rawH =
+      typeof config.y === 'number' && Number.isFinite(config.y)
+        ? config.y
+        : groundHeightAt(config.home.x, config.home.z);
+    if (
+      !this.exactPosition &&
+      !traits.canFly &&
+      (rawH < WATER_LEVEL + 0.55 || isWater(config.home.x, config.home.z, rawH))
+    ) {
       const safe = findNearestValidLand(config.home.x, config.home.z, 3.5, 0.35, 60);
       this.homeX = safe.x;
       this.homeZ = safe.z;
@@ -112,11 +142,21 @@ export abstract class Animal {
       this.position.set(this.homeX, rawH, this.homeZ);
     }
     this.scale = config.scale ?? 1;
+    this.scaleVec = config.scaleVec
+      ? {
+          x: Math.max(0.05, config.scaleVec.x),
+          y: Math.max(0.05, config.scaleVec.y),
+          z: Math.max(0.05, config.scaleVec.z),
+        }
+      : { x: this.scale, y: this.scale, z: this.scale };
     this.variant = config.variant ?? 0;
 
     this.rngState = ((config.seed * 2654435761) >>> 0) || 1337;
     this.seedPhase = this.nextRand() * Math.PI * 2;
-    this.yaw = this.nextRand() * Math.PI * 2 - Math.PI;
+    this.yaw =
+      typeof config.rotationY === 'number' && Number.isFinite(config.rotationY)
+        ? config.rotationY
+        : this.nextRand() * Math.PI * 2 - Math.PI;
 
     const startFlying = !this.isDead && traits.canFly && this.nextRand() < 0.55;
     this.altitude = startFlying ? 4 + this.nextRand() * 8 : 0;
@@ -921,6 +961,16 @@ export abstract class Animal {
     }
 
     const bb = this.blackboard;
+    if (this.stationary) {
+      this.velocity.set(0, 0, 0);
+      if (this.rig) {
+        this.rig.root.position.copy(this.position);
+        this.rig.root.rotation.set(this.initialRotationX, this.yaw, this.initialRotationZ);
+        this.rig.root.scale.set(this.scaleVec.x, this.scaleVec.y, this.scaleVec.z);
+        this.rig.updateAnimation(dt, elapsed, 'idle', 0, false, 0, this.seedPhase);
+      }
+      return;
+    }
     let speed = 0;
 
     if (this.behaviorState === 'wander') {
@@ -1108,8 +1158,8 @@ export abstract class Animal {
 
     if (this.rig) {
       this.rig.root.position.copy(this.position);
-      this.rig.root.rotation.y = this.yaw;
-      this.rig.root.scale.setScalar(this.scale);
+      this.rig.root.rotation.set(this.initialRotationX, this.yaw, this.initialRotationZ);
+      this.rig.root.scale.set(this.scaleVec.x, this.scaleVec.y, this.scaleVec.z);
       const actualSpeed = Math.hypot(this.velocity.x, this.velocity.z);
       this.rig.updateAnimation(
         dt,
