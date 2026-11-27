@@ -121,6 +121,7 @@ export interface ItemDefinition {
   consumeEffect?: ItemConsumeEffect;
   valueCoins?: number;
   modelPath?: string;
+  iconTexture?: string;
 }
 
 export interface InventorySlotState {

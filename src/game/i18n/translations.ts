@@ -1725,6 +1725,13 @@ export interface UiStrings {
   modsSpawnInstancesLabel: string;
   modsSpawnMenuPreviewHint: string;
   modsSpawnStatusLabel: (status: string) => string;
+  modsSpawnAutoY: string;
+  modsSpawnRotationLabel: string;
+  modsSpawnScaleLabel: string;
+  modsSpawnAlreadySpawnedLabel: string;
+  modsSpawnSavedLabel: string;
+  modsSpawnYesLabel: string;
+  modsSpawnNoLabel: string;
 }
 
 export const UI_TEXT: Record<Language, UiStrings> = {
@@ -3112,6 +3119,13 @@ export const UI_TEXT: Record<Language, UiStrings> = {
           return status;
       }
     },
+    modsSpawnAutoY: 'auto',
+    modsSpawnRotationLabel: 'Rot',
+    modsSpawnScaleLabel: 'Scale',
+    modsSpawnAlreadySpawnedLabel: 'Spawned',
+    modsSpawnSavedLabel: 'Saved',
+    modsSpawnYesLabel: 'Yes',
+    modsSpawnNoLabel: 'No',
   },
   ar: {
     gameTitle: 'عالم المغامرة',
@@ -4496,5 +4510,12 @@ export const UI_TEXT: Record<Language, UiStrings> = {
           return status;
       }
     },
+    modsSpawnAutoY: 'تلقائي',
+    modsSpawnRotationLabel: 'الدوران',
+    modsSpawnScaleLabel: 'الحجم',
+    modsSpawnAlreadySpawnedLabel: 'مُستدعى',
+    modsSpawnSavedLabel: 'محفوظ',
+    modsSpawnYesLabel: 'نعم',
+    modsSpawnNoLabel: 'لا',
   },
 };

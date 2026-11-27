@@ -354,6 +354,20 @@ export class NamespacedContentRegistry<T> {
     return this.entries.size;
   }
 
+  public unregister(id: string): boolean {
+    const existing = this.entries.get(id);
+    if (!existing) return false;
+    this.entries.delete(id);
+    const ids = this.modIndex.get(existing.modId);
+    if (ids) {
+      ids.delete(id);
+      if (ids.size === 0) {
+        this.modIndex.delete(existing.modId);
+      }
+    }
+    return true;
+  }
+
   public unloadMod(modId: string): void {
     const ids = this.modIndex.get(modId);
     if (!ids) return;

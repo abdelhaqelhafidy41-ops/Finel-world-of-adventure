@@ -371,6 +371,7 @@ function sanitizeItemLikeDefinition(
         ? Math.max(0, Math.round(raw.valueCoins))
         : undefined,
     ...(modelCheck.value ? { modelPath: modelCheck.value } : {}),
+    ...(assetCheck.value ? { iconTexture: assetCheck.value } : {}),
   };
 
   if (typeof raw.equipSlot === 'string' && VALID_EQUIP_SLOTS.has(raw.equipSlot.trim())) {
@@ -756,6 +757,33 @@ function sanitizeBlueprint(
           ? 120
           : 250,
     repairCosts,
+    ...(typeof raw.isHouse === 'boolean' ? { isHouse: raw.isHouse } : {}),
+    ...(typeof raw.wallHeight === 'number' && raw.wallHeight > 0 ? { wallHeight: raw.wallHeight } : {}),
+    ...(typeof raw.roofHeight === 'number' && raw.roofHeight > 0 ? { roofHeight: raw.roofHeight } : {}),
+    ...(typeof raw.hasDoor === 'boolean' ? { hasDoor: raw.hasDoor } : {}),
+    ...(isRecord(raw.doorOffset) &&
+    typeof raw.doorOffset.x === 'number' &&
+    typeof raw.doorOffset.y === 'number' &&
+    typeof raw.doorOffset.z === 'number' &&
+    typeof raw.doorOffset.halfW === 'number' &&
+    typeof raw.doorOffset.halfD === 'number' &&
+    typeof raw.doorOffset.height === 'number'
+      ? {
+          doorOffset: {
+            x: raw.doorOffset.x,
+            y: raw.doorOffset.y,
+            z: raw.doorOffset.z,
+            halfW: raw.doorOffset.halfW,
+            halfD: raw.doorOffset.halfD,
+            height: raw.doorOffset.height,
+          },
+        }
+      : {}),
+    ...(typeof raw.isFloorPiece === 'boolean' ? { isFloorPiece: raw.isFloorPiece } : {}),
+    ...(typeof raw.isRoofPiece === 'boolean' ? { isRoofPiece: raw.isRoofPiece } : {}),
+    ...(typeof raw.isWallPiece === 'boolean' ? { isWallPiece: raw.isWallPiece } : {}),
+    ...(typeof raw.isDoorPiece === 'boolean' ? { isDoorPiece: raw.isDoorPiece } : {}),
+    ...(typeof raw.isStairsPiece === 'boolean' ? { isStairsPiece: raw.isStairsPiece } : {}),
     ...(modelCheck.value ? { modelPath: modelCheck.value } : {}),
   };
 }

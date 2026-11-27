@@ -34,6 +34,7 @@ import {
 } from './AnimalRig';
 import {
   ANIMAL_DROP_TABLES,
+  type AnimalConfig,
   type AnimalLootDrop,
   type AnimalSpecies,
   type NearbyAnimalEntry,
@@ -298,6 +299,10 @@ export class WildlifeManager {
       }
       this.animals.splice(i, 1);
     }
+  }
+
+  public getModAnimal(id: string): Animal | undefined {
+    return this.animals.find((a) => a.id === id);
   }
 
   private createSpeciesLodMesh(

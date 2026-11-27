@@ -379,7 +379,14 @@ export function normalizeModSpawnMode(rawMode: unknown): {
 const VALID_BIOMES = new Set<string>(['Plains', 'Forest', 'Desert', 'Mountains', 'Beach']);
 const VALID_WEATHERS = new Set<string>(['clear', 'cloudy', 'overcast', 'rain', 'storm', 'fog']);
 const VALID_PERIODS = new Set<string>(['morning', 'midday', 'evening', 'night']);
-const VALID_QUEST_STATUS = new Set<string>(['not_started', 'active', 'ready_to_complete', 'completed']);
+function normalizeQuestStatus(raw: string): QuestStatus | null {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'not_started' || normalized === 'available') return 'available';
+  if (normalized === 'active') return 'active';
+  if (normalized === 'ready_to_complete' || normalized === 'ready') return 'ready';
+  if (normalized === 'completed') return 'completed';
+  return null;
+}
 
 function parseConditions(
   raw: Record<string, unknown>,
@@ -513,12 +520,14 @@ function parseConditions(
   const questId = typeof questIdRaw === 'string' && questIdRaw.trim() ? questIdRaw.trim() : undefined;
   const rawQStatus = condObj.questStatus ?? raw.questStatus;
   let questStatus: QuestStatus[] | undefined;
-  if (typeof rawQStatus === 'string' && VALID_QUEST_STATUS.has(rawQStatus.trim())) {
-    questStatus = [rawQStatus.trim() as QuestStatus];
+  if (typeof rawQStatus === 'string') {
+    const normalized = normalizeQuestStatus(rawQStatus);
+    if (normalized) questStatus = [normalized];
   } else if (Array.isArray(rawQStatus)) {
-    const qList = rawQStatus.filter(
-      (s): s is QuestStatus => typeof s === 'string' && VALID_QUEST_STATUS.has(s.trim()),
-    );
+    const qList = rawQStatus
+      .filter((s): s is string => typeof s === 'string')
+      .map(normalizeQuestStatus)
+      .filter((s): s is QuestStatus => s !== null);
     if (qList.length > 0) questStatus = qList;
   }
 

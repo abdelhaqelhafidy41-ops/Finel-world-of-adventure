@@ -873,13 +873,19 @@ export class BuildingManager {
     lx: number,
     ly: number,
     lz: number,
+    sx = 1,
+    sy = 1,
+    sz = 1,
   ): { x: number; y: number; z: number } {
     const cos = Math.cos(yaw);
     const sin = Math.sin(yaw);
+    const slx = lx * sx;
+    const sly = ly * sy;
+    const slz = lz * sz;
     return {
-      x: baseX + lx * cos - lz * sin,
-      y: baseY + ly,
-      z: baseZ + lx * sin + lz * cos,
+      x: baseX + slx * cos - slz * sin,
+      y: baseY + sly,
+      z: baseZ + slx * sin + slz * cos,
     };
   }
 
@@ -893,6 +899,9 @@ export class BuildingManager {
     const sx = st.scaleX ?? 1;
     const sy = st.scaleY ?? 1;
     const sz = st.scaleZ ?? 1;
+    const asx = Math.max(0.05, Math.abs(sx));
+    const asy = Math.max(0.05, Math.abs(sy));
+    const asz = Math.max(0.05, Math.abs(sz));
     refs.group.scale.set(sx, sy, sz);
     if (st.isModSpawn) {
       refs.group.userData.isModSpawn = true;
@@ -913,10 +922,10 @@ export class BuildingManager {
 
     // 1. Register Colliders
     if (bp.isHouse) {
-      const w = bp.width;
-      const d = bp.depth;
-      const wh = bp.wallHeight ?? 2.8;
-      const wallThick = 0.28;
+      const w = bp.width * asx;
+      const d = bp.depth * asz;
+      const wh = (bp.wallHeight ?? 2.8) * asy;
+      const wallThick = 0.28 * Math.min(asx, asz);
       // Floor
       this.callbacks.registerCollider(
         {
@@ -925,8 +934,8 @@ export class BuildingManager {
           z: st.z,
           halfW: w * 0.5,
           halfD: d * 0.5,
-          minY: st.y - 0.5,
-          maxY: st.y + 0.42,
+          minY: st.y - 0.5 * asy,
+          maxY: st.y + 0.42 * asy,
           yaw: st.yaw,
           walkableTop: true,
           tag: 'floor',
@@ -941,8 +950,8 @@ export class BuildingManager {
           z: st.z,
           halfW: w * 0.52,
           halfD: d * 0.52,
-          minY: st.y + 0.35 + wh,
-          maxY: st.y + 0.35 + wh + (bp.roofHeight ?? 2.2),
+          minY: st.y + 0.35 * asy + wh,
+          maxY: st.y + 0.35 * asy + wh + (bp.roofHeight ?? 2.2) * asy,
           yaw: st.yaw,
           tag: 'roof',
         },
@@ -958,8 +967,8 @@ export class BuildingManager {
             z: p.z,
             halfW: hw,
             halfD: hd,
-            minY: st.y + 0.35,
-            maxY: st.y + 0.35 + wh,
+            minY: st.y + 0.35 * asy,
+            maxY: st.y + 0.35 * asy + wh,
             yaw: st.yaw,
             tag: 'wall',
           },
@@ -970,8 +979,8 @@ export class BuildingManager {
       addWallCol(-w * 0.5 + wallThick * 0.5, 0, wallThick * 0.5, d * 0.5);
       addWallCol(w * 0.5 - wallThick * 0.5, 0, wallThick * 0.5, d * 0.5);
       // Front wall flanking segments leaving central door clear
-      const doorHalfW = bp.doorOffset?.halfW ?? 0.66;
-      const frontLeftHalfW = Math.max(0.25, (w * 0.5 - doorHalfW) * 0.5);
+      const doorHalfW = (bp.doorOffset?.halfW ?? 0.66) * asx;
+      const frontLeftHalfW = Math.max(0.25 * asx, (w * 0.5 - doorHalfW) * 0.5);
       const frontLeftCenter = doorHalfW + frontLeftHalfW;
       addWallCol(-frontLeftCenter, d * 0.5 - wallThick * 0.5, frontLeftHalfW, wallThick * 0.5);
       addWallCol(frontLeftCenter, d * 0.5 - wallThick * 0.5, frontLeftHalfW, wallThick * 0.5);
@@ -981,10 +990,10 @@ export class BuildingManager {
           kind: 'box',
           x: st.x,
           z: st.z,
-          halfW: bp.width * 0.5,
-          halfD: bp.depth * 0.5,
-          minY: st.y - 0.6,
-          maxY: st.y + bp.height,
+          halfW: bp.width * 0.5 * asx,
+          halfD: bp.depth * 0.5 * asz,
+          minY: st.y - 0.6 * asy,
+          maxY: st.y + bp.height * asy,
           yaw: st.yaw,
           walkableTop: true,
           tag: 'floor',
@@ -997,18 +1006,18 @@ export class BuildingManager {
           kind: 'box',
           x: st.x,
           z: st.z,
-          halfW: bp.width * 0.52,
-          halfD: bp.depth * 0.52,
+          halfW: bp.width * 0.52 * asx,
+          halfD: bp.depth * 0.52 * asz,
           minY: st.y,
-          maxY: st.y + bp.height,
+          maxY: st.y + bp.height * asy,
           yaw: st.yaw,
           tag: 'roof',
         },
         colliderOwnerKey,
       );
     } else if (bp.isDoorPiece && bp.doorOffset) {
-      const openingHalfW = bp.doorOffset.halfW;
-      const sideHalfW = Math.max(0.25, (bp.width * 0.5 - openingHalfW) * 0.5);
+      const openingHalfW = bp.doorOffset.halfW * asx;
+      const sideHalfW = Math.max(0.25 * asx, (bp.width * 0.5 * asx - openingHalfW) * 0.5);
       const sideCenter = openingHalfW + sideHalfW;
       for (const sign of [-1, 1]) {
         const p = this.toWorldPos(st.x, st.y, st.z, st.yaw, sign * sideCenter, 0, 0);
@@ -1018,9 +1027,9 @@ export class BuildingManager {
             x: p.x,
             z: p.z,
             halfW: sideHalfW,
-            halfD: bp.depth * 0.5,
+            halfD: bp.depth * 0.5 * asz,
             minY: st.y,
-            maxY: st.y + bp.height,
+            maxY: st.y + bp.height * asy,
             yaw: st.yaw,
             tag: 'wall',
           },
@@ -1033,10 +1042,10 @@ export class BuildingManager {
           kind: 'box',
           x: st.x,
           z: st.z,
-          halfW: bp.width * 0.5 * Math.abs(sx),
-          halfD: bp.depth * 0.5 * Math.abs(sz),
-          minY: st.y - 0.3 * Math.abs(sy),
-          maxY: st.y + bp.height * Math.abs(sy),
+          halfW: bp.width * 0.5 * asx,
+          halfD: bp.depth * 0.5 * asz,
+          minY: st.y - 0.3 * asy,
+          maxY: st.y + bp.height * asy,
           yaw: st.yaw,
           walkableTop: Boolean(bp.isStairsPiece),
           tag: bp.isWallPiece ? 'wall' : 'prop',
@@ -1057,6 +1066,9 @@ export class BuildingManager {
         bp.doorOffset.x,
         bp.doorOffset.y,
         bp.doorOffset.z,
+        asx,
+        asy,
+        asz,
       );
       const isOpen = Boolean(st.doorOpen);
       refs.doorPivot.rotation.y = isOpen ? -1.35 : 0;
@@ -1071,9 +1083,9 @@ export class BuildingManager {
         x: dp.x,
         z: dp.z,
         minY: dp.y,
-        maxY: dp.y + bp.doorOffset.height,
-        halfW: bp.doorOffset.halfW,
-        halfD: bp.doorOffset.halfD,
+        maxY: dp.y + bp.doorOffset.height * asy,
+        halfW: bp.doorOffset.halfW * asx,
+        halfD: bp.doorOffset.halfD * asz,
         yaw: st.yaw,
         activeNpcUsers: new Set(),
       };
@@ -1100,7 +1112,18 @@ export class BuildingManager {
     if (bp.stationType) {
       const stId = `pstation_${st.id}`;
       const sp = bp.stationOffset
-        ? this.toWorldPos(st.x, st.y, st.z, st.yaw, bp.stationOffset.x, bp.stationOffset.y, bp.stationOffset.z)
+        ? this.toWorldPos(
+            st.x,
+            st.y,
+            st.z,
+            st.yaw,
+            bp.stationOffset.x,
+            bp.stationOffset.y,
+            bp.stationOffset.z,
+            asx,
+            asy,
+            asz,
+          )
         : { x: st.x, y: st.y, z: st.z };
       this.callbacks.interactables.push({
         id: stId,
@@ -1122,7 +1145,18 @@ export class BuildingManager {
     if (bp.storageCapacity && bp.storageCapacity > 0) {
       const storeId = `pstore_${st.id}`;
       const sp = bp.storageOffset
-        ? this.toWorldPos(st.x, st.y, st.z, st.yaw, bp.storageOffset.x, bp.storageOffset.y, bp.storageOffset.z)
+        ? this.toWorldPos(
+            st.x,
+            st.y,
+            st.z,
+            st.yaw,
+            bp.storageOffset.x,
+            bp.storageOffset.y,
+            bp.storageOffset.z,
+            asx,
+            asy,
+            asz,
+          )
         : { x: st.x, y: st.y, z: st.z };
       this.callbacks.interactables.push({
         id: storeId,

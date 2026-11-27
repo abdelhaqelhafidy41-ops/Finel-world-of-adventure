@@ -493,7 +493,7 @@ export interface IMultiplayerService {
   sendRepairWeapons?(costCoins: number): boolean;
   sendGameEvent(
     event: string,
-    data?: Record<string, string | number | boolean | null>,
+    data?: GameEventPayload['data'],
   ): boolean;
   sendChatMessage(text: string): SendChatResult;
   getChatMessages(): RoomChatMessage[];

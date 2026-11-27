@@ -1209,6 +1209,32 @@ export abstract class NPCBase {
     return this.behaviorState;
   }
 
+  public restoreModEntityState(state: {
+    yaw?: number;
+    hp?: number;
+    maxHealth?: number;
+    isDead?: boolean;
+    dialogueState?: 'idle' | 'talking';
+  }): void {
+    if (typeof state.yaw === 'number' && Number.isFinite(state.yaw)) {
+      this.yaw = state.yaw;
+      this.rig.root.rotation.set(this.initialRotation.x, this.yaw, this.initialRotation.z);
+    }
+    if (typeof state.hp === 'number' || typeof state.isDead === 'boolean') {
+      this.applyAuthoritativeHealth(
+        state.hp ?? this.maxHealth,
+        state.maxHealth ?? this.maxHealth,
+        Boolean(state.isDead),
+      );
+    }
+    if (state.dialogueState === 'talking') {
+      this.talking = true;
+      this.behaviorState = 'talking';
+    } else if (state.dialogueState === 'idle') {
+      this.talking = false;
+    }
+  }
+
   public takeDamage(
     amount: number,
     attackerX?: number,

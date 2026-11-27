@@ -1690,6 +1690,7 @@ export class CombatManager {
     respawnEnabled?: boolean;
     respawnDelaySeconds?: number;
     defeated?: boolean;
+    savedHp?: number;
     modId?: string;
     modSpawnId?: string;
     materializeNow?: boolean;
@@ -1704,7 +1705,7 @@ export class CombatManager {
       seed: opts.seed,
       chunkId: resolveChunkIdAt(opts.x, opts.z),
       defeated: Boolean(opts.defeated),
-      savedHp: null,
+      savedHp: typeof opts.savedHp === 'number' && Number.isFinite(opts.savedHp) ? opts.savedHp : null,
       controller: null,
       exactPosition: true,
       rotationX: opts.rotationX,
@@ -1725,6 +1726,10 @@ export class CombatManager {
       this.materializeEnemy(bp);
     }
     return bp;
+  }
+
+  public getModEnemyController(id: string): EnemyController | null {
+    return this.enemyBlueprints.find((b) => b.id === id)?.controller ?? null;
   }
 
   public unregisterModEnemyBlueprint(id: string): void {

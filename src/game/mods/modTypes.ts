@@ -1,4 +1,5 @@
 export const CURRENT_GAME_VERSION = '1.1.25';
+export const MINIMUM_SUPPORTED_GAME_VERSION = '1.1.24';
 export const MOD_API_VERSION = 1;
 export const MOD_CONTENT_SCHEMA_VERSION = 2;
 export const SUPPORTED_MOD_SCHEMA_VERSIONS: readonly number[] = [1, 2];
@@ -29,6 +30,7 @@ export const MOD_CONTENT_TYPES = [
   'models',
   'localization',
   'spawns',
+  'events',
 ] as const;
 
 export type ModContentType = (typeof MOD_CONTENT_TYPES)[number];
@@ -57,6 +59,7 @@ export const STANDARD_MOD_FOLDERS = [
   'loot_tables',
   'localization',
   'spawns',
+  'events',
 ] as const;
 
 export type StandardModFolder = (typeof STANDARD_MOD_FOLDERS)[number];
@@ -79,6 +82,7 @@ export interface ModManifest {
   compatibilityVersion?: string;
   minGameVersion?: string;
   maxGameVersion?: string;
+  modCreatorVersion?: string;
   modApiVersion?: number;
   schemaVersion?: number;
   multiplayerCompatibility?: ModMultiplayerCompatibility;

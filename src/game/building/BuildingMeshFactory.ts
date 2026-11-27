@@ -875,7 +875,8 @@ export class BuildingMeshFactory {
         const woa3d = bp.modelPath ? resolveExternalWoa3dModel(bp.modelPath) : undefined;
         if (woa3d) {
           const built = buildGroupFromWoa3dModel(woa3d, {
-            categoryHint: bp.category === 'decor' ? 'decorations' : 'buildings',
+            categoryHint:
+              bp.category === 'furniture' || bp.isDecorative ? 'decorations' : 'buildings',
           });
           group.add(built.group);
           this.disposables.push(...built.disposables);

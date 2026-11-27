@@ -1352,7 +1352,7 @@ export const ModsPanel: React.FC<ModsPanelProps> = ({
                                   dir="ltr"
                                   className="font-mono-num font-semibold text-white truncate"
                                 >
-                                  [{entry.contentType}] {entry.contentId}
+                                  [{entry.contentType}] {entry.contentId} ({entry.modId}:{entry.spawnId})
                                 </span>
                                 <span
                                   className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
@@ -1375,7 +1375,8 @@ export const ModsPanel: React.FC<ModsPanelProps> = ({
                                 </span>
                                 <span>
                                   {t.modsSpawnConfiguredLabel}: ({entry.configuredCoords.x},{' '}
-                                  {entry.configuredCoords.y}, {entry.configuredCoords.z})
+                                  {entry.configuredCoords.y ?? t.modsSpawnAutoY},{' '}
+                                  {entry.configuredCoords.z})
                                 </span>
                                 {entry.resolvedCoords && (
                                   <span>
@@ -1385,6 +1386,16 @@ export const ModsPanel: React.FC<ModsPanelProps> = ({
                                     {Number(entry.resolvedCoords.z.toFixed(3))})
                                   </span>
                                 )}
+                                <span>
+                                  {t.modsSpawnRotationLabel}: ({Number(entry.rotation.x.toFixed(3))},{' '}
+                                  {Number(entry.rotation.y.toFixed(3))},{' '}
+                                  {Number(entry.rotation.z.toFixed(3))})
+                                </span>
+                                <span>
+                                  {t.modsSpawnScaleLabel}: ({Number(entry.scale.x.toFixed(3))},{' '}
+                                  {Number(entry.scale.y.toFixed(3))},{' '}
+                                  {Number(entry.scale.z.toFixed(3))})
+                                </span>
                                 {entry.targetChunk && (
                                   <span>
                                     {t.modsSpawnChunkLabel}: {entry.targetChunk}
@@ -1392,6 +1403,14 @@ export const ModsPanel: React.FC<ModsPanelProps> = ({
                                 )}
                                 <span>
                                   {t.modsSpawnInstancesLabel}: {entry.instanceCount}
+                                </span>
+                                <span>
+                                  {t.modsSpawnAlreadySpawnedLabel}:{' '}
+                                  {entry.alreadySpawned ? t.modsSpawnYesLabel : t.modsSpawnNoLabel}
+                                </span>
+                                <span>
+                                  {t.modsSpawnSavedLabel}:{' '}
+                                  {entry.saved ? t.modsSpawnYesLabel : t.modsSpawnNoLabel}
                                 </span>
                               </div>
                               {entry.failedCondition && (
@@ -1428,7 +1447,7 @@ export const ModsPanel: React.FC<ModsPanelProps> = ({
                               className="p-2 rounded-lg bg-[#08100c] border border-white/8 font-mono-num text-[10px] text-[#c7d6c6] space-y-0.5"
                             >
                               <div className="font-semibold text-white">
-                                [{rule.contentType}] {rule.contentId} ({rule.spawnId})
+                                [{rule.contentType}] {rule.contentId} ({rule.modId}:{rule.spawnId})
                               </div>
                               <div className="flex flex-wrap gap-x-3 text-[#9fb5a1]">
                                 <span>
@@ -1436,7 +1455,17 @@ export const ModsPanel: React.FC<ModsPanelProps> = ({
                                 </span>
                                 <span>
                                   {t.modsSpawnConfiguredLabel}: ({rule.position.x},{' '}
-                                  {rule.position.y}, {rule.position.z})
+                                  {rule.position.y ?? t.modsSpawnAutoY}, {rule.position.z})
+                                </span>
+                                <span>
+                                  {t.modsSpawnRotationLabel}: ({Number(rule.rotation.x.toFixed(3))},{' '}
+                                  {Number(rule.rotation.y.toFixed(3))},{' '}
+                                  {Number(rule.rotation.z.toFixed(3))})
+                                </span>
+                                <span>
+                                  {t.modsSpawnScaleLabel}: ({Number(rule.scale.x.toFixed(3))},{' '}
+                                  {Number(rule.scale.y.toFixed(3))},{' '}
+                                  {Number(rule.scale.z.toFixed(3))})
                                 </span>
                               </div>
                             </div>

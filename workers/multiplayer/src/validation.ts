@@ -242,6 +242,13 @@ export function validateClientMessage(
         ? (env.payload as Record<string, unknown>)
         : null;
     const rawEventName = typeof rawEventPayload?.event === 'string' ? rawEventPayload.event : '';
+    if (rawEventName === 'MOD_SPAWNS_SYNC' && !isPlayerHost) {
+      return {
+        ok: false,
+        code: 'FORBIDDEN_HOST_ONLY',
+        reason: 'Only the room host can synchronize mod spawns.',
+      };
+    }
     const allowedEventKeys =
       rawEventName === 'BUILDING_UPDATED' ? new Set(['health']) : undefined;
     const forbiddenEventKey =

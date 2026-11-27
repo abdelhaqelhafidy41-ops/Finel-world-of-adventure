@@ -1,7 +1,8 @@
 import type { QuestView } from './quest/questTypes';
 import type { CombatEnemyHudTarget } from './combat/combatTypes';
 import type { TimeSnapshot } from './world/TimeManager';
-import type { WeatherSnapshot } from './world/WeatherManager';
+import type { WeatherSnapshot, WeatherState } from './world/WeatherManager';
+export type { WeatherState };
 import type { WorldType } from './save/saveTypes';
 import type { BuildModeHudSnapshot } from './building/buildingTypes';
 

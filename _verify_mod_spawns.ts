@@ -418,7 +418,7 @@ function createWorkerHarness() {
 
 function createHarness(modManager: ModManager, worldSpawn: { x: number; y: number; z: number }) {
   const scene = new THREE.Scene();
-  const textures = createProceduralTextures();
+  const textures = createProceduralTextures(1, 'low');
   const interactables: WorldInteractable[] = [];
   const pickups = new Map<string, Parameters<ConstructorParameters<typeof ModWorldSpawner>[0]['spawnPickup']>[0]>();
   const removedPickups = new Set<string>();
@@ -481,6 +481,11 @@ function createHarness(modManager: ModManager, worldSpawn: { x: number; y: numbe
       return {
         id: opts.id,
         kind: 'pickup',
+        actionVerb: 'Pick up',
+        message: opts.label,
+        x: opts.x,
+        y: opts.y,
+        z: opts.z,
         position: new THREE.Vector3(opts.x, opts.y, opts.z),
         radius: 2,
         label: opts.label,
@@ -506,7 +511,7 @@ function createHarness(modManager: ModManager, worldSpawn: { x: number; y: numbe
     restorePickup: (id) => removedPickups.delete(id),
     getActiveChunkKeys: () => new Set(activeChunks),
     getLandmarks: () => [
-      { id: 'lm_ancient_arch', name: 'Ancient Arch', kind: 'ruins', x: 300, z: -200, radius: 18 },
+      { id: 'lm_ancient_arch', name: 'Ancient Arch', kind: 'ruins', x: 300, z: -200, discovered: true },
     ],
     getVillageAnchors: () => [
       { id: 'village_oakridge', name: 'Oakridge', x: 80, y: 12.5, z: -40 },
@@ -516,7 +521,7 @@ function createHarness(modManager: ModManager, worldSpawn: { x: number; y: numbe
     getWorldHours: () => worldHours,
     getRoutinePeriod,
     getWeatherState: () => weather,
-    getQuestStatus: (qid) => quests.get(qid) ?? 'not_started',
+    getQuestStatus: (qid) => quests.get(qid) ?? 'available',
     hasDialogueFlag: (f) => flags.has(f),
     getLocalPlayerId: () => localPlayerId,
   });
@@ -961,7 +966,7 @@ async function run(): Promise<void> {
   assert(Math.abs(archivistNpc.position.x - (worldSpawn.x + 4.25)) < 1e-5);
   assert(Math.abs(archivistNpc.position.y - (worldSpawn.y + 0.5)) < 1e-5);
   assert(Math.abs(archivistNpc.position.z - (worldSpawn.z - 6.75)) < 1e-5);
-  assert(Math.abs(archivistNpc.yaw - 1.25) < 1e-5);
+  assert(Math.abs(archivistNpc.getYaw() - 1.25) < 1e-5);
   const customTree = h1.npcs.getCustomDialogueTree(archivistNpc.id);
   assert(customTree, 'Mod NPC with rewardItemId must register a DialogueTree granting mod item');
   const acceptChoice = customTree.nodes.root.choices?.find((c) => c.id === 'accept_gift');
@@ -1347,18 +1352,17 @@ async function run(): Promise<void> {
 
   const errCountBefore = clientWs.msgs.filter((m) => m.type === 'ERROR').length;
   sendWs(clientWs.ws, mpClientPlayerId, 'PLAYER_STATE', {
-    playerState: {
-      position: { x: 0, y: 10, z: 0 },
-      velocity: { x: 0, y: 0, z: 0 },
-      yaw: 0,
-      pitch: 0,
-      weaponId: `${modId}:storm_saber`,
-      isAttacking: false,
-      isBlocking: false,
-      animationState: 'idle',
-      vitals: { hp: 100, maxHp: 100, stamina: 100, maxStamina: 100, hunger: 100, isDead: false },
-      timestamp: Date.now(),
-    },
+    x: 0,
+    y: 10,
+    z: 0,
+    yaw: 0,
+    pitch: 0,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    weaponId: `${modId}:storm_saber`,
+    movementState: 'idle',
+    grounded: true,
   });
   await new Promise((r) => setTimeout(r, 30));
   const newErrors = clientWs.msgs.slice(errCountBefore).filter((m) => m.type === 'ERROR');
@@ -1370,25 +1374,27 @@ async function run(): Promise<void> {
 
   // 5b. Offline LAN Server test
   const lan = new OfflineLanServer();
-  lan.initRoom({
+  const lanInit = lan.initRoom({
     roomName: 'LAN Spawn Sync',
-    hostPlayerId: 'lan-host',
-    hostName: 'LanHost',
+    playerName: 'LanHost',
     worldName: 'LanWorld',
-    worldSeed: h1.seed,
+    seed: h1.seed,
     modMetadata: mpModMeta,
-  });
+  }) as { ok?: boolean; playerId?: string };
+  assert.equal(lanInit.ok, true);
+  const lanHostId = String(lanInit.playerId);
+
   const lanJoin = lan.joinPlayer({
-    playerId: 'lan-guest',
     playerName: 'LanGuest',
-    modMetadata: mpModMeta,
-  });
-  assert.equal(lanJoin.ok, true);
+    clientModMetadata: mpModMeta,
+  }) as { status: number; body?: { ok?: boolean; playerId?: string } };
+  assert.equal(lanJoin.body?.ok, true);
+  const lanGuestId = String(lanJoin.body?.playerId);
 
   lan.recordWorldStateGameEvent(
     'MOD_SPAWNS_SYNC',
     { modSpawns: hostSyncedSpawns, replace: true, done: true },
-    'lan-host',
+    lanHostId,
     Date.now(),
   );
   lan.recordWorldStateGameEvent(
@@ -1399,10 +1405,13 @@ async function run(): Promise<void> {
       count: 1,
       perPlayer: true,
     },
-    'lan-host',
+    lanHostId,
     Date.now(),
   );
-  const lanSnapGuest = lan.buildWorldSnapshotForPlayer('lan-guest') as {
+  const lanSnapGuest = lan.buildWorldSnapshotForPlayer(lanGuestId) as {
+    modSpawns?: Array<SyncedModSpawnEntry>;
+  };
+  const lanSnapHost = lan.buildWorldSnapshotForPlayer(lanHostId) as {
     modSpawns?: Array<SyncedModSpawnEntry>;
   };
   assert(
@@ -1412,9 +1421,13 @@ async function run(): Promise<void> {
   const lanTonicForGuest = lanSnapGuest.modSpawns.find(
     (e) => e.instanceId === `${modId}:spawn_tonic_near_obelisk#0`,
   );
+  const lanTonicForHost = lanSnapHost.modSpawns?.find(
+    (e) => e.instanceId === `${modId}:spawn_tonic_near_obelisk#0`,
+  );
   assert(
-    !lanTonicForGuest?.collectedByPlayers?.includes('lan-guest') &&
-      lanTonicForGuest?.collectedByPlayers?.includes('lan-host'),
+    !lanTonicForGuest?.collectedByPlayers?.includes(lanGuestId) &&
+      !lanTonicForGuest?.collected &&
+      Boolean(lanTonicForHost?.collectedByPlayers?.includes(lanHostId)),
     'LAN snapshot must isolate perPlayer pickup collection state per player',
   );
 

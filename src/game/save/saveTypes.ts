@@ -254,6 +254,14 @@ export interface SavedModSpawnInstanceState {
   collected?: boolean;
   defeated?: boolean;
   respawnAtElapsed?: number;
+  yaw?: number;
+  hp?: number;
+  maxHealth?: number;
+  isDead?: boolean;
+  dialogueState?: 'idle' | 'talking';
+  questState?: string;
+  health?: number;
+  doorOpen?: boolean;
 }
 
 export interface SavedModSpawnState {

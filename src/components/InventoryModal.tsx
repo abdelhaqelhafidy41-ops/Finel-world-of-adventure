@@ -30,6 +30,7 @@ import type {
   ItemIconKey,
 } from '../game/inventory/inventoryTypes';
 import type { QuestView } from '../game/quest/questTypes';
+import { ModManager } from '../game/mods/ModManager';
 import {
   EQUIP_SLOT_LABELS,
   ITEM_CATEGORY_LABELS,
@@ -433,6 +434,56 @@ function renderItemIcon(icon: ItemIconKey, className = 'w-5 h-5'): React.ReactNo
   }
 }
 
+const resolvedItemTextureCache = new Map<string, string>();
+
+const ModAwareItemIcon: React.FC<{
+  icon: ItemIconKey;
+  iconTexture?: string;
+  className?: string;
+}> = ({ icon, iconTexture, className = 'w-5 h-5' }) => {
+  const [dataUrl, setDataUrl] = useState<string | null>(() =>
+    iconTexture ? resolvedItemTextureCache.get(iconTexture) ?? null : null,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!iconTexture) {
+      setDataUrl(null);
+      return;
+    }
+    const cached = resolvedItemTextureCache.get(iconTexture);
+    if (cached) {
+      setDataUrl(cached);
+      return;
+    }
+    void ModManager.getInstance()
+      .resolveAssetDataUrl(iconTexture)
+      .then((url) => {
+        if (cancelled) return;
+        if (url) {
+          resolvedItemTextureCache.set(iconTexture, url);
+          setDataUrl(url);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [iconTexture]);
+
+  if (dataUrl) {
+    return (
+      <img
+        src={dataUrl}
+        alt=""
+        aria-hidden="true"
+        className={`${className} object-contain rounded-sm`}
+      />
+    );
+  }
+  return <>{renderItemIcon(icon, className)}</>;
+};
+
 export const InventoryModal: React.FC<InventoryModalProps> = ({
   snapshot,
   quests = [],
@@ -719,7 +770,11 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                       <div className="flex items-start justify-between gap-2 mb-2">
                         <div className="flex items-center gap-2.5 min-w-0">
                           <div className="w-10 h-10 rounded-lg bg-[#1d3126] border border-[#324f3e] flex items-center justify-center shrink-0">
-                            {renderItemIcon(entry.resultItem.icon, 'w-5 h-5')}
+                            <ModAwareItemIcon
+                              icon={entry.resultItem.icon}
+                              iconTexture={entry.resultItem.iconTexture}
+                              className="w-5 h-5"
+                            />
                           </div>
                           <div className="min-w-0">
                             <div className="font-display text-sm font-bold text-[#f4f7f1] truncate">
@@ -862,7 +917,13 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                     >
                       <div className="w-6 h-6 rounded-md bg-[#0f1b15] border border-white/10 flex items-center justify-center shrink-0">
                         {equipped
-                          ? renderItemIcon(equipped.definition.icon, 'w-3.5 h-3.5')
+                          ? (
+                            <ModAwareItemIcon
+                              icon={equipped.definition.icon}
+                              iconTexture={equipped.definition.iconTexture}
+                              className="w-3.5 h-3.5"
+                            />
+                          )
                           : <Shield className="w-3.5 h-3.5 opacity-30" />}
                       </div>
                       <div className="min-w-0">
@@ -938,7 +999,11 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         >
                           {slot && (
                             <>
-                              {renderItemIcon(slot.definition.icon, 'w-6 h-6')}
+                              <ModAwareItemIcon
+                                icon={slot.definition.icon}
+                                iconTexture={slot.definition.iconTexture}
+                                className="w-6 h-6"
+                              />
                               <span className="mt-1 text-[10px] leading-tight text-[#dce6da] truncate max-w-full px-0.5">
                                 {getItemName(slot)}
                               </span>
@@ -984,7 +1049,11 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                     <div>
                       <div className="flex items-start gap-3 mb-3">
                         <div className="w-11 h-11 rounded-xl bg-[#1d3126] border border-[#324f3e] flex items-center justify-center shrink-0">
-                          {renderItemIcon(selectedSlot.definition.icon, 'w-6 h-6')}
+                          <ModAwareItemIcon
+                            icon={selectedSlot.definition.icon}
+                            iconTexture={selectedSlot.definition.iconTexture}
+                            className="w-6 h-6"
+                          />
                         </div>
                         <div className="min-w-0">
                           <h3 className="font-display text-base font-bold text-[#f5f8f2] leading-snug">

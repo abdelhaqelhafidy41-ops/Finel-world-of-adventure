@@ -388,6 +388,10 @@ export class NPCManager {
     npc.dispose();
   }
 
+  public getModNpc(npcId: string): NPCBase | undefined {
+    return this.modNpcs.get(npcId);
+  }
+
   public getCustomDialogueTree(npcId: string): DialogueTree | undefined {
     const npc = this.modNpcs.get(npcId) ?? this.npcs.find((n) => n.id === npcId);
     return npc?.customDialogueTree;

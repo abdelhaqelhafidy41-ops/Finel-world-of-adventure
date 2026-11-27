@@ -8680,7 +8680,7 @@ export class MultiplayerRoomDO {
           const shared = this.ensureSharedObjectsLayer();
           for (const rawEntry of rawList.slice(0, 64)) {
             if (!rawEntry || typeof rawEntry !== 'object') continue;
-            const e = rawEntry as Record<string, unknown>;
+            const e = rawEntry as unknown as Record<string, unknown>;
             if (
               typeof e.instanceId !== 'string' ||
               typeof e.modId !== 'string' ||

@@ -12,6 +12,7 @@ import type {
 } from './dialogueTypes';
 import type { SideQuestDialogueActions } from '../sidequest/sideQuestTypes';
 import { QuestManager } from '../quest/QuestManager';
+import type { QuestStatus } from '../quest/questTypes';
 
 /**
  * Reusable, data-driven branching & quest dialogue engine.
@@ -83,6 +84,10 @@ export class DialogueEngine {
 
   public getLanguage(): Language {
     return this.language;
+  }
+
+  public getQuestStatus(questId: string): QuestStatus {
+    return this.quests.getQuestStatus(questId, this.bridge);
   }
 
   public refreshActiveDialogue(profile: DialogueNpcProfile): DialogueSnapshot | null {

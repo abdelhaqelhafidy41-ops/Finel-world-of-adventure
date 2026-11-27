@@ -7,7 +7,8 @@ import type {
   WeatherState,
   WorldLandmark,
 } from '../types';
-import { getBiomeAt, groundHeightAt, seededRandom } from '../math/noise';
+import { WATER_LEVEL, getBiomeAt, groundHeightAt, seededRandom } from '../math/noise';
+import { isWater } from '../world/WorldPlacementValidator';
 import { worldToChunkCoords, toChunkKey } from '../world/ChunkManager';
 import type { WorldInteractable } from '../world/WorldManager';
 import type { BuildingManager } from '../building/BuildingManager';
@@ -280,11 +281,23 @@ export class ModWorldSpawner {
   }
 
   public exportSaveState(): SavedModSpawnState {
+    for (const inst of this.activeById.values()) {
+      this.captureLiveEntityState(inst);
+    }
+
     const instances: SavedModSpawnInstanceState[] = [];
     const seen = new Set<string>();
 
     for (const st of this.ruleStates.values()) {
       for (const p of st.planned) {
+        const saved = this.persistedInstances.get(p.instanceId);
+        const isActive = this.activeById.has(p.instanceId);
+        const collected = this.isCollected(p.instanceId, p.rule.conditions.perPlayerPickup);
+        const defeated = this.defeatedKeys.has(p.instanceId);
+        const hasRespawn = this.respawnTimers.has(p.instanceId);
+        if (!isActive && !saved && !collected && !defeated && !hasRespawn) {
+          continue;
+        }
         seen.add(p.instanceId);
         instances.push({
           instanceId: p.instanceId,
@@ -292,20 +305,28 @@ export class ModWorldSpawner {
           spawnId: p.rule.spawnId,
           contentId: p.rule.contentId,
           contentType: p.rule.contentType,
-          x: p.x,
-          y: p.y,
-          z: p.z,
+          x: saved?.x ?? p.x,
+          y: saved?.y ?? p.y,
+          z: saved?.z ?? p.z,
           rotationX: p.rule.rotation.x,
-          rotationY: p.rule.rotation.y,
+          rotationY: saved?.yaw ?? p.rule.rotation.y,
           rotationZ: p.rule.rotation.z,
           scaleX: p.rule.scale.x,
           scaleY: p.rule.scale.y,
           scaleZ: p.rule.scale.z,
-          collected: this.isCollected(p.instanceId, p.rule.conditions.perPlayerPickup),
-          defeated: this.defeatedKeys.has(p.instanceId),
-          ...(this.respawnTimers.has(p.instanceId)
+          collected,
+          defeated,
+          ...(hasRespawn
             ? { respawnAtElapsed: this.respawnTimers.get(p.instanceId) }
             : {}),
+          ...(saved?.yaw !== undefined ? { yaw: saved.yaw } : {}),
+          ...(saved?.hp !== undefined ? { hp: saved.hp } : {}),
+          ...(saved?.maxHealth !== undefined ? { maxHealth: saved.maxHealth } : {}),
+          ...(saved?.isDead !== undefined ? { isDead: saved.isDead } : {}),
+          ...(saved?.dialogueState !== undefined ? { dialogueState: saved.dialogueState } : {}),
+          ...(saved?.questState !== undefined ? { questState: saved.questState } : {}),
+          ...(saved?.health !== undefined ? { health: saved.health } : {}),
+          ...(saved?.doorOpen !== undefined ? { doorOpen: saved.doorOpen } : {}),
         });
       }
     }
@@ -675,14 +696,89 @@ export class ModWorldSpawner {
       return;
     }
 
+    const plannedList: PlannedInstance[] = [];
+    const isStructureRule = rule.contentType === 'building' || rule.contentType === 'decoration';
+    const structureBp = isStructureRule ? getBlueprintById(rule.contentId) : undefined;
+    const allowWater = rule.raw.allowWater === true;
+    const allowOverlap = rule.raw.allowOverlap === true;
+
     for (let i = 0; i < coordsRes.points.length; i++) {
       const pt = coordsRes.points[i];
       const instanceId = `${rule.id}#${i}`;
       const persisted = this.persistedInstances.get(instanceId);
       const finalPt = persisted ? { x: persisted.x, y: persisted.y, z: persisted.z } : pt;
+
+      if (isStructureRule && structureBp && !persisted) {
+        if (!allowWater) {
+          const groundH = groundHeightAt(finalPt.x, finalPt.z);
+          if (
+            isWater(finalPt.x, finalPt.z, groundH) &&
+            (!rule.hasExplicitY || finalPt.y <= WATER_LEVEL + 0.05)
+          ) {
+            state.errorCode = 'SPAWN_PLACEMENT_IN_WATER';
+            state.errorMessage = `Structure "${rule.contentId}" at (${finalPt.x.toFixed(2)}, ${finalPt.y.toFixed(2)}, ${finalPt.z.toFixed(2)}) cannot be placed in water.`;
+            state.lastDiagnosticStatus = 'failed';
+            return;
+          }
+        }
+        if (!allowOverlap) {
+          const myHalfW = Math.max(0.4, structureBp.width * 0.5 * Math.abs(rule.scale.x));
+          const myHalfD = Math.max(0.4, structureBp.depth * 0.5 * Math.abs(rule.scale.z));
+          const myH = Math.max(0.5, structureBp.height * Math.abs(rule.scale.y));
+          const overlapsStructure = (
+            ox: number,
+            oy: number,
+            oz: number,
+            ohw: number,
+            ohd: number,
+            oh: number,
+          ): boolean => {
+            const dx = Math.abs(finalPt.x - ox);
+            const dz = Math.abs(finalPt.z - oz);
+            const yOverlap = finalPt.y < oy + oh - 0.1 && finalPt.y + myH > oy + 0.1;
+            return yOverlap && dx < (myHalfW + ohw) * 0.85 && dz < (myHalfD + ohd) * 0.85;
+          };
+
+          for (const existing of this.deps.buildings.getAllStructures()) {
+            if (existing.id === instanceId) continue;
+            const otherBp = getBlueprintById(existing.blueprintId);
+            const ohw = Math.max(0.4, (otherBp?.width ?? 2) * 0.5 * Math.abs(existing.scaleX ?? 1));
+            const ohd = Math.max(0.4, (otherBp?.depth ?? 2) * 0.5 * Math.abs(existing.scaleZ ?? 1));
+            const oh = Math.max(0.5, (otherBp?.height ?? 2) * Math.abs(existing.scaleY ?? 1));
+            if (overlapsStructure(existing.x, existing.y, existing.z, ohw, ohd, oh)) {
+              state.errorCode = 'SPAWN_PLACEMENT_OVERLAP';
+              state.errorMessage = `Structure "${rule.contentId}" overlaps existing structure "${existing.id}".`;
+              state.lastDiagnosticStatus = 'failed';
+              return;
+            }
+          }
+          for (const otherState of this.ruleStates.values()) {
+            if (otherState.rule.id === rule.id) continue;
+            if (
+              otherState.rule.contentType !== 'building' &&
+              otherState.rule.contentType !== 'decoration'
+            ) {
+              continue;
+            }
+            const otherBp = getBlueprintById(otherState.rule.contentId);
+            const ohw = Math.max(0.4, (otherBp?.width ?? 2) * 0.5 * Math.abs(otherState.rule.scale.x));
+            const ohd = Math.max(0.4, (otherBp?.depth ?? 2) * 0.5 * Math.abs(otherState.rule.scale.z));
+            const oh = Math.max(0.5, (otherBp?.height ?? 2) * Math.abs(otherState.rule.scale.y));
+            for (const op of otherState.planned) {
+              if (overlapsStructure(op.x, op.y, op.z, ohw, ohd, oh)) {
+                state.errorCode = 'SPAWN_PLACEMENT_OVERLAP';
+                state.errorMessage = `Structure "${rule.contentId}" overlaps planned structure "${op.instanceId}".`;
+                state.lastDiagnosticStatus = 'failed';
+                return;
+              }
+            }
+          }
+        }
+      }
+
       const chunkCoords = worldToChunkCoords(finalPt.x, finalPt.z, 120);
       const chunkKey = toChunkKey(chunkCoords.cx, chunkCoords.cz);
-      state.planned.push({
+      plannedList.push({
         instanceId,
         rule,
         index: i,
@@ -694,6 +790,8 @@ export class ModWorldSpawner {
         displayLabel,
       });
     }
+
+    state.planned.push(...plannedList);
   }
 
   private resolveRuleCoordinates(rule: ModSpawnDefinition):
@@ -885,7 +983,7 @@ export class ModWorldSpawner {
 
       const cond = st.rule.conditions;
 
-      // Lifecycle check (only applies if oneTime isn't already restored/active)
+      // Lifecycle check: allow world_load restoration if instances were already persisted from new_world
       if (
         this.lifecycle === 'new_world' &&
         !cond.onNewWorld &&
@@ -895,9 +993,11 @@ export class ModWorldSpawner {
         st.failedCondition = 'trigger:onNewWorld=false';
         continue;
       }
+      const hasPersistedInstance = st.planned.some((p) => this.persistedInstances.has(p.instanceId));
       if (
         this.lifecycle === 'world_load' &&
         !cond.onWorldLoad &&
+        !hasPersistedInstance &&
         st.activeInstanceIds.size === 0
       ) {
         st.lastDiagnosticStatus = 'pending_condition';
@@ -946,12 +1046,13 @@ export class ModWorldSpawner {
 
       st.failedCondition = undefined;
 
-      // Evaluate each planned instance for chunk readiness, collection/defeat state, and caps
+      // Evaluate each planned instance for chunk readiness, spatial conditions, collection/defeat state, and caps
       let anySpawned = false;
       let anyPendingChunk = false;
       let anyCollected = false;
       let anyDefeated = false;
       let anyWaitingRespawn = false;
+      let firstInstanceCondFail: string | undefined;
 
       for (const inst of st.planned) {
         if (this.isCollected(inst.instanceId, cond.perPlayerPickup)) {
@@ -962,6 +1063,16 @@ export class ModWorldSpawner {
         if (this.defeatedKeys.has(inst.instanceId)) {
           anyDefeated = true;
           if (this.respawnTimers.has(inst.instanceId)) anyWaitingRespawn = true;
+          continue;
+        }
+
+        const instCondFail = this.checkInstanceSpatialConditions(st.rule, inst);
+        if (instCondFail) {
+          if (!firstInstanceCondFail) firstInstanceCondFail = instCondFail;
+          if (cond.playerDistance !== undefined && this.activeById.has(inst.instanceId)) {
+            this.despawnInstance(inst);
+            changed = true;
+          }
           continue;
         }
 
@@ -997,6 +1108,9 @@ export class ModWorldSpawner {
         st.lastDiagnosticStatus = 'defeated';
       } else {
         st.lastDiagnosticStatus = 'pending_condition';
+        if (firstInstanceCondFail) {
+          st.failedCondition = firstInstanceCondFail;
+        }
       }
     }
 
@@ -1008,20 +1122,6 @@ export class ModWorldSpawner {
     sampleInst?: PlannedInstance,
   ): string | undefined {
     const cond = rule.conditions;
-    const playerPos = this.deps.getPlayerPosition();
-
-    // onAreaEnter
-    if (cond.onAreaEnter && !this.areaEnteredRules.has(rule.id)) {
-      const refX = sampleInst?.x ?? rule.position.x;
-      const refZ = sampleInst?.z ?? rule.position.z;
-      const radius = cond.areaEnterRadius ?? 28;
-      const dist = Math.hypot(playerPos.x - refX, playerPos.z - refZ);
-      if (dist <= radius) {
-        this.areaEnteredRules.add(rule.id);
-      } else {
-        return `onAreaEnter (${dist.toFixed(1)}m > ${radius}m)`;
-      }
-    }
 
     // timeOfDay
     if (cond.timeOfDay) {
@@ -1050,31 +1150,10 @@ export class ModWorldSpawner {
       }
     }
 
-    // biomes
-    if (cond.biomes && cond.biomes.length > 0 && sampleInst) {
-      const biome = getBiomeAt(sampleInst.x, sampleInst.z) as BiomeType;
-      if (!cond.biomes.includes(biome)) {
-        return `biome (${biome} not in [${cond.biomes.join(',')}])`;
-      }
-    }
-
-    // playerDistance
-    if (cond.playerDistance && sampleInst) {
-      const dx = playerPos.x - sampleInst.x;
-      const dz = playerPos.z - sampleInst.z;
-      const dist = Math.hypot(dx, dz);
-      if (cond.playerDistance.min !== undefined && dist < cond.playerDistance.min) {
-        return `playerDistance (${dist.toFixed(1)}m < min ${cond.playerDistance.min}m)`;
-      }
-      if (cond.playerDistance.max !== undefined && dist > cond.playerDistance.max) {
-        return `playerDistance (${dist.toFixed(1)}m > max ${cond.playerDistance.max}m)`;
-      }
-    }
-
     // quest condition
     if (cond.questId) {
       const qStatus = this.deps.getQuestStatus(cond.questId);
-      const allowed = cond.questStatus ?? ['active', 'ready_to_complete', 'completed'];
+      const allowed: QuestStatus[] = cond.questStatus ?? ['active', 'ready', 'completed'];
       if (!allowed.includes(qStatus)) {
         return `quest:${cond.questId} (${qStatus} not in [${allowed.join(',')}])`;
       }
@@ -1088,12 +1167,75 @@ export class ModWorldSpawner {
       return `forbiddenFlag:${cond.forbiddenFlag}`;
     }
 
+    // Fallback spatial check when planned list has a single entry (preserves existing rule-level behavior when areaEnter not triggered)
+    if (!sampleInst && cond.onAreaEnter && !this.areaEnteredRules.has(rule.id)) {
+      const playerPos = this.deps.getPlayerPosition();
+      const radius = cond.areaEnterRadius ?? 28;
+      const dist = Math.hypot(playerPos.x - rule.position.x, playerPos.z - rule.position.z);
+      if (dist <= radius) {
+        this.areaEnteredRules.add(rule.id);
+      } else {
+        return `onAreaEnter (${dist.toFixed(1)}m > ${radius}m)`;
+      }
+    }
+
+    return undefined;
+  }
+
+  private checkInstanceSpatialConditions(
+    rule: ModSpawnDefinition,
+    inst: PlannedInstance,
+  ): string | undefined {
+    const cond = rule.conditions;
+    const playerPos = this.deps.getPlayerPosition();
+
+    // onAreaEnter
+    if (cond.onAreaEnter && !this.areaEnteredRules.has(rule.id)) {
+      const radius = cond.areaEnterRadius ?? 28;
+      const dist = Math.hypot(playerPos.x - inst.x, playerPos.z - inst.z);
+      if (dist <= radius) {
+        this.areaEnteredRules.add(rule.id);
+      } else {
+        return `onAreaEnter (${dist.toFixed(1)}m > ${radius}m)`;
+      }
+    }
+
+    // biomes
+    if (cond.biomes && cond.biomes.length > 0) {
+      const biome = getBiomeAt(inst.x, inst.z) as BiomeType;
+      if (!cond.biomes.includes(biome)) {
+        return `biome (${biome} not in [${cond.biomes.join(',')}])`;
+      }
+    }
+
+    // playerDistance
+    if (cond.playerDistance) {
+      const dx = playerPos.x - inst.x;
+      const dz = playerPos.z - inst.z;
+      const dist = Math.hypot(dx, dz);
+      if (cond.playerDistance.min !== undefined && dist < cond.playerDistance.min) {
+        return `playerDistance (${dist.toFixed(1)}m < min ${cond.playerDistance.min}m)`;
+      }
+      if (cond.playerDistance.max !== undefined && dist > cond.playerDistance.max) {
+        return `playerDistance (${dist.toFixed(1)}m > max ${cond.playerDistance.max}m)`;
+      }
+    }
+
     return undefined;
   }
 
   private spawnInstance(inst: PlannedInstance): boolean {
     const { rule } = inst;
     const type = rule.contentType;
+    const saved = this.persistedInstances.get(inst.instanceId);
+    const spawnX = saved?.x ?? inst.x;
+    const spawnY = saved?.y ?? inst.y;
+    const spawnZ = saved?.z ?? inst.z;
+    inst.x = spawnX;
+    inst.y = spawnY;
+    inst.z = spawnZ;
+    const cCoords = worldToChunkCoords(spawnX, spawnZ, 120);
+    inst.chunkKey = toChunkKey(cCoords.cx, cCoords.cz);
 
     if (
       type === 'item' ||
@@ -1116,11 +1258,11 @@ export class ModWorldSpawner {
         itemId: rule.contentId,
         count: 1,
         label,
-        x: inst.x,
-        y: inst.y,
-        z: inst.z,
+        x: spawnX,
+        y: spawnY,
+        z: spawnZ,
         rotationX: rule.rotation.x,
-        rotationY: rule.rotation.y,
+        rotationY: saved?.yaw ?? rule.rotation.y,
         rotationZ: rule.rotation.z,
         scaleX: rule.scale.x,
         scaleY: rule.scale.y,
@@ -1143,20 +1285,21 @@ export class ModWorldSpawner {
         blueprintId: bp.id,
         category: bp.category,
         tier: bp.tier,
-        x: inst.x,
-        y: inst.y,
-        z: inst.z,
-        yaw: rule.rotation.y,
+        x: spawnX,
+        y: spawnY,
+        z: spawnZ,
+        yaw: saved?.yaw ?? rule.rotation.y,
         rotationX: rule.rotation.x,
         rotationZ: rule.rotation.z,
         scaleX: rule.scale.x,
         scaleY: rule.scale.y,
         scaleZ: rule.scale.z,
-        health: bp.maxHealth,
+        health: saved?.health ?? bp.maxHealth,
         maxHealth: bp.maxHealth,
+        ...(saved?.doorOpen !== undefined ? { doorOpen: saved.doorOpen } : {}),
         ownerId: 'mod',
         ownerName: rule.modId,
-        permission: 'public',
+        permission: 'everyone',
         createdAtMs: Date.now(),
         isModSpawn: true,
         modSpawnId: rule.spawnId,
@@ -1166,7 +1309,16 @@ export class ModWorldSpawner {
       const content = this.deps.modManager.resolveContentForSpawn(rule);
       const ent = content.entity;
       const cfg = this.buildNpcConfig(inst, ent);
-      this.deps.npcs.spawnModNpc(cfg);
+      const npc = this.deps.npcs.spawnModNpc(cfg);
+      if (saved) {
+        npc.restoreModEntityState({
+          yaw: saved.yaw,
+          hp: saved.hp,
+          maxHealth: saved.maxHealth,
+          isDead: saved.isDead,
+          dialogueState: saved.dialogueState,
+        });
+      }
     } else if (type === 'monster') {
       const content = this.deps.modManager.resolveContentForSpawn(rule);
       const raw = content.entity?.raw ?? {};
@@ -1187,12 +1339,12 @@ export class ModWorldSpawner {
       this.deps.combat.registerModEnemyBlueprint({
         id: inst.instanceId,
         archetypeId,
-        x: inst.x,
-        y: inst.y,
-        z: inst.z,
+        x: spawnX,
+        y: spawnY,
+        z: spawnZ,
         seed: hashSeed(inst.instanceId, this.worldSeed),
         rotationX: rule.rotation.x,
-        rotationY: rule.rotation.y,
+        rotationY: saved?.yaw ?? rule.rotation.y,
         rotationZ: rule.rotation.z,
         scaleX: rule.scale.x,
         scaleY: rule.scale.y,
@@ -1200,6 +1352,7 @@ export class ModWorldSpawner {
         customArchetype,
         respawnEnabled: rule.conditions.respawn.enabled,
         respawnDelaySeconds: rule.conditions.respawn.delaySeconds,
+        savedHp: saved?.hp,
         modId: rule.modId,
         modSpawnId: rule.spawnId,
         materializeNow: true,
@@ -1208,14 +1361,14 @@ export class ModWorldSpawner {
       const content = this.deps.modManager.resolveContentForSpawn(rule);
       const raw = content.entity?.raw ?? {};
       const species = normalizeAnimalSpecies(raw.species ?? raw.animalType);
-      this.deps.wildlife.spawnModAnimal({
+      const animal = this.deps.wildlife.spawnModAnimal({
         id: inst.instanceId,
         species,
-        home: { x: inst.x, z: inst.z },
-        y: inst.y,
+        home: { x: spawnX, z: spawnZ },
+        y: spawnY,
         exactPosition: true,
         rotationX: rule.rotation.x,
-        rotationY: rule.rotation.y,
+        rotationY: saved?.yaw ?? rule.rotation.y,
         rotationZ: rule.rotation.z,
         scaleVec: { ...rule.scale },
         maxHpOverride: typeof raw.maxHealth === 'number' && raw.maxHealth > 0 ? raw.maxHealth : undefined,
@@ -1228,6 +1381,14 @@ export class ModWorldSpawner {
         seed: hashSeed(inst.instanceId, this.worldSeed),
         variant: inst.index % 3,
       });
+      if (saved) {
+        if (typeof saved.yaw === 'number' && Number.isFinite(saved.yaw)) {
+          animal.yaw = saved.yaw;
+        }
+        if (typeof saved.hp === 'number' && Number.isFinite(saved.hp)) {
+          animal.hp = Math.max(0, Math.min(animal.maxHp, saved.hp));
+        }
+      }
     } else {
       return false;
     }
@@ -1237,7 +1398,95 @@ export class ModWorldSpawner {
     return true;
   }
 
+  private captureLiveEntityState(inst: PlannedInstance): void {
+    const prev = this.persistedInstances.get(inst.instanceId);
+    const type = inst.rule.contentType;
+    const entry: SavedModSpawnInstanceState = {
+      ...(prev ?? {}),
+      instanceId: inst.instanceId,
+      modId: inst.rule.modId,
+      spawnId: inst.rule.spawnId,
+      contentId: inst.rule.contentId,
+      contentType: type,
+      x: inst.x,
+      y: inst.y,
+      z: inst.z,
+      rotationX: inst.rule.rotation.x,
+      rotationY: prev?.yaw ?? inst.rule.rotation.y,
+      rotationZ: inst.rule.rotation.z,
+      scaleX: inst.rule.scale.x,
+      scaleY: inst.rule.scale.y,
+      scaleZ: inst.rule.scale.z,
+      collected: this.isCollected(inst.instanceId, inst.rule.conditions.perPlayerPickup),
+      defeated: this.defeatedKeys.has(inst.instanceId),
+      ...(this.respawnTimers.has(inst.instanceId)
+        ? { respawnAtElapsed: this.respawnTimers.get(inst.instanceId) }
+        : {}),
+    };
+
+    if (type === 'npc' || type === 'character') {
+      const npc = this.deps.npcs.getModNpc(inst.instanceId);
+      if (npc) {
+        entry.x = npc.position.x;
+        entry.y = npc.position.y;
+        entry.z = npc.position.z;
+        entry.yaw = npc.getYaw();
+        entry.rotationY = entry.yaw;
+        entry.hp = npc.hp;
+        entry.maxHealth = npc.maxHealth;
+        entry.isDead = npc.isDead;
+        entry.dialogueState = npc.getSyncDialogueState();
+        entry.questState = npc.getSyncQuestState();
+      }
+    } else if (type === 'monster') {
+      const enemy = this.deps.combat.getModEnemyController(inst.instanceId);
+      if (enemy) {
+        entry.x = enemy.position.x;
+        entry.y = enemy.position.y;
+        entry.z = enemy.position.z;
+        entry.yaw = enemy.yaw;
+        entry.rotationY = entry.yaw;
+        entry.hp = enemy.health.getCurrentHealth();
+        entry.maxHealth = enemy.health.getMaxHealth();
+        entry.isDead = enemy.health.isDead();
+      }
+    } else if (type === 'animal') {
+      const animal = this.deps.wildlife.getModAnimal(inst.instanceId);
+      if (animal) {
+        entry.x = animal.position.x;
+        entry.y = animal.position.y;
+        entry.z = animal.position.z;
+        entry.yaw = animal.yaw;
+        entry.rotationY = entry.yaw;
+        entry.hp = animal.hp;
+        entry.maxHealth = animal.maxHp;
+        entry.isDead = animal.isDead;
+      }
+    } else if (type === 'building' || type === 'decoration') {
+      const st = this.deps.buildings.getStructureById(inst.instanceId);
+      if (st) {
+        entry.x = st.x;
+        entry.y = st.y;
+        entry.z = st.z;
+        entry.yaw = st.yaw;
+        entry.rotationY = st.yaw;
+        entry.health = st.health;
+        if (st.doorOpen !== undefined) {
+          entry.doorOpen = st.doorOpen;
+        }
+      }
+    }
+
+    inst.x = entry.x;
+    inst.y = entry.y;
+    inst.z = entry.z;
+    const c = worldToChunkCoords(entry.x, entry.z, 120);
+    inst.chunkKey = toChunkKey(c.cx, c.cz);
+    this.persistedInstances.set(inst.instanceId, entry);
+  }
+
   private despawnInstance(inst: PlannedInstance): void {
+    this.captureLiveEntityState(inst);
     const type = inst.rule.contentType;
     if (
       type === 'item' ||

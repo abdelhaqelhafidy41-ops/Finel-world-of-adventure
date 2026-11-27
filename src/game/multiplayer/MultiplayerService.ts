@@ -1276,7 +1276,7 @@ export class MultiplayerService implements IMultiplayerService {
 
   public sendGameEvent(
     event: string,
-    data?: Record<string, string | number | boolean | null>,
+    data?: GameEventPayload['data'],
   ): boolean {
     const check = validateGameEventPayload({ event, data }, false);
     if (!check.ok) {

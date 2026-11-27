@@ -1,5 +1,6 @@
 import {
   CURRENT_GAME_VERSION,
+  MINIMUM_SUPPORTED_GAME_VERSION,
   MOD_API_VERSION,
   MOD_CONTENT_SCHEMA_VERSION,
   MOD_PACKAGE_EXTENSION,
@@ -101,6 +102,7 @@ const MOD_CONTENT_FOLDERS = new Set<string>([
   'textures',
   'localization',
   'spawns',
+  'events',
 ]);
 
 export interface WoamodZipEntryHeader {
@@ -521,6 +523,13 @@ function normalizeManifestFromObject(
       ? mpRaw
       : undefined;
 
+  const modCreatorVersion =
+    typeof parsed.modCreatorVersion === 'string' && parsed.modCreatorVersion.trim()
+      ? parsed.modCreatorVersion.trim()
+      : typeof parsed.creatorVersion === 'string' && parsed.creatorVersion.trim()
+        ? parsed.creatorVersion.trim()
+        : undefined;
+
   return {
     manifest: {
       modId,
@@ -531,6 +540,7 @@ function normalizeManifestFromObject(
       supportedGameVersion,
       ...(minGameVersion ? { minGameVersion } : {}),
       ...(maxGameVersion ? { maxGameVersion } : {}),
+      ...(modCreatorVersion ? { modCreatorVersion } : {}),
       modApiVersion,
       schemaVersion,
       ...(multiplayerCompatibility ? { multiplayerCompatibility } : {}),
@@ -767,18 +777,20 @@ export async function validateWoamodArchiveBytes(
   }
 
   const curSemver = parseSemver(gameVersion);
+  const floorSemver = parseSemver(MINIMUM_SUPPORTED_GAME_VERSION);
   const minSemver = manifest.minGameVersion ? parseSemver(manifest.minGameVersion) : null;
   const maxSemver = manifest.maxGameVersion ? parseSemver(manifest.maxGameVersion) : null;
   if (
     (manifest.minGameVersion && !minSemver) ||
     (manifest.maxGameVersion && !maxSemver) ||
     (curSemver && minSemver && compareSemver(curSemver, minSemver) < 0) ||
-    (curSemver && maxSemver && compareSemver(curSemver, maxSemver) > 0)
+    (curSemver && maxSemver && compareSemver(curSemver, maxSemver) > 0) ||
+    (floorSemver && maxSemver && compareSemver(maxSemver, floorSemver) < 0)
   ) {
     return {
       ok: false,
       errorCode: 'UNSUPPORTED_GAME_VERSION',
-      message: `Game version ${gameVersion} is outside supported bounds (${manifest.minGameVersion ?? '*'} .. ${manifest.maxGameVersion ?? '*'}).`,
+      message: `Game version ${gameVersion} (min supported ${MINIMUM_SUPPORTED_GAME_VERSION}) is outside package bounds (${manifest.minGameVersion ?? '*'} .. ${manifest.maxGameVersion ?? '*'}).`,
       detail: `modId=${manifest.modId}`,
       manifest,
     };

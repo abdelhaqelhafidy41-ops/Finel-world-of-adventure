@@ -154,9 +154,13 @@ export class ModAssetResolver {
   private readonly refsByModId = new Map<string, Set<string>>();
   private readonly sourceIdByModId = new Map<string, string>();
   private readonly dataUrlCache = new Map<string, string>();
-  private readonly reader: ModAssetByteReader | null;
+  private reader: ModAssetByteReader | null;
 
   constructor(reader: ModAssetByteReader | null = null) {
+    this.reader = reader;
+  }
+
+  public setReader(reader: ModAssetByteReader | null): void {
     this.reader = reader;
   }
 

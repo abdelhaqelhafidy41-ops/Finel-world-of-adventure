@@ -1053,7 +1053,7 @@ async function run() {
     new Request('https://worker.example/api/multiplayer/rooms', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'CF-Connecting-IP': '198.51.100.5' },
-      body: JSON.stringify({ playerName: 'x'.repeat(20_000) }),
+      body: JSON.stringify({ playerName: 'x'.repeat(36_000) }),
     }),
     fullEnv as never,
     ctxStub,

@@ -1947,7 +1947,7 @@ export interface MultiplayerInviteRecord {
 
 export interface GameEventPayload {
   event: string;
-  data?: Record<string, string | number | boolean | null>;
+  data?: Record<string, string | number | boolean | null | SyncedModSpawnEntry[]>;
 }
 
 export interface RoomChatMessage {
@@ -2355,7 +2355,7 @@ export function validateGameEventPayload(
   }
 
   const allowsCoords = allowServerBroadcastFields || CLIENT_COORDINATE_EVENTS.has(obj.event);
-  const sanitizedData: Record<string, string | number | boolean | null> = {};
+  const sanitizedData: Record<string, string | number | boolean | null | SyncedModSpawnEntry[]> = {};
   if (obj.data !== undefined) {
     if (!obj.data || typeof obj.data !== 'object' || Array.isArray(obj.data)) {
       return { ok: false, reason: 'GAME_EVENT data must be a flat record.' };
@@ -2378,7 +2378,64 @@ export function validateGameEventPayload(
           };
         }
       }
-      if (typeof val === 'string') {
+      if (obj.event === 'MOD_SPAWNS_SYNC' && key === 'modSpawns' && Array.isArray(val)) {
+        const sanitizedSpawns: SyncedModSpawnEntry[] = [];
+        for (const rawEntry of val.slice(0, 64)) {
+          if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) continue;
+          const e = rawEntry as Record<string, unknown>;
+          if (
+            typeof e.instanceId !== 'string' ||
+            typeof e.modId !== 'string' ||
+            typeof e.spawnId !== 'string' ||
+            typeof e.contentId !== 'string' ||
+            typeof e.contentType !== 'string' ||
+            typeof e.x !== 'number' ||
+            !Number.isFinite(e.x) ||
+            Math.abs(e.x) > MAX_PLAYABLE_COORD ||
+            typeof e.y !== 'number' ||
+            !Number.isFinite(e.y) ||
+            e.y < -200 ||
+            e.y > 1200 ||
+            typeof e.z !== 'number' ||
+            !Number.isFinite(e.z) ||
+            Math.abs(e.z) > MAX_PLAYABLE_COORD
+          ) {
+            continue;
+          }
+          const rx = typeof e.rotationX === 'number' && Number.isFinite(e.rotationX) ? e.rotationX : 0;
+          const ry = typeof e.rotationY === 'number' && Number.isFinite(e.rotationY) ? e.rotationY : 0;
+          const rz = typeof e.rotationZ === 'number' && Number.isFinite(e.rotationZ) ? e.rotationZ : 0;
+          const sx = typeof e.scaleX === 'number' && Number.isFinite(e.scaleX) && e.scaleX > 0 ? e.scaleX : 1;
+          const sy = typeof e.scaleY === 'number' && Number.isFinite(e.scaleY) && e.scaleY > 0 ? e.scaleY : 1;
+          const sz = typeof e.scaleZ === 'number' && Number.isFinite(e.scaleZ) && e.scaleZ > 0 ? e.scaleZ : 1;
+          sanitizedSpawns.push({
+            instanceId: e.instanceId.slice(0, 128),
+            modId: e.modId.slice(0, 64),
+            spawnId: e.spawnId.slice(0, 64),
+            contentId: e.contentId.slice(0, 96),
+            contentType: e.contentType.slice(0, 32),
+            x: e.x,
+            y: e.y,
+            z: e.z,
+            rotationX: rx,
+            rotationY: ry,
+            rotationZ: rz,
+            scaleX: sx,
+            scaleY: sy,
+            scaleZ: sz,
+            ...(e.perPlayer === true ? { perPlayer: true } : {}),
+            ...(typeof e.collected === 'boolean' ? { collected: e.collected } : {}),
+            ...(typeof e.defeated === 'boolean' ? { defeated: e.defeated } : {}),
+            ...(typeof e.modelPath === 'string' && e.modelPath.trim()
+              ? { modelPath: e.modelPath.slice(0, 200) }
+              : {}),
+            ...(typeof e.label === 'string' && e.label.trim()
+              ? { label: e.label.slice(0, 96) }
+              : {}),
+          });
+        }
+        sanitizedData[key] = sanitizedSpawns;
+      } else if (typeof val === 'string') {
         sanitizedData[key] = val.slice(0, 160);
       } else if (typeof val === 'number' && Number.isFinite(val)) {
         if (

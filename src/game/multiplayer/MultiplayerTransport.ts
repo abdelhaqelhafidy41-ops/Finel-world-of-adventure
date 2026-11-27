@@ -11,6 +11,7 @@ import type {
   CreateRoomOptions,
   EnemyAttackPlayerPayload,
   EntitySyncBatchPayload,
+  GameEventPayload,
   IMultiplayerService,
   ISocialFriendsAdapter,
   JoinRoomOptions,
@@ -331,7 +332,7 @@ export class SwitchingMultiplayerTransport implements IMultiplayerService {
 
   public sendGameEvent(
     event: string,
-    data?: Record<string, string | number | boolean | null>,
+    data?: GameEventPayload['data'],
   ): boolean {
     return this.getActiveService().sendGameEvent(event, data);
   }

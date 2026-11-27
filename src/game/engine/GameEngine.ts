@@ -940,7 +940,7 @@ export class GameEngine {
         }
         this.inventoryManager.addItem(item.id, qty);
         const itemCategory = this.itemManager.getItem(item.id)?.category;
-        if (itemCategory === 'weapon' || itemCategory === 'armor') {
+        if (itemCategory === 'weapon' || itemCategory === 'equipment') {
           this.syncEquipmentBonuses();
           this.syncEquippedWeaponFromInventory();
         }
@@ -4626,7 +4626,7 @@ export class GameEngine {
       getRoutinePeriod: () => this.timeManager.getRoutinePeriod(),
       getWeatherState: () => this.weatherManager.getSnapshot().currentState,
       getQuestStatus: (questId) =>
-        this.dialogueEngine.quests.getQuestStatus(questId),
+        this.dialogueEngine.getQuestStatus(questId),
       hasDialogueFlag: (flag) => this.dialogueEngine.hasFlag(flag),
       getLocalPlayerId: () => this.localMultiplayerPlayerId ?? 'local',
     });

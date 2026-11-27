@@ -1,6 +1,7 @@
 import type { RawDiscoveredModEntry } from '../../utils/platformExit';
 import {
   CURRENT_GAME_VERSION,
+  MINIMUM_SUPPORTED_GAME_VERSION,
   MOD_API_VERSION,
   MOD_CONTENT_SCHEMA_VERSION,
   STANDARD_MOD_FOLDERS,
@@ -61,6 +62,7 @@ const DATA_CATEGORY_FOLDERS = new Set([
   'loot_tables',
   'localization',
   'spawns',
+  'events',
 ]);
 
 function getAssetExtension(relPath: string): string {
@@ -443,6 +445,13 @@ function parseManifest(
       ? mpCompatRaw
       : undefined;
 
+  const modCreatorVersion =
+    typeof parsed.modCreatorVersion === 'string' && parsed.modCreatorVersion.trim()
+      ? parsed.modCreatorVersion.trim()
+      : typeof parsed.creatorVersion === 'string' && parsed.creatorVersion.trim()
+        ? parsed.creatorVersion.trim()
+        : undefined;
+
   const manifest: ModManifest = {
     modId: modId || fallback.modId,
     name: name || fallback.name,
@@ -453,6 +462,7 @@ function parseManifest(
     ...(compatibilityVersion ? { compatibilityVersion } : {}),
     ...(minGameVersion ? { minGameVersion } : {}),
     ...(maxGameVersion ? { maxGameVersion } : {}),
+    ...(modCreatorVersion ? { modCreatorVersion } : {}),
     modApiVersion,
     schemaVersion,
     ...(multiplayerCompatibility ? { multiplayerCompatibility } : {}),
@@ -590,6 +600,7 @@ export function validateDiscoveredMods(
     }
 
     const currentSemver = parseSemver(gameVersion);
+    const floorSemver = parseSemver(MINIMUM_SUPPORTED_GAME_VERSION);
     const minSemver = parsedManifest.manifest.minGameVersion
       ? parseSemver(parsedManifest.manifest.minGameVersion)
       : null;
@@ -604,12 +615,15 @@ export function validateDiscoveredMods(
         message: `Requires game version >= ${parsedManifest.manifest.minGameVersion}, current version is ${gameVersion}.`,
       });
     }
-    if (currentSemver && maxSemver && compareSemver(currentSemver, maxSemver) > 0) {
+    if (
+      (currentSemver && maxSemver && compareSemver(currentSemver, maxSemver) > 0) ||
+      (floorSemver && maxSemver && compareSemver(maxSemver, floorSemver) < 0)
+    ) {
       gameCompatible = false;
       diagnostics.push({
         code: 'INCOMPATIBLE_GAME_VERSION',
         severity: 'error',
-        message: `Supports game version <= ${parsedManifest.manifest.maxGameVersion}, current version is ${gameVersion}.`,
+        message: `Supports game version <= ${parsedManifest.manifest.maxGameVersion}, current version is ${gameVersion} (minimum supported ${MINIMUM_SUPPORTED_GAME_VERSION}).`,
       });
     }
 
