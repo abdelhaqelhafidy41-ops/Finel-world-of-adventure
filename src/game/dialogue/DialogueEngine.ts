@@ -45,6 +45,17 @@ export class DialogueEngine {
       ) => DialogueTree | null)
     | null = null;
   private sideQuestActions: SideQuestDialogueActions | null = null;
+  private modEventHooks: {
+    onNpcTalkStart?: (ctx: { npcId: string; npcModId?: string; dialogueId: string }) => void;
+    onDialogueStarted?: (ctx: { npcId: string; npcModId?: string; dialogueId: string }) => void;
+    onDialogueChoiceSelected?: (ctx: {
+      npcId: string;
+      npcModId?: string;
+      dialogueId: string;
+      choiceId: string;
+    }) => void;
+    onDialogueCompleted?: (ctx: { npcId: string; npcModId?: string; dialogueId: string }) => void;
+  } | null = null;
 
   constructor(bridge: DialogueWorldBridge, quests = new QuestManager()) {
     this.bridge = bridge;
@@ -75,6 +86,20 @@ export class DialogueEngine {
     this.sideQuestTalkHook = hooks.onNpcTalked ?? null;
     this.sideQuestDialogueResolver = hooks.resolveDialogueTree ?? null;
     this.sideQuestActions = hooks.actions ?? null;
+  }
+
+  public setModEventHooks(hooks: {
+    onNpcTalkStart?: (ctx: { npcId: string; npcModId?: string; dialogueId: string }) => void;
+    onDialogueStarted?: (ctx: { npcId: string; npcModId?: string; dialogueId: string }) => void;
+    onDialogueChoiceSelected?: (ctx: {
+      npcId: string;
+      npcModId?: string;
+      dialogueId: string;
+      choiceId: string;
+    }) => void;
+    onDialogueCompleted?: (ctx: { npcId: string; npcModId?: string; dialogueId: string }) => void;
+  } | null): void {
+    this.modEventHooks = hooks;
   }
 
   public setLanguage(lang: Language): void {
@@ -157,6 +182,17 @@ export class DialogueEngine {
       Object.values(tree.nodes)[0];
 
     this.enterNode(entryNode);
+    const dialogueId = tree.id ?? profile.npcId;
+    this.modEventHooks?.onNpcTalkStart?.({
+      npcId: profile.npcId,
+      npcModId: profile.modId,
+      dialogueId,
+    });
+    this.modEventHooks?.onDialogueStarted?.({
+      npcId: profile.npcId,
+      npcModId: profile.modId,
+      dialogueId,
+    });
     return this.getSnapshot()!;
   }
 
@@ -178,7 +214,7 @@ export class DialogueEngine {
 
     const nextId = this.currentNode.nextNodeId ?? null;
     if (!nextId || !this.activeTree.nodes[nextId]) {
-      this.close();
+      this.close(true);
       return null;
     }
 
@@ -197,12 +233,23 @@ export class DialogueEngine {
       return this.getSnapshot();
     }
 
+    const npcId = this.activeProfile.npcId;
+    const npcModId = this.activeProfile.modId;
+    const dialogueId = this.activeTree.id ?? npcId;
+
     if (choice.effects && choice.effects.length > 0) {
       this.applyEffects(choice.effects);
     }
 
+    this.modEventHooks?.onDialogueChoiceSelected?.({
+      npcId,
+      npcModId,
+      dialogueId,
+      choiceId: choice.id,
+    });
+
     if (!choice.nextNodeId || !this.activeTree.nodes[choice.nextNodeId]) {
-      this.close();
+      this.close(true);
       return null;
     }
 
@@ -210,11 +257,23 @@ export class DialogueEngine {
     return this.getSnapshot();
   }
 
-  public close(): void {
+  public close(completed = false): void {
+    const profile = this.activeProfile;
+    const tree = this.activeTree;
+    const shouldFireComplete =
+      Boolean(profile && tree) &&
+      (completed || Boolean(this.getSnapshot()?.isTerminal));
     this.activeProfile = null;
     this.activeTree = null;
     this.currentNode = null;
     this.lineIndex = 0;
+    if (shouldFireComplete && profile && tree) {
+      this.modEventHooks?.onDialogueCompleted?.({
+        npcId: profile.npcId,
+        npcModId: profile.modId,
+        dialogueId: tree.id ?? profile.npcId,
+      });
+    }
   }
 
   public setFlag(flag: string): void {

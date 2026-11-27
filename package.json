@@ -26,6 +26,7 @@
     "worker:deploy": "npm --prefix workers/multiplayer run deploy:production",
     "worker:deploy:staging": "npm --prefix workers/multiplayer run deploy:staging",
     "worker:deploy:production": "npm --prefix workers/multiplayer run deploy:production",
+    "test": "npx tsx _verify_mod_creator_compat.ts && npx tsx _verify_stormblade_woamod.ts && npx tsx _verify_mod_spawns.ts && npx tsx _verify_mod_events.ts",
     "test:multiplayer": "tsx _verify_mp_room.ts",
     "clean": "rm -rf dist release server.js workers/multiplayer/dist workers/multiplayer/dist-staging workers/multiplayer/dist-production",
     "lint": "tsc --noEmit"

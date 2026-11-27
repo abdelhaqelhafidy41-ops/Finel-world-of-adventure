@@ -1910,4 +1910,240 @@ export class ModWorldSpawner {
     });
     this.deps.modManager.setRuntimeSpawnDiagnostics(diag);
   }
+
+  public spawnDynamicEntity(opts: {
+    contentId: string;
+    contentType?: string;
+    x: number;
+    y?: number;
+    z: number;
+    behavior?: string;
+    modId: string;
+    instanceId?: string;
+  }): boolean {
+    const store = this.deps.modManager.getContentStore();
+    const fullId = opts.contentId.includes(':')
+      ? opts.contentId
+      : `${opts.modId}:${opts.contentId}`;
+    const candidateIds = Array.from(new Set([opts.contentId, fullId]));
+    const typeHint = (opts.contentType ?? '').trim().toLowerCase();
+
+    const safeGroundY = Number.isFinite(opts.y)
+      ? Math.max(WATER_LEVEL + 0.15, opts.y as number)
+      : Math.max(WATER_LEVEL + 0.15, groundHeightAt(opts.x, opts.z));
+    const chunk = worldToChunkCoords(opts.x, opts.z, 120);
+    const chunkKey = toChunkKey(chunk.cx, chunk.cz);
+    const instanceId =
+      opts.instanceId ??
+      `modev_spawn:${opts.modId}:${opts.contentId}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`;
+
+    // 1. Pickup-like items
+    if (
+      !typeHint ||
+      typeHint === 'item' ||
+      typeHint === 'weapon' ||
+      typeHint === 'armor' ||
+      typeHint === 'tool' ||
+      typeHint === 'consumable' ||
+      typeHint === 'resource'
+    ) {
+      for (const cid of candidateIds) {
+        const itemDef = this.deps.itemManager.getItem(cid) ?? store.getItemDefinition(cid);
+        if (itemDef) {
+          this.deps.spawnPickup({
+            id: instanceId,
+            itemId: itemDef.id,
+            count: 1,
+            label: itemDef.name,
+            x: opts.x,
+            y: safeGroundY + 0.12,
+            z: opts.z,
+            modelPath: itemDef.modelPath,
+            categoryHint: itemDef.category === 'weapon' ? 'weapon' : undefined,
+            chunkKey,
+            modId: opts.modId,
+            hoverBob: false,
+          });
+          return true;
+        }
+      }
+    }
+
+    // 2. Buildings / decorations
+    if (!typeHint || typeHint === 'building' || typeHint === 'decoration') {
+      for (const cid of candidateIds) {
+        const bp = getBlueprintById(cid) ?? store.getBlueprint(cid);
+        if (bp) {
+          this.deps.buildings.addOrUpdateStructure({
+            id: instanceId,
+            blueprintId: bp.id,
+            category: bp.category,
+            tier: bp.tier,
+            x: opts.x,
+            y: safeGroundY,
+            z: opts.z,
+            yaw: 0,
+            health: bp.maxHealth,
+            maxHealth: bp.maxHealth,
+            ownerId: 'mod',
+            ownerName: opts.modId,
+            permission: 'everyone',
+            createdAtMs: Date.now(),
+            isModSpawn: true,
+            modId: opts.modId,
+          });
+          return true;
+        }
+      }
+    }
+
+    // 3. Mod NPC / character
+    if (!typeHint || typeHint === 'npc' || typeHint === 'character') {
+      for (const cid of candidateIds) {
+        const ent =
+          store.getEntityDescriptor('npcs', cid) ??
+          store.getEntityDescriptor('characters', cid);
+        if (ent) {
+          const fakeInst: PlannedInstance = {
+            instanceId,
+            index: 0,
+            x: opts.x,
+            y: safeGroundY,
+            z: opts.z,
+            chunkKey,
+            displayLabel: ent.name || cid,
+            rule: {
+              id: instanceId,
+              modId: opts.modId,
+              spawnId: cid,
+              contentId: cid,
+              contentType: typeHint === 'character' ? 'character' : 'npc',
+              mode: 'exact_coords',
+              position: { x: opts.x, y: safeGroundY, z: opts.z },
+              rotation: { x: 0, y: 0, z: 0 },
+              scale: { x: 1, y: 1, z: 1 },
+              count: 1,
+              behavior: opts.behavior,
+              conditions: {
+                respawn: { enabled: false, delaySeconds: 0, oneTime: true },
+                perPlayerPickup: false,
+              },
+              enabled: true,
+              sourceFile: 'event',
+            },
+          };
+          const cfg = this.buildNpcConfig(fakeInst, ent);
+          this.deps.npcs.spawnModNpc(cfg);
+          return true;
+        }
+      }
+    }
+
+    // 4. Monster (mod descriptor or base enemy archetype)
+    if (!typeHint || typeHint === 'monster' || typeHint === 'enemy' || typeHint === 'boss') {
+      for (const cid of candidateIds) {
+        const ent = store.getEntityDescriptor('monsters', cid);
+        if (ent) {
+          const raw = ent.raw ?? {};
+          const archetypeId = normalizeEnemyArchetype(raw.archetype ?? raw.template ?? opts.behavior);
+          this.deps.combat.registerModEnemyBlueprint({
+            id: instanceId,
+            archetypeId,
+            x: opts.x,
+            y: safeGroundY,
+            z: opts.z,
+            seed: hashSeed(instanceId, this.worldSeed),
+            customArchetype: {
+              ...(typeof raw.name === 'string' && raw.name.trim() ? { name: raw.name.trim() } : {}),
+              ...(typeof raw.nameAr === 'string' && raw.nameAr.trim() ? { nameAr: raw.nameAr.trim() } : {}),
+              ...(typeof raw.maxHealth === 'number' && raw.maxHealth > 0 ? { maxHealth: raw.maxHealth } : {}),
+              ...(typeof raw.damage === 'number' && raw.damage > 0 ? { damage: raw.damage } : {}),
+              ...(typeHint === 'boss' || raw.isBoss === true ? { isBoss: true } : {}),
+            },
+            respawnEnabled: false,
+            respawnDelaySeconds: 0,
+            modId: opts.modId,
+            materializeNow: true,
+          });
+          return true;
+        }
+      }
+      const lowerCid = opts.contentId.trim().toLowerCase();
+      if (
+        lowerCid === 'bandit_scout' ||
+        lowerCid === 'thorn_stalker' ||
+        lowerCid === 'stone_sentinel' ||
+        lowerCid === 'ancient_monster' ||
+        lowerCid === 'ancient_guardian' ||
+        typeHint === 'monster' ||
+        typeHint === 'enemy' ||
+        typeHint === 'boss'
+      ) {
+        const archetypeId = normalizeEnemyArchetype(
+          lowerCid || (typeHint === 'boss' ? 'ancient_guardian' : opts.behavior),
+        );
+        this.deps.combat.registerModEnemyBlueprint({
+          id: instanceId,
+          archetypeId,
+          x: opts.x,
+          y: safeGroundY,
+          z: opts.z,
+          seed: hashSeed(instanceId, this.worldSeed),
+          respawnEnabled: false,
+          respawnDelaySeconds: 0,
+          modId: opts.modId,
+          materializeNow: true,
+        });
+        return true;
+      }
+    }
+
+    // 5. Animal (mod descriptor or base species)
+    if (!typeHint || typeHint === 'animal') {
+      for (const cid of candidateIds) {
+        const ent = store.getEntityDescriptor('animals', cid);
+        if (ent) {
+          const raw = ent.raw ?? {};
+          const species = normalizeAnimalSpecies(raw.species ?? raw.animalType);
+          this.deps.wildlife.spawnModAnimal({
+            id: instanceId,
+            species,
+            home: { x: opts.x, z: opts.z },
+            y: safeGroundY,
+            exactPosition: true,
+            stationary: opts.behavior === 'stationary' || raw.stationary === true,
+            modId: opts.modId,
+            seed: hashSeed(instanceId, this.worldSeed),
+          });
+          return true;
+        }
+      }
+      const lowerCid = opts.contentId.trim().toLowerCase();
+      if (
+        lowerCid === 'deer' ||
+        lowerCid === 'rabbit' ||
+        lowerCid === 'wolf' ||
+        lowerCid === 'bear' ||
+        lowerCid === 'bird' ||
+        lowerCid === 'cow' ||
+        lowerCid === 'sheep' ||
+        lowerCid === 'chicken' ||
+        typeHint === 'animal'
+      ) {
+        this.deps.wildlife.spawnModAnimal({
+          id: instanceId,
+          species: normalizeAnimalSpecies(lowerCid),
+          home: { x: opts.x, z: opts.z },
+          y: safeGroundY,
+          exactPosition: true,
+          stationary: opts.behavior === 'stationary',
+          modId: opts.modId,
+          seed: hashSeed(instanceId, this.worldSeed),
+        });
+        return true;
+      }
+    }
+
+    return false;
+  }
 }

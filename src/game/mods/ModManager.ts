@@ -1,8 +1,15 @@
+import { AUDIO_CUE_REGISTRY } from '../audio/AudioRegistry';
 import { AudioManager } from '../audio/AudioManager';
+import { BUILDING_BLUEPRINTS } from '../building/buildingCatalog';
 import { setExternalBlueprintProvider } from '../building/buildingCatalog';
 import { WeaponRegistry } from '../combat/weapons/WeaponRegistry';
 import { CraftingManager } from '../inventory/CraftingManager';
 import { ItemManager } from '../inventory/ItemManager';
+import rawItems from '../inventory/items.json';
+import rawRecipes from '../inventory/recipes.json';
+import rawQuests from '../quest/quests.json';
+import { SIDE_QUESTS } from '../sidequest/sideQuestData';
+import { STORY_QUESTS } from '../story/storyCampaign';
 import type { ModAssetReadResult } from '../../utils/platformExit';
 import {
   DefaultModContentStore,
@@ -10,6 +17,7 @@ import {
 } from './handlers/defaultModHandlers';
 import { ModAssetResolver } from './ModAssetResolver';
 import { ModContentRegistry } from './ModContentRegistry';
+import { CORE_PROTECTED_IDS } from './ModNamespaceRegistry';
 import { ModStorageAdapter } from './ModStorageAdapter';
 import { validateDiscoveredMods } from './ModValidator';
 import {
@@ -36,8 +44,38 @@ import {
   type WorldModMetadataSnapshot,
   type WorldModSelectionEntry,
 } from './modTypes';
+import type {
+  ModEventCrossReferenceResolvers,
+  ModEventDefinition,
+  ModEventDiagnosticEntry,
+} from './ModEventConfig';
 import type { ModSpawnDefinition, ModSpawnDiagnosticEntry } from './ModSpawnConfig';
 import { setExternalWoa3dModelProvider } from './Woa3dModelBuilder';
+
+const CORE_ITEM_IDS = new Set<string>(
+  Array.isArray(rawItems)
+    ? rawItems
+        .filter((r): r is { id: string } => Boolean(r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string'))
+        .map((r) => r.id)
+    : [],
+);
+const CORE_RECIPE_IDS = new Set<string>(
+  Array.isArray(rawRecipes)
+    ? rawRecipes
+        .filter((r): r is { id: string } => Boolean(r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string'))
+        .map((r) => r.id)
+    : [],
+);
+const CORE_QUEST_IDS = new Set<string>([
+  ...(Array.isArray(rawQuests)
+    ? rawQuests
+        .filter((r): r is { id: string } => Boolean(r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string'))
+        .map((r) => r.id)
+    : []),
+  ...STORY_QUESTS.map((q) => q.id),
+  ...SIDE_QUESTS.map((q) => q.id),
+]);
+const CORE_BLUEPRINT_IDS = new Set<string>(BUILDING_BLUEPRINTS.map((bp) => bp.id));
 
 const MAX_LOG_ENTRIES = 120;
 
@@ -66,6 +104,8 @@ export class ModManager {
   private readonly listeners = new Set<(snap: ModsSnapshot) => void>();
   private runtimeSpawnDiagnostics: ModSpawnDiagnosticEntry[] = [];
   private runtimeSpawnDiagSignature = '';
+  private runtimeEventDiagnostics: ModEventDiagnosticEntry[] = [];
+  private runtimeEventDiagSignature = '';
   private initPromise: Promise<ModsSnapshot> | null = null;
   private refreshPromise: Promise<ModsSnapshot> | null = null;
   private logCounter = 0;
@@ -125,7 +165,7 @@ export class ModManager {
     return this.contentStore;
   }
 
-  public getContentRegistry<K extends ModContentType>(
+  public getContentRegistry<K extends keyof ModContentRegistryMap>(
     type: K,
   ): ModContentRegistryMap[K] {
     return this.contentStore.getRegistry(type);
@@ -335,6 +375,93 @@ export class ModManager {
     }));
   }
 
+  public getAllModEvents(): ModEventDefinition[] {
+    return this.contentStore.getAllModEvents();
+  }
+
+  public getModEvents(modId: string): ModEventDefinition[] {
+    return this.contentStore.getModEventsForMod(modId);
+  }
+
+  public setRuntimeEventDiagnostics(entries: ModEventDiagnosticEntry[]): void {
+    const signature = entries
+      .map(
+        (e) =>
+          `${e.fullId}:${e.status}:${e.executionCount}:${e.lastTriggeredAt ?? 0}:${e.lastExecutedAt ?? 0}:${e.failedReason ?? ''}:${e.errorCode ?? ''}`,
+      )
+      .join('|');
+    this.runtimeEventDiagnostics = entries.map((e) => ({ ...e }));
+    if (signature !== this.runtimeEventDiagSignature) {
+      this.runtimeEventDiagSignature = signature;
+      if (this.listeners.size > 0) {
+        this.emit();
+      }
+    }
+  }
+
+  public clearRuntimeEventDiagnostics(): void {
+    this.runtimeEventDiagnostics = [];
+    this.runtimeEventDiagSignature = '';
+  }
+
+  public getEventDiagnostics(modId?: string): ModEventDiagnosticEntry[] {
+    if (this.runtimeEventDiagnostics.length > 0) {
+      return modId
+        ? this.runtimeEventDiagnostics.filter((d) => d.modId === modId)
+        : this.runtimeEventDiagnostics;
+    }
+    const defs = modId ? this.getModEvents(modId) : this.getAllModEvents();
+    return defs.map((ev) => ({
+      modId: ev.modId,
+      eventId: ev.eventId,
+      fullId: ev.id,
+      triggerType: ev.trigger.type,
+      executionMode: ev.executionMode,
+      status: ev.validationError ? 'failed' : !ev.enabled ? 'disabled' : 'registered',
+      executionCount: 0,
+      ...(ev.validationError
+        ? { errorCode: ev.validationError.code, error: ev.validationError.message }
+        : {}),
+    }));
+  }
+
+  public appendRuntimeEventLog(
+    level: ModLogLevel,
+    message: string,
+    modId?: string,
+  ): void {
+    this.appendLog(level, message, modId);
+    if (this.listeners.size > 0) {
+      this.emit();
+    }
+  }
+
+  private buildEventCrossReferenceResolvers(): ModEventCrossReferenceResolvers {
+    return {
+      hasItemOrWeapon: (itemId: string) =>
+        CORE_ITEM_IDS.has(itemId) ||
+        Boolean(this.contentStore.getItemDefinition(itemId)) ||
+        Boolean(this.contentStore.getModWeaponStats(itemId)),
+      hasRecipe: (recipeId: string) =>
+        CORE_RECIPE_IDS.has(recipeId) ||
+        this.contentStore.registries.recipes.has(recipeId),
+      hasQuest: (questId: string) =>
+        CORE_QUEST_IDS.has(questId) ||
+        this.contentStore.registries.quests.has(questId),
+      hasSound: (soundId: string) =>
+        soundId in AUDIO_CUE_REGISTRY ||
+        Boolean(this.contentStore.getModSound(soundId)),
+      hasEntityOrBlueprint: (contentId: string) =>
+        CORE_BLUEPRINT_IDS.has(contentId) ||
+        CORE_PROTECTED_IDS.has(contentId) ||
+        Boolean(this.contentStore.getBlueprint(contentId)) ||
+        Boolean(this.contentStore.getEntityDescriptor('monsters', contentId)) ||
+        Boolean(this.contentStore.getEntityDescriptor('animals', contentId)) ||
+        Boolean(this.contentStore.getEntityDescriptor('npcs', contentId)) ||
+        Boolean(this.contentStore.getEntityDescriptor('characters', contentId)),
+    };
+  }
+
   public async initialize(): Promise<ModsSnapshot> {
     if (this.initPromise) return this.initPromise;
     this.initPromise = (async () => {
@@ -473,6 +600,21 @@ export class ModManager {
               modId,
               rec.sourceId,
             );
+          }
+        }
+
+        const eventResolvers = this.buildEventCrossReferenceResolvers();
+        for (const modId of activeModIds) {
+          const rec = recordByModId.get(modId);
+          if (!rec) continue;
+          const eventDiags = this.contentStore.validateEventsForMod(modId, eventResolvers);
+          if (eventDiags.length > 0) {
+            rec.diagnostics.push(...eventDiags);
+            for (const ed of eventDiags) {
+              if (ed.severity === 'error' || ed.severity === 'warning') {
+                this.appendLog('warn', ed.message, modId, rec.sourceId);
+              }
+            }
           }
         }
 
@@ -758,6 +900,8 @@ export class ModManager {
   private unloadAllActiveModsInternal(emitAfter: boolean): void {
     this.assetResolver.clear();
     this.registry.unloadAll();
+    this.clearRuntimeSpawnDiagnostics();
+    this.clearRuntimeEventDiagnostics();
     if (emitAfter) {
       this.snapshot = {
         ...this.snapshot,

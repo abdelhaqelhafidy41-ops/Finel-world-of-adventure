@@ -163,6 +163,8 @@ export class PlayerController {
     maxStaminaBonus: 0,
     speedBonus: 0,
   };
+  private externalSpeedMultiplier = 1;
+  private externalStaminaRegenMultiplier = 1;
 
   constructor(
     character: PlayerCharacter,
@@ -484,6 +486,24 @@ export class PlayerController {
     return true;
   }
 
+  public setExternalStatusMultipliers(opts: {
+    speedMultiplier?: number;
+    staminaRegenMultiplier?: number;
+  }): void {
+    this.externalSpeedMultiplier =
+      typeof opts.speedMultiplier === 'number' &&
+      Number.isFinite(opts.speedMultiplier) &&
+      opts.speedMultiplier > 0
+        ? opts.speedMultiplier
+        : 1;
+    this.externalStaminaRegenMultiplier =
+      typeof opts.staminaRegenMultiplier === 'number' &&
+      Number.isFinite(opts.staminaRegenMultiplier) &&
+      opts.staminaRegenMultiplier > 0
+        ? opts.staminaRegenMultiplier
+        : 1;
+  }
+
   public applyEquipmentBonuses(bonuses: {
     maxHealthBonus: number;
     maxStaminaBonus: number;
@@ -663,7 +683,7 @@ export class PlayerController {
         } else {
           this.stamina = Math.min(
             this.config.maxStamina,
-            this.stamina + this.config.staminaRegenPerSec * dt,
+            this.stamina + this.config.staminaRegenPerSec * this.externalStaminaRegenMultiplier * dt,
           );
         }
       }
@@ -712,7 +732,7 @@ export class PlayerController {
         } else {
           this.stamina = Math.min(
             this.config.maxStamina,
-            this.stamina + this.config.staminaRegenPerSec * dt,
+            this.stamina + this.config.staminaRegenPerSec * this.externalStaminaRegenMultiplier * dt,
           );
         }
       }
@@ -731,7 +751,8 @@ export class PlayerController {
     const aimSpeedFactor = isAimingBow ? 0.68 : 1.0;
     const targetSpeed =
       (isSprinting && !isAimingBow ? runSpd : walkSpd * aimSpeedFactor) *
-      analogStrength;
+      analogStrength *
+      this.externalSpeedMultiplier;
 
     const isFirstPerson = this.cameraRig.getPerspective() === 'first-person';
 

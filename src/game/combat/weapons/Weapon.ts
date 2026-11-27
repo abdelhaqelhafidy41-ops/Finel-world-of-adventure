@@ -301,6 +301,7 @@ export abstract class Weapon {
           amount,
           ctx.origin.x,
           ctx.origin.z,
+          `player:${this.stats.id}`,
         );
         if (res.hit) {
           totalHits += 1;

@@ -33,6 +33,8 @@ import type {
   WorldModMetadataEntry,
   WorldModMetadataSnapshot,
 } from '../mods/modTypes';
+import type { SavedWorldModEventState } from '../mods/ModEventConfig';
+import type { SavedPlayerModEventState } from '../mods/ModPlayerEventStore';
 
 const VALID_BIOMES = new Set<BiomeType>([
   'Plains',
@@ -898,6 +900,12 @@ export function migrateSaveData(
                 : {}),
             }
           : null,
+      ...(isRecord(worldRaw.modSpawnState)
+        ? { modSpawnState: worldRaw.modSpawnState as unknown as SaveGameData['world']['modSpawnState'] }
+        : {}),
+      ...(isRecord(worldRaw.modEventState)
+        ? { modEventState: worldRaw.modEventState as unknown as SavedWorldModEventState }
+        : {}),
     },
     ...(isRecord(working.camera)
       ? {
@@ -965,6 +973,11 @@ export function migrateSaveData(
       const modMetadata = sanitizeWorldModMetadata(working.modMetadata);
       return modMetadata ? { modMetadata } : {};
     })(),
+    ...(isRecord(working.playerModEventState)
+      ? {
+          playerModEventState: working.playerModEventState as unknown as SavedPlayerModEventState,
+        }
+      : {}),
   };
 
   return { data: normalized, migratedFromVersion: detectedVersion };

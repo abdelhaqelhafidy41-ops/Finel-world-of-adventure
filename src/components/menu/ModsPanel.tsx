@@ -1477,6 +1477,91 @@ export const ModsPanel: React.FC<ModsPanelProps> = ({
                 );
               })()}
 
+              {/* Event Runtime & Reward Diagnostics */}
+              {(() => {
+                const modId = selectedModForDetails.manifest.modId;
+                const eventDiagnostics = modManager.getEventDiagnostics(modId);
+                return (
+                  <div
+                    data-testid="mods-event-diagnostics-section"
+                    className="p-3 rounded-xl bg-[#0c1712] border border-white/10 space-y-2"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-[#9eb4a0]">
+                      <span>{t.modsEventDiagnosticsTitle}</span>
+                      <span dir="ltr" className="font-mono-num text-white">
+                        {eventDiagnostics.length}
+                      </span>
+                    </div>
+
+                    {eventDiagnostics.length === 0 ? (
+                      <div className="text-xs text-[#9eb4a0]">{t.modsNoEventRules}</div>
+                    ) : (
+                      <div className="max-h-48 overflow-y-auto space-y-1.5">
+                        {eventDiagnostics.map((entry) => {
+                          const isError = entry.status === 'failed';
+                          const isOk = entry.status === 'executed';
+                          return (
+                            <div
+                              key={entry.fullId}
+                              className={`p-2 rounded-lg border text-[11px] space-y-1 ${
+                                isError
+                                  ? 'bg-[#341616] border-[#c85a53]/45 text-[#f4a5a0]'
+                                  : isOk
+                                    ? 'bg-[#102318] border-[#387451]/45 text-[#d7eadb]'
+                                    : 'bg-[#181f1b] border-white/10 text-[#d3dfd5]'
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span
+                                  dir="ltr"
+                                  className="font-mono-num font-semibold text-white truncate"
+                                >
+                                  {entry.fullId}
+                                </span>
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                    isError
+                                      ? 'bg-[#c85a53]/30 text-[#ffb8b3]'
+                                      : isOk
+                                        ? 'bg-[#387451]/40 text-[#8be39f]'
+                                        : 'bg-white/10 text-[#f3ca6e]'
+                                  }`}
+                                >
+                                  {t.modsEventStatusLabel(entry.status)}
+                                </span>
+                              </div>
+                              <div
+                                dir="ltr"
+                                className="font-mono-num text-[10px] text-[#b4c8b6] flex flex-wrap gap-x-3 gap-y-0.5"
+                              >
+                                <span>
+                                  {t.modsEventTriggerLabel}: {entry.triggerType}
+                                </span>
+                                <span>
+                                  {t.modsEventExecutionModeLabel}: {entry.executionMode}
+                                </span>
+                                <span>
+                                  {t.modsEventExecutionsLabel}: {entry.executionCount}
+                                </span>
+                              </div>
+                              {entry.failedReason && (
+                                <div
+                                  dir="ltr"
+                                  className="font-mono-num text-[10px] text-[#f3ca6e] break-all"
+                                >
+                                  {entry.errorCode ? `[${entry.errorCode}] ` : ''}
+                                  {entry.failedReason}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Incompatible Assets if any */}
               {selectedModForDetails.incompatibleAssets.length > 0 && (
                 <div className="p-3 rounded-xl bg-[#271b10] border border-[#c88a36]/45 space-y-1.5">

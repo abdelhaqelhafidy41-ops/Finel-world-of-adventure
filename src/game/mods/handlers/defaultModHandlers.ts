@@ -32,6 +32,16 @@ import {
 import { SUPPORTED_MOD_SCHEMA_VERSIONS, type ModAssetIndexEntry, type Woa3dModelDescriptor } from '../modTypes';
 import { normalizeModRelativeAssetPathForLookup, parseAndValidateWoa3dText } from '../woa3dMetadata';
 import {
+  extractInlineEventDefinitions,
+  normalizeTriggerType,
+  sanitizeModEventDefinition,
+  validateModEventCrossReferences,
+  type ModEventCrossReferenceResolvers,
+  type ModEventDefinition,
+  type ModEventTriggerSpec,
+  type ModEventTriggerType,
+} from '../ModEventConfig';
+import {
   extractInlineSpawnDefinitions,
   sanitizeModSpawnDefinition,
   type ModSpawnContentType,
@@ -1150,6 +1160,7 @@ export interface ModContentRegistryMap {
   models: NamespacedContentRegistry<Woa3dModelDescriptor>;
   localization: NamespacedContentRegistry<ModLocalizationEntry>;
   spawns: NamespacedContentRegistry<ModSpawnDefinition>;
+  events: NamespacedContentRegistry<ModEventDefinition>;
 }
 
 export class DefaultModContentStore {
@@ -1175,11 +1186,13 @@ export class DefaultModContentStore {
     models: new NamespacedContentRegistry<Woa3dModelDescriptor>('models'),
     localization: new NamespacedContentRegistry<ModLocalizationEntry>('localization'),
     spawns: new NamespacedContentRegistry<ModSpawnDefinition>('spawns'),
+    events: new NamespacedContentRegistry<ModEventDefinition>('events'),
   };
 
   public readonly weaponStatsRegistry = new NamespacedContentRegistry<WeaponStats>('weapons');
   public readonly modelsRegistry = this.registries.models;
   private readonly inlineSpawnIdsByModAndCat = new Map<string, string[]>();
+  private readonly inlineEventIdsByModAndCat = new Map<string, string[]>();
 
   private readonly descriptorsByCategory = new Map<
     string,
@@ -1190,7 +1203,7 @@ export class DefaultModContentStore {
     Map<string, Record<string, string>>
   >();
 
-  public getRegistry<K extends ModContentType>(type: K): ModContentRegistryMap[K] {
+  public getRegistry<K extends keyof ModContentRegistryMap>(type: K): ModContentRegistryMap[K] {
     return this.registries[type];
   }
 
@@ -1269,6 +1282,31 @@ export class DefaultModContentStore {
       .getAllEntries()
       .filter((e) => e.modId === modId)
       .map((e) => e.data);
+  }
+
+  public getAllModEvents(): ModEventDefinition[] {
+    return this.registries.events.getAll();
+  }
+
+  public getModEventsForMod(modId: string): ModEventDefinition[] {
+    return this.registries.events
+      .getAllEntries()
+      .filter((e) => e.modId === modId)
+      .map((e) => e.data);
+  }
+
+  public validateEventsForMod(
+    modId: string,
+    resolvers: ModEventCrossReferenceResolvers,
+  ): ModDiagnostic[] {
+    const diagnostics: ModDiagnostic[] = [];
+    for (const entry of this.registries.events.getAllEntries()) {
+      if (entry.modId !== modId) continue;
+      if (entry.data.validationError) continue;
+      const crossDiags = validateModEventCrossReferences(entry.data, resolvers);
+      diagnostics.push(...crossDiags);
+    }
+    return diagnostics;
   }
 
   public getItemDefinition(itemId: string): ItemDefinition | undefined {
@@ -1443,6 +1481,152 @@ export class DefaultModContentStore {
     this.inlineSpawnIdsByModAndCat.delete(bucketKey);
   }
 
+  private extractContextualInlineEvents(
+    modId: string,
+    rawOwner: unknown,
+    sourceFile: string,
+    diagnostics: ModDiagnostic[],
+    ownerRefs: Partial<Omit<ModEventTriggerSpec, 'type'>>,
+  ): ModEventDefinition[] {
+    if (!isRecord(rawOwner)) return [];
+    const rawList = Array.isArray(rawOwner.events)
+      ? rawOwner.events
+      : Array.isArray(rawOwner.triggers)
+        ? rawOwner.triggers
+        : isRecord(rawOwner.event)
+          ? [rawOwner.event]
+          : [];
+    const out: ModEventDefinition[] = [];
+    for (let i = 0; i < rawList.length; i++) {
+      const item = rawList[i];
+      let scopedDefault: Partial<ModEventTriggerSpec> | undefined;
+      if (isRecord(item)) {
+        const rawTrig = isRecord(item.trigger) ? item.trigger : null;
+        const t = normalizeTriggerType(
+          rawTrig?.type ??
+            rawTrig?.event ??
+            item.triggerType ??
+            (typeof item.trigger === 'string' ? item.trigger : undefined) ??
+            item.eventType,
+        );
+        if (t) {
+          scopedDefault = this.pickApplicableDefaultTriggerRefs(t, ownerRefs);
+        }
+      }
+      const def = sanitizeModEventDefinition(modId, item, sourceFile, diagnostics, {
+        index: i,
+        defaultTrigger: scopedDefault,
+      });
+      if (def) out.push(def);
+    }
+    return out;
+  }
+
+  private pickApplicableDefaultTriggerRefs(
+    triggerType: ModEventTriggerType,
+    ownerRefs: Partial<Omit<ModEventTriggerSpec, 'type'>>,
+  ): Partial<ModEventTriggerSpec> | undefined {
+    const out: Partial<ModEventTriggerSpec> = {};
+    if (
+      (triggerType === 'item_collected' ||
+        triggerType === 'item_equipped' ||
+        triggerType === 'item_crafted') &&
+      ownerRefs.itemId
+    ) {
+      out.itemId = ownerRefs.itemId;
+    }
+    if (
+      (triggerType === 'item_equipped' || triggerType === 'entity_killed_with_weapon') &&
+      ownerRefs.weaponId
+    ) {
+      out.weaponId = ownerRefs.weaponId;
+    }
+    if (triggerType === 'recipe_completed' && ownerRefs.recipeId) {
+      out.recipeId = ownerRefs.recipeId;
+    }
+    if (
+      (triggerType === 'quest_started' ||
+        triggerType === 'quest_completed' ||
+        triggerType === 'quest_failed' ||
+        triggerType === 'npc_quest_completed') &&
+      ownerRefs.questId
+    ) {
+      out.questId = ownerRefs.questId;
+    }
+    if (
+      (triggerType === 'npc_talk_start' ||
+        triggerType === 'dialogue_started' ||
+        triggerType === 'dialogue_completed' ||
+        triggerType === 'dialogue_choice_selected' ||
+        triggerType === 'npc_interaction' ||
+        triggerType === 'npc_quest_completed') &&
+      ownerRefs.npcId
+    ) {
+      out.npcId = ownerRefs.npcId;
+    }
+    if (
+      (triggerType === 'animal_killed' ||
+        triggerType === 'monster_killed' ||
+        triggerType === 'enemy_killed' ||
+        triggerType === 'boss_killed' ||
+        triggerType === 'entity_killed' ||
+        triggerType === 'entity_killed_with_weapon') &&
+      ownerRefs.entityId
+    ) {
+      out.entityId = ownerRefs.entityId;
+    }
+    if (
+      (triggerType === 'building_placed' ||
+        triggerType === 'structure_completed' ||
+        triggerType === 'structure_destroyed') &&
+      ownerRefs.buildingId
+    ) {
+      out.buildingId = ownerRefs.buildingId;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+
+  private registerInlineEvents(
+    modId: string,
+    sourceCat: string,
+    events: ModEventDefinition[],
+    diagnostics: ModDiagnostic[],
+  ): void {
+    const bucketKey = `${modId}:${sourceCat}`;
+    const existing = this.inlineEventIdsByModAndCat.get(bucketKey) ?? [];
+    for (const ev of events) {
+      let candidateId = ev.id;
+      let suffix = 1;
+      while (this.registries.events.has(candidateId)) {
+        suffix += 1;
+        candidateId = `${ev.id}_${suffix}`;
+      }
+      const normalized = candidateId === ev.id ? ev : { ...ev, id: candidateId };
+      const regRes = this.registries.events.register(modId, normalized.id, normalized);
+      if (!regRes.ok) {
+        diagnostics.push({
+          code: regRes.code,
+          severity: 'warning',
+          message: `${ev.sourceFile}: ${regRes.message}`,
+        });
+        continue;
+      }
+      existing.push(normalized.id);
+    }
+    this.inlineEventIdsByModAndCat.set(bucketKey, existing);
+  }
+
+  private unloadInlineEvents(modId: string, sourceCat: string): void {
+    const bucketKey = `${modId}:${sourceCat}`;
+    const ids = this.inlineEventIdsByModAndCat.get(bucketKey);
+    if (ids && ids.length > 0) {
+      for (const id of ids) {
+        this.registries.events.unregister(id);
+      }
+    }
+    this.inlineEventIdsByModAndCat.delete(bucketKey);
+  }
+
   public getDescriptors(category: string): ModDescriptorEntry[] {
     const normalized = category.toLowerCase();
     if (
@@ -1542,6 +1726,7 @@ export class DefaultModContentStore {
       this.createDescriptorHandler('assets', ['assets']),
       this.createModelsHandler(),
       this.createSpawnsHandler(),
+      this.createEventsHandler(),
     ];
   }
 
@@ -1568,6 +1753,7 @@ export class DefaultModContentStore {
         const diagnostics: ModDiagnostic[] = [];
         targetRegistry.unloadMod(ctx.modId);
         this.unloadInlineSpawns(ctx.modId, mode);
+        this.unloadInlineEvents(ctx.modId, mode);
         if (mode === 'weapons') {
           this.weaponStatsRegistry.unloadMod(ctx.modId);
         }
@@ -1643,6 +1829,20 @@ export class DefaultModContentStore {
               this.registerInlineSpawns(ctx.modId, mode, inlineSpawns, diagnostics);
             }
 
+            const inlineEvents = this.extractContextualInlineEvents(
+              ctx.modId,
+              rawEntry,
+              file.relativePath,
+              diagnostics,
+              {
+                itemId: parsed.item.id,
+                ...(effectiveSpawnType === 'weapon' ? { weaponId: parsed.item.id } : {}),
+              },
+            );
+            if (inlineEvents.length > 0) {
+              this.registerInlineEvents(ctx.modId, mode, inlineEvents, diagnostics);
+            }
+
             loadedCount += 1;
           }
         }
@@ -1652,6 +1852,7 @@ export class DefaultModContentStore {
       unloadMod: (modId: string) => {
         targetRegistry.unloadMod(modId);
         this.unloadInlineSpawns(modId, mode);
+        this.unloadInlineEvents(modId, mode);
         if (mode === 'weapons') {
           this.weaponStatsRegistry.unloadMod(modId);
         }
@@ -1659,6 +1860,7 @@ export class DefaultModContentStore {
       clearAll: () => {
         targetRegistry.clear();
         this.inlineSpawnIdsByModAndCat.clear();
+        this.inlineEventIdsByModAndCat.clear();
         if (mode === 'weapons') {
           this.weaponStatsRegistry.clear();
         }
@@ -1672,6 +1874,7 @@ export class DefaultModContentStore {
       validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
         const diagnostics: ModDiagnostic[] = [];
         this.registries.recipes.unloadMod(ctx.modId);
+        this.unloadInlineEvents(ctx.modId, 'recipes');
         let loadedCount = 0;
 
         for (const file of ctx.files) {
@@ -1700,6 +1903,16 @@ export class DefaultModContentStore {
               });
               continue;
             }
+            const inlineEvents = this.extractContextualInlineEvents(
+              ctx.modId,
+              rawEntry,
+              file.relativePath,
+              diagnostics,
+              { recipeId: recipe.id, itemId: recipe.resultItemId },
+            );
+            if (inlineEvents.length > 0) {
+              this.registerInlineEvents(ctx.modId, 'recipes', inlineEvents, diagnostics);
+            }
             loadedCount += 1;
           }
         }
@@ -1708,9 +1921,11 @@ export class DefaultModContentStore {
       },
       unloadMod: (modId: string) => {
         this.registries.recipes.unloadMod(modId);
+        this.unloadInlineEvents(modId, 'recipes');
       },
       clearAll: () => {
         this.registries.recipes.clear();
+        this.inlineEventIdsByModAndCat.clear();
       },
     };
   }
@@ -1721,6 +1936,7 @@ export class DefaultModContentStore {
       validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
         const diagnostics: ModDiagnostic[] = [];
         this.registries.quests.unloadMod(ctx.modId);
+        this.unloadInlineEvents(ctx.modId, 'quests');
         unregisterModQuests(ctx.modId);
         let loadedCount = 0;
 
@@ -1761,6 +1977,16 @@ export class DefaultModContentStore {
               });
               continue;
             }
+            const inlineEvents = this.extractContextualInlineEvents(
+              ctx.modId,
+              rawEntry,
+              file.relativePath,
+              diagnostics,
+              { questId: quest.id, npcId: quest.giverNpcId },
+            );
+            if (inlineEvents.length > 0) {
+              this.registerInlineEvents(ctx.modId, 'quests', inlineEvents, diagnostics);
+            }
             loadedCount += 1;
           }
         }
@@ -1769,10 +1995,12 @@ export class DefaultModContentStore {
       },
       unloadMod: (modId: string) => {
         this.registries.quests.unloadMod(modId);
+        this.unloadInlineEvents(modId, 'quests');
         unregisterModQuests(modId);
       },
       clearAll: () => {
         this.registries.quests.clear();
+        this.inlineEventIdsByModAndCat.clear();
         clearAllModQuests();
       },
     };
@@ -1791,6 +2019,7 @@ export class DefaultModContentStore {
         const diagnostics: ModDiagnostic[] = [];
         targetRegistry.unloadMod(ctx.modId);
         this.unloadInlineSpawns(ctx.modId, contentType);
+        this.unloadInlineEvents(ctx.modId, contentType);
         let loadedCount = 0;
 
         for (const file of ctx.files) {
@@ -1847,6 +2076,17 @@ export class DefaultModContentStore {
               this.registerInlineSpawns(ctx.modId, contentType, inlineSpawns, diagnostics);
             }
 
+            const inlineEvents = this.extractContextualInlineEvents(
+              ctx.modId,
+              rawEntry,
+              file.relativePath,
+              diagnostics,
+              { buildingId: bp.id },
+            );
+            if (inlineEvents.length > 0) {
+              this.registerInlineEvents(ctx.modId, contentType, inlineEvents, diagnostics);
+            }
+
             loadedCount += 1;
           }
         }
@@ -1856,10 +2096,12 @@ export class DefaultModContentStore {
       unloadMod: (modId: string) => {
         targetRegistry.unloadMod(modId);
         this.unloadInlineSpawns(modId, contentType);
+        this.unloadInlineEvents(modId, contentType);
       },
       clearAll: () => {
         targetRegistry.clear();
         this.inlineSpawnIdsByModAndCat.clear();
+        this.inlineEventIdsByModAndCat.clear();
       },
     };
   }
@@ -2069,6 +2311,7 @@ export class DefaultModContentStore {
       validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
         const diagnostics: ModDiagnostic[] = [];
         this.unloadInlineSpawns(ctx.modId, contentType);
+        this.unloadInlineEvents(ctx.modId, contentType);
         let loadedCount = 0;
 
         for (const file of ctx.files) {
@@ -2112,6 +2355,19 @@ export class DefaultModContentStore {
               this.registerInlineSpawns(ctx.modId, contentType, inlineSpawns, diagnostics);
             }
 
+            const inlineEvents = this.extractContextualInlineEvents(
+              ctx.modId,
+              rawEntry,
+              file.relativePath,
+              diagnostics,
+              logicalCategory === 'npcs'
+                ? { npcId: entity.id, entityId: entity.id }
+                : { entityId: entity.id },
+            );
+            if (inlineEvents.length > 0) {
+              this.registerInlineEvents(ctx.modId, contentType, inlineEvents, diagnostics);
+            }
+
             loadedCount += 1;
           }
         }
@@ -2121,10 +2377,12 @@ export class DefaultModContentStore {
       unloadMod: (modId: string) => {
         targetRegistry.unloadMod(modId);
         this.unloadInlineSpawns(modId, contentType);
+        this.unloadInlineEvents(modId, contentType);
       },
       clearAll: () => {
         targetRegistry.clear();
         this.inlineSpawnIdsByModAndCat.clear();
+        this.inlineEventIdsByModAndCat.clear();
       },
     };
   }
@@ -2409,21 +2667,33 @@ export class DefaultModContentStore {
       validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
         const diagnostics: ModDiagnostic[] = [];
         this.unloadInlineSpawns(ctx.modId, 'spawns_file');
+        this.unloadInlineEvents(ctx.modId, 'spawns_file');
         let loadedCount = 0;
 
         for (const file of ctx.files) {
           const entries = extractEntriesList(file.data, ['spawns', 'spawnConfigs', 'rules']);
           const list = entries.length > 0 ? entries : isRecord(file.data) ? [file.data] : [];
           for (let i = 0; i < list.length; i++) {
+            const rawItem = list[i];
             const spawn = sanitizeModSpawnDefinition(
               ctx.modId,
-              list[i],
+              rawItem,
               file.relativePath,
               diagnostics,
               { index: i },
             );
             if (!spawn) continue;
             this.registerInlineSpawns(ctx.modId, 'spawns_file', [spawn], diagnostics);
+            const inlineEvents = this.extractContextualInlineEvents(
+              ctx.modId,
+              rawItem,
+              file.relativePath,
+              diagnostics,
+              { entityId: spawn.contentId },
+            );
+            if (inlineEvents.length > 0) {
+              this.registerInlineEvents(ctx.modId, 'spawns_file', inlineEvents, diagnostics);
+            }
             loadedCount += 1;
           }
         }
@@ -2432,11 +2702,51 @@ export class DefaultModContentStore {
       },
       unloadMod: (modId: string) => {
         this.unloadInlineSpawns(modId, 'spawns_file');
+        this.unloadInlineEvents(modId, 'spawns_file');
         this.registries.spawns.unloadMod(modId);
       },
       clearAll: () => {
         this.inlineSpawnIdsByModAndCat.clear();
+        this.inlineEventIdsByModAndCat.clear();
         this.registries.spawns.clear();
+      },
+    };
+  }
+
+  private createEventsHandler(): ModContentHandler {
+    return {
+      contentType: 'events',
+      validateAndLoad: (ctx: ModLoadContext): ModContentHandlerResult => {
+        const diagnostics: ModDiagnostic[] = [];
+        this.unloadInlineEvents(ctx.modId, 'events_file');
+        let loadedCount = 0;
+
+        for (const file of ctx.files) {
+          const entries = extractEntriesList(file.data, ['events', 'triggers', 'rules']);
+          const list = entries.length > 0 ? entries : isRecord(file.data) ? [file.data] : [];
+          for (let i = 0; i < list.length; i++) {
+            const eventDef = sanitizeModEventDefinition(
+              ctx.modId,
+              list[i],
+              file.relativePath,
+              diagnostics,
+              { index: i },
+            );
+            if (!eventDef) continue;
+            this.registerInlineEvents(ctx.modId, 'events_file', [eventDef], diagnostics);
+            loadedCount += 1;
+          }
+        }
+
+        return { loadedCount, diagnostics };
+      },
+      unloadMod: (modId: string) => {
+        this.unloadInlineEvents(modId, 'events_file');
+        this.registries.events.unloadMod(modId);
+      },
+      clearAll: () => {
+        this.inlineEventIdsByModAndCat.clear();
+        this.registries.events.clear();
       },
     };
   }

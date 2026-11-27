@@ -9,6 +9,8 @@ import type {
   WorldModMetadataSnapshot,
   WorldModSelectionEntry,
 } from '../mods/modTypes';
+import type { SavedWorldModEventState } from '../mods/ModEventConfig';
+import type { SavedPlayerModEventState } from '../mods/ModPlayerEventStore';
 
 export const CURRENT_SAVE_VERSION = 6;
 
@@ -234,6 +236,7 @@ export interface SavedWorldState {
     label?: string;
   } | null;
   modSpawnState?: SavedModSpawnState;
+  modEventState?: SavedWorldModEventState;
 }
 
 export interface SavedModSpawnInstanceState {
@@ -313,6 +316,7 @@ export interface SaveGameData {
     footstepVolume?: number;
   };
   modMetadata?: WorldModMetadataSnapshot;
+  playerModEventState?: SavedPlayerModEventState;
 }
 
 export interface SaveSlotSummary {

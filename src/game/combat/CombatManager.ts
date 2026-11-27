@@ -77,7 +77,10 @@ export interface CombatManagerOptions {
   onPlayerDamaged: (result: DamageResult, packet: DamagePacket) => void;
   onPlayerDefeated: () => void;
   onEnemyHit?: (enemy: EnemyController, result: DamageResult) => void;
-  onEnemyDefeated?: (enemy: EnemyController) => void;
+  onEnemyDefeated?: (
+    enemy: EnemyController,
+    killMeta?: import('./EnemyController').EnemyKillMetadata,
+  ) => void;
   onEnemySwing?: (enemy: EnemyController) => void;
 }
 
@@ -959,6 +962,10 @@ export class CombatManager {
     return true;
   }
 
+  public setExternalDamageMultiplier(multiplier: number): void {
+    this.damageSystem.setPlayerDamageMultiplier(multiplier);
+  }
+
   public syncPlayerStats(currentHealth: number, maxHealth: number): void {
     this.playerHealth.setMaxHealth(maxHealth, false);
     this.playerHealth.syncHealth(currentHealth);
@@ -1799,12 +1806,13 @@ export class CombatManager {
         customArchetype: bp.customArchetype,
         respawnEnabled: bp.respawnEnabled,
         respawnDelaySeconds: bp.respawnDelaySeconds,
-        onDefeated: (defeated) => {
+        ...(bp.modId ? { modId: bp.modId } : {}),
+        onDefeated: (defeated, killMeta) => {
           bp.defeated = true;
           if (bp.questTarget) {
             bp.questTarget.lifecycle = 'DEFEATED';
           }
-          this.options.onEnemyDefeated?.(defeated);
+          this.options.onEnemyDefeated?.(defeated, killMeta);
         },
       },
       this.assets,
@@ -2024,6 +2032,7 @@ export class CombatManager {
           UNARMED_DAMAGE,
           ctx.origin.x,
           ctx.origin.z,
+          'player:unarmed',
         );
         if (res.hit) {
           this.spawnHitSparks(

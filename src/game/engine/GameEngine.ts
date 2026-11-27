@@ -41,7 +41,7 @@ import type {
 import { getAllQuestDefinitions, getQuestDefinition } from '../quest/questRegistry';
 import { generateAndRegisterProceduralQuests } from '../quest/ProceduralQuestGenerator';
 import { getVillageNpcRoster } from '../npc/NPCManager';
-import type { QuestReward, QuestView } from '../quest/questTypes';
+import type { QuestReward, QuestStatus, QuestView } from '../quest/questTypes';
 import { StoryManager } from '../story/StoryManager';
 import type { StoryJournalSnapshot, StoryWorldBridge } from '../story/storyTypes';
 import { SideQuestManager } from '../sidequest/SideQuestManager';
@@ -213,10 +213,16 @@ import type {
   VillageDevelopmentSnapshot,
 } from '../village/villageDevTypes';
 import {
+  ModEventManager,
   ModWorldSpawner,
   evaluateMultiplayerHostClientCompatibility,
   formatMultiplayerModRejectionMessage,
   getModManager,
+  getModPlayerEventStore,
+  type ModEventBridge,
+  type ModEventContext,
+  type ModEventStatusEffectKind,
+  type ModEventTriggerType,
   type WorldModMetadataSnapshot,
   type WorldModSelectionEntry,
 } from '../mods';
@@ -502,6 +508,15 @@ export class GameEngine {
   private readonly sideQuestLocalInteractables = new Map<string, WorldInteractable>();
   private readonly spawnedSideQuestNpcIds = new Set<string>();
   private modSpawner: ModWorldSpawner | null = null;
+  private modEventManager: ModEventManager | null = null;
+  private activeModStatusEffects: Array<{
+    effectType: ModEventStatusEffectKind;
+    amount: number;
+    multiplier: number;
+    remainingSeconds: number;
+  }> = [];
+  private pendingRespawnEvent = false;
+  private isRetryingPendingModRewards = false;
   private pendingModSpawnBatch: SyncedModSpawnEntry[] = [];
   private lastSyncedModSpawnsDigest = '';
   private modSpawnSyncCheckTimer = 0;
@@ -685,6 +700,68 @@ export class GameEngine {
         abandonSideQuest: (sideQuestId) => this.abandonSideQuest(sideQuestId),
       },
     });
+    this.dialogueEngine.setModEventHooks({
+      onNpcTalkStart: (ctx) => {
+        this.emitModEvent('npc_talk_start', {
+          npcId: ctx.npcId,
+          npcModId: ctx.npcModId,
+          dialogueId: ctx.dialogueId,
+        });
+      },
+      onDialogueStarted: (ctx) => {
+        this.emitModEvent('dialogue_started', {
+          npcId: ctx.npcId,
+          npcModId: ctx.npcModId,
+          dialogueId: ctx.dialogueId,
+        });
+      },
+      onDialogueChoiceSelected: (ctx) => {
+        this.emitModEvent('dialogue_choice_selected', {
+          npcId: ctx.npcId,
+          npcModId: ctx.npcModId,
+          dialogueId: ctx.dialogueId,
+          choiceId: ctx.choiceId,
+          triggerInstanceId: `choice:${ctx.npcId}:${ctx.dialogueId}:${ctx.choiceId}:${Math.round(this.elapsed * 100)}`,
+        });
+      },
+      onDialogueCompleted: (ctx) => {
+        this.emitModEvent('dialogue_completed', {
+          npcId: ctx.npcId,
+          npcModId: ctx.npcModId,
+          dialogueId: ctx.dialogueId,
+          triggerInstanceId: `dlg_done:${ctx.npcId}:${ctx.dialogueId}:${Math.round(this.elapsed * 100)}`,
+        });
+      },
+    });
+    this.storyManager.setModEventHooks({
+      onQuestStarted: (questId) => {
+        this.emitModEvent('quest_started', { questId, questStatus: 'active' });
+      },
+      onQuestCompleted: (questId) => {
+        this.emitModEvent('quest_completed', { questId, questStatus: 'completed' });
+      },
+      onQuestFailed: (questId) => {
+        this.emitModEvent('quest_failed', { questId, questStatus: 'available' });
+      },
+    });
+    this.sideQuestManager.setModEventHooks({
+      onQuestStarted: (questId, npcId) => {
+        this.emitModEvent('quest_started', { questId, npcId, questStatus: 'active' });
+      },
+      onQuestCompleted: (questId, npcId) => {
+        this.emitModEvent('quest_completed', { questId, npcId, questStatus: 'completed' });
+        if (npcId) {
+          this.emitModEvent('npc_quest_completed', {
+            questId,
+            npcId,
+            questStatus: 'completed',
+          });
+        }
+      },
+      onQuestFailed: (questId, npcId) => {
+        this.emitModEvent('quest_failed', { questId, npcId, questStatus: 'available' });
+      },
+    });
     void this.initialize();
   }
 
@@ -740,6 +817,12 @@ export class GameEngine {
       );
     }
     this.emitHud();
+    if (leveledUp) {
+      this.emitModEvent('player_level_reached', {
+        playerLevel: this.playerLevel,
+        playerId: this.getLocalModPlayerId(),
+      });
+    }
     return leveledUp;
   }
 
@@ -750,8 +833,10 @@ export class GameEngine {
   private syncEquipmentBonuses(): void {
     if (!this.controller) return;
     this.controller.applyEquipmentBonuses(this.inventoryManager.getEquippedBonuses());
+    const baseReduction = this.inventoryManager.getDamageReductionBonus();
+    const modDefenseBonus = this.getActiveModDefenseBonus();
     this.combat?.playerHealth.setDamageReduction(
-      this.inventoryManager.getDamageReductionBonus(),
+      Math.min(0.85, baseReduction + modDefenseBonus),
     );
   }
 
@@ -900,6 +985,19 @@ export class GameEngine {
     );
     this.emitInventorySnapshot();
     this.emitHud();
+    this.emitModEvent('item_crafted', {
+      recipeId,
+      itemId: res.itemId,
+      count: res.count,
+      success: true,
+    });
+    this.emitModEvent('recipe_completed', {
+      recipeId,
+      itemId: res.itemId,
+      count: res.count,
+      success: true,
+    });
+    this.emitModInventoryChanged(res.itemId, res.count);
     return true;
   }
 
@@ -2085,6 +2183,11 @@ export class GameEngine {
     this.input?.dispose();
     this.modSpawner?.clearAllSpawnedEntities();
     this.modSpawner = null;
+    this.modEventManager?.reset();
+    this.modEventManager = null;
+    this.activeModStatusEffects = [];
+    this.pendingRespawnEvent = false;
+    this.isRetryingPendingModRewards = false;
     this.pendingModSpawnBatch = [];
     this.lastSyncedModSpawnsDigest = '';
     this.combat?.dispose();
@@ -2873,6 +2976,13 @@ export class GameEngine {
         });
       }
       this.callbacks.onWorldNotice(t.bedPlacedNotice);
+      this.emitModEvent('building_placed', {
+        buildingId: 'bed',
+        structureId: placed.id,
+        position: { x: placed.x, y: placed.y, z: placed.z },
+        success: true,
+      });
+      this.emitModInventoryChanged('bed', -1);
     } else if (res.action === 'place_station') {
       if (!this.world) return;
       const pos = this.controller.position;
@@ -2898,6 +3008,13 @@ export class GameEngine {
         });
       }
       this.callbacks.onWorldNotice(t.stationPlacedNotice(localizedName));
+      this.emitModEvent('building_placed', {
+        buildingId: res.stationType,
+        structureId: placed.id,
+        position: { x: placed.x, y: placed.y, z: placed.z },
+        success: true,
+      });
+      this.emitModInventoryChanged(res.definition.id, -1);
     } else if (res.action === 'consumed') {
       if (res.healthRestored > 0) this.controller.heal(res.healthRestored);
       if (res.staminaRestored > 0) this.controller.restoreStamina(res.staminaRestored);
@@ -2912,6 +3029,7 @@ export class GameEngine {
       if (res.healthRestored > 0) parts.push(`+${res.healthRestored} ${t.health}`);
       if (res.staminaRestored > 0) parts.push(`+${res.staminaRestored} ${t.stamina}`);
       this.callbacks.onWorldNotice(t.usedItemNotice(localizedName, parts));
+      this.emitModInventoryChanged(res.definition.id, -1);
     } else if (res.action === 'equipped') {
       this.sound.playItemPickup(
         res.definition.category === 'weapon' ? 'weapon' : 'resource',
@@ -2919,11 +3037,20 @@ export class GameEngine {
       this.syncEquipmentBonuses();
       this.syncEquippedWeaponFromInventory();
       this.callbacks.onWorldNotice(t.equippedNotice(localizedName));
+      this.emitModEvent('item_equipped', {
+        itemId: res.definition.id,
+        ...(res.definition.category === 'weapon'
+          ? { weaponId: res.definition.id }
+          : {}),
+        equipSlot: res.definition.equipSlot,
+      });
+      this.emitModInventoryChanged(res.definition.id, 0);
     } else if (res.action === 'unequipped') {
       this.sound.playUiClick();
       this.syncEquipmentBonuses();
       this.syncEquippedWeaponFromInventory();
       this.callbacks.onWorldNotice(t.unequippedNotice(localizedName));
+      this.emitModInventoryChanged(res.definition.id, 0);
     }
 
     this.emitInventorySnapshot();
@@ -2965,6 +3092,7 @@ export class GameEngine {
     this.callbacks.onWorldNotice(t.unequippedNotice(localizedName));
     this.emitInventorySnapshot();
     this.emitHud();
+    this.emitModInventoryChanged(unequippedDef.id, 0);
   }
 
   public dropInventorySlot(slotIndex: number, count = 1): void {
@@ -3012,6 +3140,7 @@ export class GameEngine {
     this.callbacks.onWorldNotice(t.droppedNotice(localizedName, res.count));
     this.emitInventorySnapshot();
     this.emitHud();
+    this.emitModInventoryChanged(res.itemId, -res.count);
   }
 
   // ---------------------------------------------------------------------------
@@ -3348,6 +3477,24 @@ export class GameEngine {
     this.callbacks.onWorldNotice(t.buildPlacedNotice(localizedName));
     this.updateBuildPreview();
     this.emitHud();
+    const placedPos = { x: placed.x, y: placed.y, z: placed.z };
+    this.emitModEvent('building_placed', {
+      buildingId: bp.id,
+      structureId: placed.id,
+      position: placedPos,
+      success: true,
+      triggerInstanceId: `build_place:${placed.id}`,
+    });
+    this.emitModEvent('structure_completed', {
+      buildingId: bp.id,
+      structureId: placed.id,
+      position: placedPos,
+      success: true,
+      triggerInstanceId: `build_done:${placed.id}`,
+    });
+    if (this.activeWorldType !== 'creative') {
+      this.emitModInventoryChanged();
+    }
     return true;
   }
 
@@ -3578,6 +3725,7 @@ export class GameEngine {
     this.emitInventorySnapshot();
     this.syncEquippedWeaponFromInventory();
     this.emitHud();
+    this.emitModInventoryChanged(itemId, direction === 'withdraw' ? actual : -actual);
     return true;
   }
 
@@ -3656,6 +3804,16 @@ export class GameEngine {
     const nextName = this.language === 'ar' ? nextBp.nameAr : nextBp.nameEn;
     this.callbacks.onWorldNotice(UI_TEXT[this.language].buildManageUpgradedNotice(nextName));
     this.emitHud();
+    this.emitModEvent('structure_completed', {
+      buildingId: nextBp.id,
+      structureId: st.id,
+      position: { x: st.x, y: st.y, z: st.z },
+      success: true,
+      triggerInstanceId: `upgrade:${st.id}:${nextBp.id}`,
+    });
+    if (this.activeWorldType !== 'creative') {
+      this.emitModInventoryChanged();
+    }
     return true;
   }
 
@@ -3726,6 +3884,22 @@ export class GameEngine {
     }
     this.callbacks.onWorldNotice(t.buildDemolishedNotice);
     this.emitHud();
+    const isContainer = Boolean(bp?.storageCapacity && bp.storageCapacity > 0);
+    const destroyCtx: ModEventContext = {
+      structureId: st.id,
+      buildingId: st.blueprintId,
+      position: { x: st.x, y: st.y, z: st.z },
+      success: true,
+      triggerInstanceId: `destroy:${st.id}`,
+    };
+    this.emitModEvent('structure_destroyed', destroyCtx);
+    this.emitModEvent('object_destroyed', destroyCtx);
+    if (isContainer) {
+      this.emitModEvent('container_destroyed', destroyCtx);
+    }
+    if (bp && this.activeWorldType !== 'creative') {
+      this.emitModInventoryChanged();
+    }
     return true;
   }
 
@@ -4070,6 +4244,27 @@ export class GameEngine {
 
     this.hasUnsavedProgress = true;
     this.emitInventorySnapshot();
+    const harvestPos = { x: st.x, y: st.y, z: st.z };
+    this.emitModEvent('resource_gathered', {
+      itemId: harvested.itemId,
+      resourceKind: harvested.cropId,
+      count: harvested.count,
+      position: harvestPos,
+      success: true,
+    });
+    this.emitModEvent('item_collected', {
+      itemId: harvested.itemId,
+      count: harvested.count,
+      position: harvestPos,
+    });
+    if (grantedSeeds > 0) {
+      this.emitModEvent('item_collected', {
+        itemId: harvested.seedItemId,
+        count: grantedSeeds,
+        position: harvestPos,
+      });
+    }
+    this.emitModInventoryChanged(harvested.itemId, harvested.count);
     this.dialogueEngine.quests.update(this.dialogueBridge, (msg) =>
       this.callbacks.onWorldNotice(msg),
     );
@@ -4394,6 +4589,11 @@ export class GameEngine {
     );
     this.callbacks.onFarmOrVillageStateChange?.();
     this.emitHud();
+    this.emitModEvent('item_collected', {
+      itemId: offer.itemId,
+      count: offer.count,
+    });
+    this.emitModInventoryChanged(offer.itemId, offer.count);
     return true;
   }
 
@@ -4435,6 +4635,7 @@ export class GameEngine {
     this.callbacks.onWorldNotice(t.merchantSoldNotice(itemName, qty, earned));
     this.callbacks.onFarmOrVillageStateChange?.();
     this.emitHud();
+    this.emitModInventoryChanged(itemId, -qty);
     return true;
   }
 
@@ -4503,9 +4704,21 @@ export class GameEngine {
           });
         }
         this.emitHud();
+        if (result.finalAmount > 0) {
+          this.emitModEvent('player_damaged', {
+            damageAmount: result.finalAmount,
+            damageType: packet.damageType,
+            position: {
+              x: this.controller.position.x,
+              y: this.controller.position.y,
+              z: this.controller.position.z,
+            },
+          });
+        }
       },
       onPlayerDefeated: () => {
         this.sound.playPlayerDefeat();
+        this.pendingRespawnEvent = true;
         this.resetPlayerPosition();
         this.combat.resetPlayerAndAggro();
         this.combat.clearVillageDefenseRaiders();
@@ -4535,8 +4748,34 @@ export class GameEngine {
         }
         this.emitHud();
       },
-      onEnemyDefeated: (enemy) => {
+      onEnemyDefeated: (enemy, killMeta) => {
         this.sound.playEnemyDefeat(enemy.position);
+        const causedByPlayer = killMeta?.causedByPlayer ?? true;
+        const isEnv = Boolean(killMeta?.isEnvironmentalDeath);
+        const weaponId =
+          killMeta?.weaponId ??
+          (causedByPlayer ? this.combat?.getEquippedWeapon()?.stats.id : undefined);
+        const killCtx: ModEventContext = {
+          victimEntityId: enemy.id,
+          victimType: enemy.archetype.id,
+          victimModId: enemy.modId,
+          entityCategory: enemy.archetype.isBoss ? 'boss' : 'monster',
+          weaponId,
+          killerId: killMeta?.killerSourceId ?? (causedByPlayer ? this.getLocalModPlayerId() : undefined),
+          causedByPlayer,
+          isEnvironmentalDeath: isEnv,
+          position: { x: enemy.position.x, y: enemy.position.y, z: enemy.position.z },
+          triggerInstanceId: `kill:${enemy.id}:${Math.round(this.elapsed * 100)}`,
+        };
+        this.emitModEvent('entity_killed', killCtx);
+        this.emitModEvent('enemy_killed', killCtx);
+        this.emitModEvent('monster_killed', killCtx);
+        if (enemy.archetype.isBoss) {
+          this.emitModEvent('boss_killed', killCtx);
+        }
+        if (weaponId && causedByPlayer && !isEnv) {
+          this.emitModEvent('entity_killed_with_weapon', killCtx);
+        }
         if (!this.multiplayerSessionActive) {
           const leveledUp = this.awardXpAndCoins(
             enemy.archetype.xpReward,
@@ -4586,6 +4825,20 @@ export class GameEngine {
               this.spawnDustBurst(nearStruct.x, nearStruct.y + 0.8, nearStruct.z, dmgRes.destroyed ? 8 : 3);
               if (dmgRes.destroyed) {
                 this.sound.playObjectRemove({ x: nearStruct.x, y: nearStruct.y, z: nearStruct.z });
+                const bp = getBlueprintById(nearStruct.blueprintId);
+                const isContainer = Boolean(bp?.storageCapacity && bp.storageCapacity > 0);
+                const destroyCtx: ModEventContext = {
+                  structureId: nearStruct.id,
+                  buildingId: nearStruct.blueprintId,
+                  position: { x: nearStruct.x, y: nearStruct.y, z: nearStruct.z },
+                  success: true,
+                  triggerInstanceId: `destroy:${nearStruct.id}`,
+                };
+                this.emitModEvent('structure_destroyed', destroyCtx);
+                this.emitModEvent('object_destroyed', destroyCtx);
+                if (isContainer) {
+                  this.emitModEvent('container_destroyed', destroyCtx);
+                }
               }
             }
           }
@@ -4637,6 +4890,341 @@ export class GameEngine {
       this.modSpawner = this.createModSpawner();
     }
     return this.modSpawner;
+  }
+
+  private getLocalModPlayerId(): string {
+    return this.localMultiplayerPlayerId || 'local-player';
+  }
+
+  private mapModQuestStatus(questId: string): QuestStatus {
+    if (getQuestDefinition(questId)) {
+      return this.dialogueEngine.getQuestStatus(questId);
+    }
+    const storyState = this.storyManager.getQuestState(questId);
+    if (storyState === 'COMPLETED') return 'completed';
+    if (storyState === 'OBJECTIVE_COMPLETED') return 'ready';
+    if (storyState === 'ACTIVE') return 'active';
+    const sideState = this.sideQuestManager.getQuestState(questId);
+    if (sideState === 'COMPLETED') return 'completed';
+    if (sideState === 'READY_TO_TURN_IN') return 'ready';
+    if (sideState === 'ACTIVE') return 'active';
+    return 'available';
+  }
+
+  private getActiveModDefenseBonus(): number {
+    let bonus = 0;
+    for (const ef of this.activeModStatusEffects) {
+      if (ef.effectType === 'defense_boost' && ef.remainingSeconds > 0) {
+        const extra = ef.amount > 0 && ef.amount < 1 ? ef.amount : Math.max(0, (ef.multiplier || 1.25) - 1);
+        bonus = Math.max(bonus, Math.min(0.65, extra));
+      }
+    }
+    return bonus;
+  }
+
+  private applyModStatusEffect(opts: {
+    effectType: ModEventStatusEffectKind;
+    amount?: number;
+    multiplier?: number;
+    durationSeconds?: number;
+  }): boolean {
+    if (!this.controller) return false;
+    if (opts.effectType === 'heal') {
+      this.controller.heal(Math.max(1, opts.amount ?? 25));
+      this.emitHud();
+      return true;
+    }
+    if (opts.effectType === 'stamina') {
+      this.controller.restoreStamina(Math.max(1, opts.amount ?? 30));
+      this.emitHud();
+      return true;
+    }
+    const duration = Math.max(1, Math.min(600, opts.durationSeconds ?? 15));
+    const multiplier = Math.max(0.25, Math.min(4, opts.multiplier ?? 1.25));
+    const amount = opts.amount ?? 0;
+    this.activeModStatusEffects = this.activeModStatusEffects.filter(
+      (e) => e.effectType !== opts.effectType,
+    );
+    this.activeModStatusEffects.push({
+      effectType: opts.effectType,
+      amount,
+      multiplier,
+      remainingSeconds: duration,
+    });
+    this.syncModStatusMultipliers();
+    return true;
+  }
+
+  private syncModStatusMultipliers(): void {
+    let speedMultiplier = 1;
+    let staminaRegenMultiplier = 1;
+    let damageMultiplier = 1;
+    for (const ef of this.activeModStatusEffects) {
+      if (ef.remainingSeconds <= 0) continue;
+      if (ef.effectType === 'speed_boost') {
+        speedMultiplier = Math.max(speedMultiplier, ef.multiplier);
+      } else if (ef.effectType === 'stamina_regen') {
+        staminaRegenMultiplier = Math.max(staminaRegenMultiplier, ef.multiplier);
+      } else if (ef.effectType === 'damage_boost') {
+        damageMultiplier = Math.max(damageMultiplier, ef.multiplier);
+      }
+    }
+    this.controller?.setExternalStatusMultipliers(
+      speedMultiplier !== 1 || staminaRegenMultiplier !== 1
+        ? { speedMultiplier, staminaRegenMultiplier }
+        : null,
+    );
+    this.combat?.setExternalDamageMultiplier(damageMultiplier);
+    this.syncEquipmentBonuses();
+  }
+
+  private updateModStatusEffects(dt: number): void {
+    if (this.activeModStatusEffects.length === 0 || !this.controller) return;
+    let expiredAny = false;
+    for (let i = this.activeModStatusEffects.length - 1; i >= 0; i--) {
+      const ef = this.activeModStatusEffects[i];
+      if (ef.effectType === 'heal_over_time' && ef.remainingSeconds > 0) {
+        const perSec = ef.amount > 0 ? ef.amount : 4;
+        this.controller.heal(perSec * dt);
+      }
+      ef.remainingSeconds -= dt;
+      if (ef.remainingSeconds <= 0) {
+        this.activeModStatusEffects.splice(i, 1);
+        expiredAny = true;
+      }
+    }
+    if (expiredAny) {
+      this.syncModStatusMultipliers();
+    }
+  }
+
+  private createModEventBridge(): ModEventBridge {
+    return {
+      getWorldId: () => this.activeSaveSlot || (this.multiplayerSessionActive ? `mp-${this.world?.seed ?? 0}` : 'world'),
+      getPlayerPosition: () => {
+        const p = this.controller?.position;
+        return p ? { x: p.x, y: p.y, z: p.z } : { x: 0, y: 0, z: 0 };
+      },
+      getPlayerLevel: () => this.playerLevel,
+      getPlayerHealth: () => ({
+        current: this.controller?.getHealth() ?? 100,
+        max: this.controller?.getMaxHealth() ?? 100,
+      }),
+      getBiomeAt: (x, z) => getBiomeAt(x, z),
+      getTimeOfDay: () => ({
+        hour: this.timeManager.getWorldHours(),
+        period: this.timeManager.getRoutinePeriod(),
+      }),
+      getWeather: () => this.weatherManager.getSnapshot().currentState,
+      getItemCount: (itemId) => this.inventoryManager.getItemCount(itemId),
+      getQuestStatus: (questId) => this.mapModQuestStatus(questId),
+      getLanguage: () => this.language,
+      resolveLocalization: (key) =>
+        getModManager().resolveLocalizationOverride(this.language, key),
+      giveItem: (itemId, count, equip) => {
+        const def = this.itemManager.getItem(itemId);
+        if (!def || count <= 0) {
+          return { added: 0 };
+        }
+        const qty = Math.max(1, Math.floor(count));
+        let added = 0;
+        for (let q = qty; q >= 1; q--) {
+          if (this.inventoryManager.canAccept(itemId, q)) {
+            this.inventoryManager.addItem(itemId, q);
+            added = q;
+            break;
+          }
+        }
+        if (added === 0) {
+          return { added: 0, itemName: this.itemManager.getName(itemId, this.language) };
+        }
+        let equipped = false;
+        if (equip) {
+          const equipRes = this.inventoryManager.equipItemById(itemId);
+          equipped = equipRes.action === 'equipped';
+        }
+        this.hasUnsavedProgress = true;
+        this.syncEquipmentBonuses();
+        this.syncEquippedWeaponFromInventory();
+        this.emitInventorySnapshot();
+        this.emitHud();
+        return {
+          added,
+          equipped,
+          itemName: this.itemManager.getName(itemId, this.language),
+        };
+      },
+      spawnWorldPickup: (opts) => {
+        if (!this.world) return false;
+        const def = this.itemManager.getItem(opts.itemId);
+        const label = def
+          ? this.itemManager.getName(def.id, this.language)
+          : opts.itemId;
+        const spawned = this.world.spawnConfiguredPickup({
+          itemId: opts.itemId,
+          count: Math.max(1, Math.floor(opts.count)),
+          label,
+          x: opts.x,
+          y: opts.y,
+          z: opts.z,
+          modId: opts.modId,
+          perPlayer: opts.perPlayer,
+        });
+        return Boolean(spawned);
+      },
+      giveXp: (amount) => {
+        const prev = this.playerLevel;
+        const leveledUp = this.awardXpAndCoins(Math.max(0, Math.round(amount)), 0);
+        this.hasUnsavedProgress = true;
+        return {
+          leveledUp: leveledUp || this.playerLevel > prev,
+          newLevel: this.playerLevel,
+        };
+      },
+      giveCurrency: (amount) => {
+        const gain = Math.round(amount);
+        if (!Number.isFinite(gain)) return false;
+        this.playerCoins = Math.max(0, Math.min(1_000_000, this.playerCoins + gain));
+        this.hasUnsavedProgress = true;
+        this.emitHud();
+        return true;
+      },
+      giveReputation: (amount, villageId) => {
+        if (!this.world) return false;
+        const pos = this.controller?.position ?? { x: 0, z: 0 };
+        const targetVillage =
+          (villageId
+            ? this.world.village.villages.find((v) => v.id === villageId)
+            : undefined) ??
+          this.findNearestVillageSite(pos.x, pos.z, 500) ??
+          this.world.village.villages[0];
+        if (!targetVillage) return false;
+        this.world.villageDev.addVillageProgress(targetVillage.id, 0, Math.round(amount));
+        this.hasUnsavedProgress = true;
+        this.callbacks.onFarmOrVillageStateChange?.();
+        return true;
+      },
+      unlockRecipe: (recipeId) => {
+        if (!this.craftingManager.getRecipe(recipeId)) return false;
+        this.craftingManager.unlockRecipe(recipeId);
+        this.hasUnsavedProgress = true;
+        this.emitHud();
+        return true;
+      },
+      startQuest: (questId) => {
+        if (getQuestDefinition(questId)) {
+          return this.dialogueEngine.quests.acceptQuest(questId, this.dialogueBridge);
+        }
+        if (this.storyManager.startQuest(questId, (m) => this.callbacks.onWorldNotice(m))) {
+          return true;
+        }
+        return this.sideQuestManager.acceptQuest(
+          questId,
+          this.sideQuestBridge,
+          (m) => this.callbacks.onWorldNotice(m),
+        );
+      },
+      completeQuest: (questId) => {
+        if (getQuestDefinition(questId)) {
+          return this.dialogueEngine.quests.completeQuest(questId, this.dialogueBridge, {
+            consumeItem: this.dialogueBridge.consumeItem,
+            giveItem: this.dialogueBridge.giveItem,
+            grantRewards: this.dialogueBridge.grantRewards,
+            notify: this.dialogueBridge.notify,
+          });
+        }
+        if (
+          this.storyManager.completeQuest(
+            questId,
+            this.storyBridge,
+            (m) => this.callbacks.onWorldNotice(m),
+          )
+        ) {
+          return true;
+        }
+        return this.sideQuestManager.completeQuest(
+          questId,
+          this.sideQuestBridge,
+          (m) => this.callbacks.onWorldNotice(m),
+        );
+      },
+      showNotification: (message) => {
+        this.callbacks.onWorldNotice(message);
+      },
+      playSound: (soundId) => {
+        const pos = this.controller?.position;
+        if (this.sound.playCue(soundId, pos ? { position: pos } : undefined)) {
+          return true;
+        }
+        const modSound =
+          getAudioManager().getModSoundDescriptor(soundId) ??
+          getModManager().getContentStore().getModSound(soundId);
+        if (!modSound) return false;
+        if (typeof Audio !== 'undefined' && modSound.audioPath) {
+          void getModManager()
+            .resolveAssetDataUrl(modSound.audioPath)
+            .then((url) => {
+              if (!url) return;
+              const audio = new Audio(url);
+              audio.volume = Math.max(0, Math.min(1, modSound.volume ?? 0.8));
+              void audio.play().catch(() => {});
+            })
+            .catch(() => {});
+        }
+        return true;
+      },
+      spawnEntity: (opts) => {
+        return this.getOrCreateModSpawner().spawnDynamicEntity(opts);
+      },
+      startDialogue: (npcId, treeId) => {
+        if (!this.world || !this.controller) return false;
+        const profile = this.world.npcs.engageForDialogue(npcId, this.controller.position);
+        if (!profile) return false;
+        this.activeDialogueNpcId = npcId;
+        const customTree = this.world.npcs.getCustomDialogueTree(npcId);
+        const resolvedTree = customTree && treeId ? { ...customTree, id: treeId } : customTree;
+        const snapshot = this.dialogueEngine.startDialogue(profile, resolvedTree);
+        this.callbacks.onDialogueChange(snapshot);
+        return true;
+      },
+      applyStatusEffect: (opts) => this.applyModStatusEffect(opts),
+    };
+  }
+
+  private getOrCreateModEventManager(): ModEventManager {
+    if (!this.modEventManager) {
+      this.modEventManager = new ModEventManager(
+        getModManager(),
+        getModPlayerEventStore(),
+        this.createModEventBridge(),
+      );
+    }
+    return this.modEventManager;
+  }
+
+  private emitModEvent(triggerType: ModEventTriggerType, context: ModEventContext = {}): void {
+    if (!this.modEventManager?.isInitialized()) return;
+    this.modEventManager.emit(triggerType, {
+      playerId: this.getLocalModPlayerId(),
+      ...context,
+    });
+  }
+
+  private emitModInventoryChanged(itemId?: string, delta?: number): void {
+    if (!this.modEventManager?.isInitialized()) return;
+    this.modEventManager.emit('inventory_changed', {
+      playerId: this.getLocalModPlayerId(),
+      ...(itemId ? { itemId } : {}),
+      ...(typeof delta === 'number' ? { inventoryDelta: delta } : {}),
+    });
+    if (!this.isRetryingPendingModRewards && this.modEventManager.getPendingRewardCount() > 0) {
+      this.isRetryingPendingModRewards = true;
+      try {
+        this.modEventManager.retryPendingRewards('inventory_changed');
+      } finally {
+        this.isRetryingPendingModRewards = false;
+      }
+    }
   }
 
   private sendHostModSpawnsSync(force = false): void {
@@ -4748,6 +5336,7 @@ export class GameEngine {
       this.entityRegistry.markQuestCancelled(questId);
       this.combat?.releaseQuestTargets(questId);
       this.syncAuthoritativeEntities(true);
+      this.emitModEvent('quest_failed', { questId, questStatus: 'available' });
     });
     this.dialogueEngine.quests.setOnQuestUpdated((questId, status, stepIndex) => {
       if (status === 'completed') {
@@ -4759,6 +5348,26 @@ export class GameEngine {
       this.syncAuthoritativeEntities(true);
 
       const questDef = getQuestDefinition(questId);
+      if (status === 'active') {
+        this.emitModEvent('quest_started', {
+          questId,
+          ...(questDef?.giverNpcId ? { npcId: questDef.giverNpcId } : {}),
+          questStatus: status,
+        });
+      } else if (status === 'completed') {
+        this.emitModEvent('quest_completed', {
+          questId,
+          ...(questDef?.giverNpcId ? { npcId: questDef.giverNpcId } : {}),
+          questStatus: status,
+        });
+        if (questDef?.giverNpcId) {
+          this.emitModEvent('npc_quest_completed', {
+            questId,
+            npcId: questDef.turnInNpcId ?? questDef.giverNpcId,
+            questStatus: status,
+          });
+        }
+      }
       if (!this.multiplayerSessionActive) {
         if (status === 'completed') {
           ProfileManager.recordGameplayDelta({
@@ -4819,7 +5428,31 @@ export class GameEngine {
       },
     });
     this.world.wildlife.setCallbacks({
-      onAnimalKilled: (animalId, species, position, drops) => {
+      onAnimalKilled: (animalId, species, position, drops, killMeta) => {
+        const causedByPlayer = killMeta?.causedByPlayer ?? false;
+        const isEnv = Boolean(killMeta?.isEnvironmentalDeath);
+        const weaponId =
+          killMeta?.weaponId ??
+          (causedByPlayer ? this.combat?.getEquippedWeapon()?.stats.id : undefined);
+        const killCtx: ModEventContext = {
+          victimEntityId: animalId,
+          victimType: species,
+          victimModId: killMeta?.modId,
+          entityCategory: 'animal',
+          weaponId,
+          killerId:
+            killMeta?.killerSourceId ??
+            (causedByPlayer ? this.getLocalModPlayerId() : undefined),
+          causedByPlayer,
+          isEnvironmentalDeath: isEnv,
+          position: { x: position.x, y: position.y, z: position.z },
+          triggerInstanceId: `kill:${animalId}:${Math.round(this.elapsed * 100)}`,
+        };
+        this.emitModEvent('entity_killed', killCtx);
+        this.emitModEvent('animal_killed', killCtx);
+        if (weaponId && causedByPlayer && !isEnv) {
+          this.emitModEvent('entity_killed_with_weapon', killCtx);
+        }
         if (this.multiplayerSessionActive) {
           if (this.isLocalMultiplayerHost()) {
             for (let i = 0; i < drops.length; i++) {
@@ -4870,7 +5503,7 @@ export class GameEngine {
           xpGained: 12,
         });
       },
-      onPredatorHitPlayer: (_animalId, _species, damage) => {
+      onPredatorHitPlayer: (animalId, _species, damage) => {
         if (!this.controller || !this.combat) return;
         if (this.activeWorldType === 'creative' || this.isSleeping) return;
         const res = this.combat.playerHealth.applyDamage(damage, false, false);
@@ -4883,9 +5516,22 @@ export class GameEngine {
             sourceKind: 'animal',
           });
         }
+        if (res.finalAmount > 0) {
+          this.emitModEvent('player_damaged', {
+            damageAmount: res.finalAmount,
+            damageType: 'physical',
+            entityId: animalId,
+            position: {
+              x: this.controller.position.x,
+              y: this.controller.position.y,
+              z: this.controller.position.z,
+            },
+          });
+        }
         this.emitHud();
         if (res.killed || this.controller.getHealth() <= 0) {
           this.sound.playPlayerDefeat();
+          this.pendingRespawnEvent = true;
           this.resetPlayerPosition();
           this.combat.resetPlayerAndAggro();
           if (this.multiplayerSessionActive && this.multiplayerService) {
@@ -5130,6 +5776,7 @@ export class GameEngine {
         npcStates: this.world.npcs.exportSaveNpcStates(),
         playerBuildings: mergedBuildings,
         ...(this.modSpawner ? { modSpawnState: this.modSpawner.exportSaveState() } : {}),
+        ...(this.modEventManager ? { modEventState: this.modEventManager.exportWorldState() } : {}),
       },
       camera: {
         ...this.cameraSettings,
@@ -5142,6 +5789,7 @@ export class GameEngine {
         footstepVolume: this.footstepVolume,
       },
       modMetadata: mergedModMetadata,
+      playerModEventState: getModPlayerEventStore().exportSnapshot(),
     };
   }
 
@@ -5799,6 +6447,10 @@ export class GameEngine {
             this.callbacks.onWorldNotice(
               `${UI_TEXT[this.language].profileStatLevel} ${this.playerLevel}!`,
             );
+            this.emitModEvent('player_level_reached', {
+              playerLevel: this.playerLevel,
+              playerId: this.getLocalModPlayerId(),
+            });
           }
           this.emitHud();
         }
@@ -5883,6 +6535,7 @@ export class GameEngine {
             }
             if (ev.vitals.isDead) {
               this.sound.playPlayerDefeat();
+              this.pendingRespawnEvent = true;
               this.resetPlayerPosition();
               this.combat.resetPlayerAndAggro();
               this.multiplayerService?.sendGameEvent('player:respawn', {});
@@ -7448,6 +8101,17 @@ export class GameEngine {
       lifecycle: 'world_load',
       isRemoteClient: false,
     });
+    if (data.playerModEventState) {
+      getModPlayerEventStore().mergeSnapshot(data.playerModEventState);
+    }
+    this.getOrCreateModEventManager().initializeForWorld({
+      worldId: this.activeSaveSlot || data.meta.slotId || 'world',
+      lifecycle: 'world_load',
+      localPlayerId: this.getLocalModPlayerId(),
+      isMultiplayer: false,
+      isHost: true,
+      savedWorldState: data.world.modEventState,
+    });
     this.emitInventorySnapshot();
     this.emitHud();
   }
@@ -7663,6 +8327,13 @@ export class GameEngine {
       worldSeed: this.world.seed,
       lifecycle: 'new_world',
       isRemoteClient: false,
+    });
+    this.getOrCreateModEventManager().initializeForWorld({
+      worldId,
+      lifecycle: 'new_world',
+      localPlayerId: this.getLocalModPlayerId(),
+      isMultiplayer: false,
+      isHost: true,
     });
 
     // Save initial world state immediately so it appears in Load World & Continue
@@ -8062,6 +8733,18 @@ export class GameEngine {
       this.sendHostModSpawnsSync(true);
     }
 
+    if (saved?.playerModEventState) {
+      getModPlayerEventStore().mergeSnapshot(saved.playerModEventState);
+    }
+    this.getOrCreateModEventManager().initializeForWorld({
+      worldId: this.hostLanWorldSlotId || `mp-${this.world.seed}`,
+      lifecycle: saved ? 'world_load' : 'new_world',
+      localPlayerId: this.getLocalModPlayerId(),
+      isMultiplayer: true,
+      isHost: isHostRole,
+      savedWorldState: saved?.world.modEventState,
+    });
+
     if (isLanHost && this.hostLanWorldSlotId) {
       this.saveManager.saveToSlot(
         this.hostLanWorldSlotId,
@@ -8143,6 +8826,17 @@ export class GameEngine {
       this.timeManager.getWorldHours(),
     );
     this.emitHud();
+    if (this.pendingRespawnEvent) {
+      this.pendingRespawnEvent = false;
+      this.emitModEvent('player_respawn', {
+        position: {
+          x: this.controller.position.x,
+          y: this.controller.position.y,
+          z: this.controller.position.z,
+        },
+        triggerInstanceId: `respawn:${this.getLocalModPlayerId()}:${Math.round(this.elapsed * 100)}`,
+      });
+    }
   }
 
   private syncWorldTimeImmediate(): void {
@@ -9186,6 +9880,9 @@ export class GameEngine {
       this.isVillageClearanceCb,
     );
     this.modSpawner?.update(dt, this.elapsed);
+    this.updateModStatusEffects(dt);
+    this.modEventManager?.update(dt);
+    this.modEventManager?.updatePlayerPosition(px, this.controller.position.y, pz);
     if (this.multiplayerSessionActive && this.isLocalMultiplayerHost()) {
       this.modSpawnSyncCheckTimer += dt;
       if (this.modSpawnSyncCheckTimer >= 0.75) {
@@ -9932,6 +10629,11 @@ export class GameEngine {
       );
       if (profile) {
         this.activeDialogueNpcId = target.id;
+        this.emitModEvent('npc_interaction', {
+          npcId: target.id,
+          npcModId: profile.modId,
+          position: { x: target.x, y: target.y, z: target.z },
+        });
         if (this.multiplayerSessionActive) {
           this.multiplayerService?.sendNpcDialogueState?.(target.id, 'talking');
         }
@@ -10006,6 +10708,27 @@ export class GameEngine {
         });
       }
       this.emitInventorySnapshot();
+      const herbPos = { x: target.x, y: target.y, z: target.z };
+      this.emitModEvent('item_collected', {
+        itemId: 'meadow-herb',
+        count: 1,
+        position: herbPos,
+      });
+      this.emitModEvent('resource_gathered', {
+        itemId: 'meadow-herb',
+        resourceKind: 'meadow-herb',
+        count: 1,
+        position: herbPos,
+        success: true,
+      });
+      if (herbSeedRoll) {
+        this.emitModEvent('item_collected', {
+          itemId: herbSeedRoll,
+          count: 1,
+          position: herbPos,
+        });
+      }
+      this.emitModInventoryChanged('meadow-herb', 1);
       this.nearbyInteractable = null;
       this.lastNearbyId = null;
       this.dialogueEngine.quests.update(this.dialogueBridge, (msg) =>
@@ -10061,6 +10784,12 @@ export class GameEngine {
       }
       this.syncEquippedWeaponFromInventory();
       this.emitInventorySnapshot();
+      this.emitModEvent('item_collected', {
+        itemId: target.itemId,
+        count: qty,
+        position: { x: target.x, y: target.y, z: target.z },
+      });
+      this.emitModInventoryChanged(target.itemId, qty);
       this.nearbyInteractable = null;
       this.lastNearbyId = null;
       if (target.id.startsWith('story-clue-')) {
@@ -10211,10 +10940,65 @@ export class GameEngine {
       }
       this.spawnDustBurst(target.x, target.y + 0.5, target.z, 6);
       this.emitInventorySnapshot();
+      const resPos = { x: target.x, y: target.y, z: target.z };
+      const toolUsedId = bestTool?.definition.id ?? matchingToolKind ?? undefined;
+      this.emitModEvent('resource_gathered', {
+        itemId: res.itemId,
+        resourceKind: res.itemId,
+        blockType: res.itemId,
+        toolId: toolUsedId,
+        count: finalCount,
+        position: resPos,
+        success: true,
+        triggerInstanceId: `gather:${target.id}:${Math.round(this.elapsed * 100)}`,
+      });
+      this.emitModEvent('item_collected', {
+        itemId: res.itemId,
+        count: finalCount,
+        position: resPos,
+      });
+      if (grantedBonusSeedId) {
+        this.emitModEvent('item_collected', {
+          itemId: grantedBonusSeedId,
+          count: 1,
+          position: resPos,
+        });
+      }
       if (res.depleted) {
+        const destroyCtx: ModEventContext = {
+          entityId: target.id,
+          blockType: res.itemId,
+          resourceKind: res.itemId,
+          toolId: toolUsedId,
+          position: resPos,
+          success: true,
+          triggerInstanceId: `destroy:${target.id}:${Math.round(this.elapsed * 100)}`,
+        };
+        this.emitModEvent('object_destroyed', destroyCtx);
+        if (res.itemId === 'wood' || res.itemId === 'driftwood') {
+          this.emitModEvent('tree_chopped', destroyCtx);
+        } else if (
+          res.itemId === 'copper-ore' ||
+          res.itemId === 'iron-ore' ||
+          res.itemId === 'silver-ore' ||
+          res.itemId === 'gold-ore' ||
+          res.itemId === 'coal' ||
+          res.itemId === 'rare-mineral'
+        ) {
+          this.emitModEvent('ore_mined', destroyCtx);
+          this.emitModEvent('block_broken', destroyCtx);
+        } else if (
+          res.itemId === 'stone' ||
+          res.itemId === 'sand' ||
+          res.itemId === 'clay' ||
+          res.itemId === 'gravel'
+        ) {
+          this.emitModEvent('block_broken', destroyCtx);
+        }
         this.nearbyInteractable = null;
         this.lastNearbyId = null;
       }
+      this.emitModInventoryChanged(res.itemId, finalCount);
       this.dialogueEngine.quests.update(this.dialogueBridge, (msg) =>
         this.callbacks.onWorldNotice(msg),
       );
@@ -10292,6 +11076,14 @@ export class GameEngine {
       this.spawnDustBurst(target.x, target.y + 0.6, target.z, 7);
       this.emitInventorySnapshot();
       this.syncEquippedWeaponFromInventory();
+      for (const entry of res.loot) {
+        this.emitModEvent('item_collected', {
+          itemId: entry.itemId,
+          count: entry.count,
+          position: { x: target.x, y: target.y, z: target.z },
+        });
+      }
+      this.emitModInventoryChanged();
       this.nearbyInteractable = null;
       this.lastNearbyId = null;
       this.dialogueEngine.quests.update(this.dialogueBridge, (msg) =>
@@ -10385,6 +11177,12 @@ export class GameEngine {
         this.inventoryManager.addItem(prod.itemId, prod.count);
         this.hasUnsavedProgress = true;
         this.emitInventorySnapshot();
+        this.emitModEvent('item_collected', {
+          itemId: prod.itemId,
+          count: prod.count,
+          position: { x: target.x, y: target.y, z: target.z },
+        });
+        this.emitModInventoryChanged(prod.itemId, prod.count);
         this.dialogueEngine.quests.update(this.dialogueBridge, (msg) =>
           this.callbacks.onWorldNotice(msg),
         );

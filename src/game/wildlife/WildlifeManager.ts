@@ -87,12 +87,20 @@ const SPECIES_COLOR_PALETTES: Record<AnimalSpecies, number[]> = {
 const _dummy = new THREE.Object3D();
 const _tempColor = new THREE.Color();
 
+export interface AnimalKillMetadata {
+  killerSourceId?: string;
+  weaponId?: string;
+  causedByPlayer: boolean;
+  isEnvironmentalDeath: boolean;
+}
+
 export interface WildlifeCallbacks {
   onAnimalKilled?: (
     animalId: string,
     species: AnimalSpecies,
     position: THREE.Vector3,
     drops: AnimalLootDrop[],
+    killMeta?: AnimalKillMetadata,
   ) => void;
   onPredatorHitPlayer?: (
     animalId: string,
@@ -865,7 +873,27 @@ export class WildlifeManager {
       if (res.killed) {
         this.killedAnimalIds.add(a.id);
         const drops = (ANIMAL_DROP_TABLES[a.species] ?? []).map((d) => ({ ...d }));
-        this.callbacks.onAnimalKilled?.(a.id, a.species, a.position.clone(), drops);
+        const causedByPlayer = Boolean(
+          attackerId && (attackerId === 'player' || attackerId.startsWith('player:')),
+        );
+        const weaponId =
+          attackerId && attackerId.startsWith('player:')
+            ? attackerId.slice('player:'.length)
+            : undefined;
+        const isEnvironmentalDeath = Boolean(
+          !causedByPlayer &&
+            attackerId &&
+            (attackerId.startsWith('env') ||
+              attackerId === 'environment' ||
+              attackerId === 'fall' ||
+              attackerId === 'water'),
+        );
+        this.callbacks.onAnimalKilled?.(a.id, a.species, a.position.clone(), drops, {
+          killerSourceId: attackerId,
+          weaponId,
+          causedByPlayer,
+          isEnvironmentalDeath,
+        });
         return { hit: true, killed: true, species: a.species, drops };
       }
 
@@ -907,7 +935,16 @@ export class WildlifeManager {
     if (justKilled) {
       const drops = (ANIMAL_DROP_TABLES[a.species] ?? []).map((d) => ({ ...d }));
       if (spawnDrops) {
-        this.callbacks.onAnimalKilled?.(a.id, a.species, a.position.clone(), drops);
+        const weaponId =
+          attackerId && attackerId.startsWith('player:')
+            ? attackerId.slice('player:'.length)
+            : undefined;
+        this.callbacks.onAnimalKilled?.(a.id, a.species, a.position.clone(), drops, {
+          killerSourceId: attackerId,
+          weaponId,
+          causedByPlayer: Boolean(attackerId),
+          isEnvironmentalDeath: false,
+        });
       }
       return { hit: true, killed: true, justKilled: true, species: a.species, drops };
     }

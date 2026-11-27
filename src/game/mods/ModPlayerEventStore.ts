@@ -9,10 +9,25 @@ export interface PlayerModAchievementRecord {
   unlockedAt: number;
 }
 
+export interface PendingModRewardRecord {
+  id: string;
+  modId: string;
+  eventId: string;
+  fullEventId: string;
+  playerScopeId: string;
+  worldId: string;
+  items: Array<{ itemId: string; count: number; equip?: boolean }>;
+  createdAt: number;
+  attempts: number;
+}
+
 export interface SavedPlayerModEventState {
   version: number;
   executedPlayerEvents: Record<string, number>;
+  executedPlayerWorldEvents?: Record<string, number>;
+  playerCooldowns?: Record<string, number>;
   unlockedAchievements: Record<string, PlayerModAchievementRecord>;
+  pendingRewards?: PendingModRewardRecord[];
 }
 
 const STORAGE_KEY = 'woa_mod_player_event_store_v1';
@@ -21,7 +36,10 @@ function createEmptyState(): SavedPlayerModEventState {
   return {
     version: 1,
     executedPlayerEvents: {},
+    executedPlayerWorldEvents: {},
+    playerCooldowns: {},
     unlockedAchievements: {},
+    pendingRewards: [],
   };
 }
 
@@ -59,6 +77,22 @@ export class ModPlayerEventStore {
           }
         }
       }
+      const executedWorld: Record<string, number> = {};
+      if (obj.executedPlayerWorldEvents && typeof obj.executedPlayerWorldEvents === 'object' && !Array.isArray(obj.executedPlayerWorldEvents)) {
+        for (const [k, v] of Object.entries(obj.executedPlayerWorldEvents as Record<string, unknown>)) {
+          if (typeof v === 'number' && Number.isFinite(v) && v >= 0 && k.length > 0 && k.length <= 320) {
+            executedWorld[k] = v;
+          }
+        }
+      }
+      const cooldowns: Record<string, number> = {};
+      if (obj.playerCooldowns && typeof obj.playerCooldowns === 'object' && !Array.isArray(obj.playerCooldowns)) {
+        for (const [k, v] of Object.entries(obj.playerCooldowns as Record<string, unknown>)) {
+          if (typeof v === 'number' && Number.isFinite(v) && v >= 0 && k.length > 0 && k.length <= 320) {
+            cooldowns[k] = v;
+          }
+        }
+      }
       const achievements: Record<string, PlayerModAchievementRecord> = {};
       if (obj.unlockedAchievements && typeof obj.unlockedAchievements === 'object' && !Array.isArray(obj.unlockedAchievements)) {
         for (const [k, v] of Object.entries(obj.unlockedAchievements as Record<string, unknown>)) {
@@ -78,10 +112,55 @@ export class ModPlayerEventStore {
           };
         }
       }
+      const pendingRewards: PendingModRewardRecord[] = [];
+      if (Array.isArray(obj.pendingRewards)) {
+        for (const rawPend of obj.pendingRewards.slice(0, 128)) {
+          if (!rawPend || typeof rawPend !== 'object' || Array.isArray(rawPend)) continue;
+          const p = rawPend as Record<string, unknown>;
+          if (
+            typeof p.id !== 'string' ||
+            typeof p.modId !== 'string' ||
+            typeof p.fullEventId !== 'string' ||
+            typeof p.worldId !== 'string' ||
+            !Array.isArray(p.items)
+          ) {
+            continue;
+          }
+          const items = p.items
+            .filter((it): it is { itemId: string; count: number; equip?: boolean } =>
+              Boolean(
+                it &&
+                  typeof it === 'object' &&
+                  typeof (it as { itemId?: unknown }).itemId === 'string' &&
+                  typeof (it as { count?: unknown }).count === 'number',
+              ),
+            )
+            .map((it) => ({
+              itemId: it.itemId,
+              count: Math.max(1, Math.floor(it.count)),
+              ...(typeof it.equip === 'boolean' ? { equip: it.equip } : {}),
+            }));
+          if (items.length === 0) continue;
+          pendingRewards.push({
+            id: p.id,
+            modId: p.modId,
+            eventId: typeof p.eventId === 'string' ? p.eventId : p.fullEventId,
+            fullEventId: p.fullEventId,
+            playerScopeId: typeof p.playerScopeId === 'string' ? p.playerScopeId : 'local-player',
+            worldId: p.worldId,
+            items,
+            createdAt: typeof p.createdAt === 'number' && Number.isFinite(p.createdAt) ? p.createdAt : Date.now(),
+            attempts: typeof p.attempts === 'number' && Number.isFinite(p.attempts) ? p.attempts : 0,
+          });
+        }
+      }
       this.state = {
         version: 1,
         executedPlayerEvents: executed,
+        executedPlayerWorldEvents: executedWorld,
+        playerCooldowns: cooldowns,
         unlockedAchievements: achievements,
+        pendingRewards,
       };
     } catch {
       this.state = createEmptyState();
@@ -102,6 +181,10 @@ export class ModPlayerEventStore {
     return `${playerScopeId}::${fullEventId}`;
   }
 
+  private buildWorldExecutionKey(playerScopeId: string, worldId: string, fullEventId: string): string {
+    return `${playerScopeId}::${worldId}::${fullEventId}`;
+  }
+
   public hasExecutedForPlayer(playerScopeId: string, fullEventId: string): boolean {
     this.ensureLoaded();
     const key = this.buildExecutionKey(playerScopeId, fullEventId);
@@ -118,6 +201,92 @@ export class ModPlayerEventStore {
     this.ensureLoaded();
     const key = this.buildExecutionKey(playerScopeId, fullEventId);
     this.state.executedPlayerEvents[key] = (this.state.executedPlayerEvents[key] ?? 0) + 1;
+    this.persist();
+  }
+
+  public hasExecutedForPlayerInWorld(
+    playerScopeId: string,
+    worldId: string,
+    fullEventId: string,
+  ): boolean {
+    this.ensureLoaded();
+    const key = this.buildWorldExecutionKey(playerScopeId, worldId, fullEventId);
+    return ((this.state.executedPlayerWorldEvents ?? {})[key] ?? 0) > 0;
+  }
+
+  public getExecutionCountForPlayerInWorld(
+    playerScopeId: string,
+    worldId: string,
+    fullEventId: string,
+  ): number {
+    this.ensureLoaded();
+    const key = this.buildWorldExecutionKey(playerScopeId, worldId, fullEventId);
+    return (this.state.executedPlayerWorldEvents ?? {})[key] ?? 0;
+  }
+
+  public markExecutedForPlayerInWorld(
+    playerScopeId: string,
+    worldId: string,
+    fullEventId: string,
+  ): void {
+    this.ensureLoaded();
+    if (!this.state.executedPlayerWorldEvents) {
+      this.state.executedPlayerWorldEvents = {};
+    }
+    const key = this.buildWorldExecutionKey(playerScopeId, worldId, fullEventId);
+    this.state.executedPlayerWorldEvents[key] =
+      (this.state.executedPlayerWorldEvents[key] ?? 0) + 1;
+    this.persist();
+  }
+
+  public getLastCooldownMs(playerScopeId: string, worldId: string, fullEventId: string): number {
+    this.ensureLoaded();
+    const key = this.buildWorldExecutionKey(playerScopeId, worldId, fullEventId);
+    return (this.state.playerCooldowns ?? {})[key] ?? 0;
+  }
+
+  public setLastCooldownMs(
+    playerScopeId: string,
+    worldId: string,
+    fullEventId: string,
+    timestampMs: number,
+  ): void {
+    this.ensureLoaded();
+    if (!this.state.playerCooldowns) {
+      this.state.playerCooldowns = {};
+    }
+    const key = this.buildWorldExecutionKey(playerScopeId, worldId, fullEventId);
+    this.state.playerCooldowns[key] = timestampMs;
+    this.persist();
+  }
+
+  public addPendingReward(entry: PendingModRewardRecord): void {
+    this.ensureLoaded();
+    const list = this.state.pendingRewards ?? [];
+    if (list.some((r) => r.id === entry.id)) return;
+    this.state.pendingRewards = [...list.slice(-99), entry];
+    this.persist();
+  }
+
+  public getPendingRewards(worldId?: string, playerScopeId?: string): PendingModRewardRecord[] {
+    this.ensureLoaded();
+    return (this.state.pendingRewards ?? []).filter(
+      (r) =>
+        (!worldId || r.worldId === worldId) &&
+        (!playerScopeId || r.playerScopeId === playerScopeId),
+    );
+  }
+
+  public replacePendingRewardsForWorld(
+    worldId: string,
+    playerScopeId: string,
+    nextWorldRewards: PendingModRewardRecord[],
+  ): void {
+    this.ensureLoaded();
+    const others = (this.state.pendingRewards ?? []).filter(
+      (r) => !(r.worldId === worldId && r.playerScopeId === playerScopeId),
+    );
+    this.state.pendingRewards = [...others, ...nextWorldRewards];
     this.persist();
   }
 
@@ -166,7 +335,10 @@ export class ModPlayerEventStore {
     return {
       version: 1,
       executedPlayerEvents: { ...this.state.executedPlayerEvents },
+      executedPlayerWorldEvents: { ...(this.state.executedPlayerWorldEvents ?? {}) },
+      playerCooldowns: { ...(this.state.playerCooldowns ?? {}) },
       unlockedAchievements: { ...this.state.unlockedAchievements },
+      pendingRewards: [...(this.state.pendingRewards ?? [])],
     };
   }
 
@@ -178,9 +350,65 @@ export class ModPlayerEventStore {
       this.state = {
         version: 1,
         executedPlayerEvents: { ...(snapshot.executedPlayerEvents ?? {}) },
+        executedPlayerWorldEvents: { ...(snapshot.executedPlayerWorldEvents ?? {}) },
+        playerCooldowns: { ...(snapshot.playerCooldowns ?? {}) },
         unlockedAchievements: { ...(snapshot.unlockedAchievements ?? {}) },
+        pendingRewards: Array.isArray(snapshot.pendingRewards)
+          ? [...snapshot.pendingRewards]
+          : [],
       };
     }
+    this.persist();
+  }
+
+  public mergeSnapshot(snapshot?: SavedPlayerModEventState | null): void {
+    if (!snapshot) return;
+    this.ensureLoaded();
+    for (const [k, v] of Object.entries(snapshot.executedPlayerEvents ?? {})) {
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+        this.state.executedPlayerEvents[k] = Math.max(
+          this.state.executedPlayerEvents[k] ?? 0,
+          v,
+        );
+      }
+    }
+    if (!this.state.executedPlayerWorldEvents) {
+      this.state.executedPlayerWorldEvents = {};
+    }
+    for (const [k, v] of Object.entries(snapshot.executedPlayerWorldEvents ?? {})) {
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+        this.state.executedPlayerWorldEvents[k] = Math.max(
+          this.state.executedPlayerWorldEvents[k] ?? 0,
+          v,
+        );
+      }
+    }
+    if (!this.state.playerCooldowns) {
+      this.state.playerCooldowns = {};
+    }
+    for (const [k, v] of Object.entries(snapshot.playerCooldowns ?? {})) {
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+        this.state.playerCooldowns[k] = Math.max(
+          this.state.playerCooldowns[k] ?? 0,
+          v,
+        );
+      }
+    }
+    for (const [k, rec] of Object.entries(snapshot.unlockedAchievements ?? {})) {
+      if (rec && !this.state.unlockedAchievements[k]) {
+        this.state.unlockedAchievements[k] = { ...rec };
+      }
+    }
+    const pending = this.state.pendingRewards ?? [];
+    for (const pr of snapshot.pendingRewards ?? []) {
+      if (pr && pr.id && !pending.some((existing) => existing.id === pr.id)) {
+        pending.push({
+          ...pr,
+          items: pr.items.map((it) => ({ ...it })),
+        });
+      }
+    }
+    this.state.pendingRewards = pending.slice(-128);
     this.persist();
   }
 

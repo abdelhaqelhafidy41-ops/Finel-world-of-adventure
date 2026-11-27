@@ -19,6 +19,11 @@ export interface DamageEvent {
  */
 export class DamageSystem {
   private readonly listeners: Array<(event: DamageEvent) => void> = [];
+  private playerDamageMultiplier = 1;
+
+  public setPlayerDamageMultiplier(multiplier: number): void {
+    this.playerDamageMultiplier = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1;
+  }
 
   public onDamageApplied(listener: (event: DamageEvent) => void): () => void {
     this.listeners.push(listener);
@@ -47,8 +52,12 @@ export class DamageSystem {
     knockback: number;
     isCrit?: boolean;
   }): DamagePacket {
+    const scaledAmount =
+      this.playerDamageMultiplier !== 1 && params.sourceId.startsWith('player')
+        ? Math.max(1, Math.round(params.amount * this.playerDamageMultiplier))
+        : params.amount;
     return {
-      amount: params.amount,
+      amount: scaledAmount,
       damageType: params.damageType,
       sourceId: params.sourceId,
       sourcePosition: params.sourcePosition,

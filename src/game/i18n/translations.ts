@@ -1732,6 +1732,14 @@ export interface UiStrings {
   modsSpawnSavedLabel: string;
   modsSpawnYesLabel: string;
   modsSpawnNoLabel: string;
+  // Mod Event Runtime Diagnostics
+  modsEventDiagnosticsTitle: string;
+  modsNoEventRules: string;
+  modsEventTriggerLabel: string;
+  modsEventExecutionModeLabel: string;
+  modsEventExecutionsLabel: string;
+  modsEventMenuPreviewHint: string;
+  modsEventStatusLabel: (status: string) => string;
 }
 
 export const UI_TEXT: Record<Language, UiStrings> = {
@@ -3126,6 +3134,34 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     modsSpawnSavedLabel: 'Saved',
     modsSpawnYesLabel: 'Yes',
     modsSpawnNoLabel: 'No',
+    modsEventDiagnosticsTitle: 'Event Runtime & Reward Diagnostics',
+    modsNoEventRules: 'No runtime events or rewards declared by this mod.',
+    modsEventTriggerLabel: 'Trigger',
+    modsEventExecutionModeLabel: 'Mode',
+    modsEventExecutionsLabel: 'Runs',
+    modsEventMenuPreviewHint: 'Defined in package (enter a world to evaluate live event triggers and conditions)',
+    modsEventStatusLabel: (status) => {
+      switch (status) {
+        case 'executed':
+          return 'Executed';
+        case 'registered':
+          return 'Registered';
+        case 'blocked_condition':
+          return 'Condition Unmet';
+        case 'blocked_limit':
+          return 'Limit Reached';
+        case 'blocked_authority':
+          return 'Authority Blocked';
+        case 'pending_inventory':
+          return 'Pending Inventory';
+        case 'disabled':
+          return 'Disabled';
+        case 'failed':
+          return 'Failed';
+        default:
+          return status;
+      }
+    },
   },
   ar: {
     gameTitle: 'عالم المغامرة',
@@ -4517,5 +4553,33 @@ export const UI_TEXT: Record<Language, UiStrings> = {
     modsSpawnSavedLabel: 'محفوظ',
     modsSpawnYesLabel: 'نعم',
     modsSpawnNoLabel: 'لا',
+    modsEventDiagnosticsTitle: 'تشخيص الأحداث والمكافآت في وقت التشغيل',
+    modsNoEventRules: 'لا يحتوي هذا المود على قواعد أحداث أو مكافآت معرّفة.',
+    modsEventTriggerLabel: 'المُشغّل',
+    modsEventExecutionModeLabel: 'الوضع',
+    modsEventExecutionsLabel: 'مرات التنفيذ',
+    modsEventMenuPreviewHint: 'معرّف في الحزمة (ادخل إلى عالم لتقييم مشغلات وشروط الأحداث)',
+    modsEventStatusLabel: (status) => {
+      switch (status) {
+        case 'executed':
+          return 'تم التنفيذ';
+        case 'registered':
+          return 'مسجّل';
+        case 'blocked_condition':
+          return 'الشرط غير متحقق';
+        case 'blocked_limit':
+          return 'تم بلوغ الحد';
+        case 'blocked_authority':
+          return 'محجوب بالصلاحية';
+        case 'pending_inventory':
+          return 'بانتظار مساحة الحقيبة';
+        case 'disabled':
+          return 'معطّل';
+        case 'failed':
+          return 'فشل';
+        default:
+          return status;
+      }
+    },
   },
 };

@@ -147,3 +147,45 @@ export {
   type BuiltWoa3dModelResult,
 } from './Woa3dModelBuilder';
 export { ModWorldSpawner, type ModWorldSpawnerDeps } from './ModWorldSpawner';
+export {
+  MAX_EVENT_ACTIONS,
+  MAX_EVENT_CONDITION_DEPTH,
+  MOD_EVENT_TRIGGER_TYPES,
+  extractInlineEventDefinitions,
+  normalizeTriggerType,
+  sanitizeModEventDefinition,
+  validateModEventCrossReferences,
+  type ModEventAction,
+  type ModEventActionBase,
+  type ModEventAreaSpec,
+  type ModEventConditionNode,
+  type ModEventCrossReferenceResolvers,
+  type ModEventDefinition,
+  type ModEventDiagnosticEntry,
+  type ModEventExecutionMode,
+  type ModEventInventoryFullPolicy,
+  type ModEventLeafCondition,
+  type ModEventMultiplayerAuthority,
+  type ModEventRuntimeStatus,
+  type ModEventStatusEffectKind,
+  type ModEventTriggerSpec,
+  type ModEventTriggerType,
+  type PendingWorldModReward,
+  type SavedWorldModEventState,
+} from './ModEventConfig';
+export {
+  ModPlayerEventStore,
+  formatDefaultModAchievementNotice,
+  getModPlayerEventStore,
+  type PendingModRewardRecord,
+  type PlayerModAchievementRecord,
+  type SavedPlayerModEventState,
+} from './ModPlayerEventStore';
+export {
+  ModEventManager,
+  type ModEventBridge,
+  type ModEventContext,
+  type ModEventEmitSummary,
+  type ModEventWorldInitOptions,
+} from './ModEventManager';
+

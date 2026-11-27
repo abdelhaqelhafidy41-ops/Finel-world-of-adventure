@@ -194,6 +194,13 @@ export interface EnemyUpdateContext {
   simThrottleScale?: number;
 }
 
+export interface EnemyKillMetadata {
+  killerSourceId?: string;
+  weaponId?: string;
+  causedByPlayer: boolean;
+  isEnvironmentalDeath: boolean;
+}
+
 export interface EnemySpawnConfig {
   id: string;
   archetypeId: EnemyArchetypeId;
@@ -211,7 +218,8 @@ export interface EnemySpawnConfig {
   customArchetype?: Partial<EnemyArchetypeConfig>;
   respawnEnabled?: boolean;
   respawnDelaySeconds?: number;
-  onDefeated?: (enemy: EnemyController) => void;
+  modId?: string;
+  onDefeated?: (enemy: EnemyController, killMeta?: EnemyKillMetadata) => void;
 }
 
 /**
@@ -221,6 +229,7 @@ export interface EnemySpawnConfig {
  */
 export class EnemyController implements CombatTarget {
   public readonly id: string;
+  public readonly modId?: string;
   public readonly name: string;
   public readonly nameAr: string;
   public readonly faction = 'enemy' as const;
@@ -243,7 +252,10 @@ export class EnemyController implements CombatTarget {
   private readonly velocity = new THREE.Vector3();
   private readonly knockbackVel = new THREE.Vector3();
   private readonly patrolTarget = new THREE.Vector3();
-  private readonly onDefeatedCb?: (enemy: EnemyController) => void;
+  private readonly onDefeatedCb?: (
+    enemy: EnemyController,
+    killMeta?: EnemyKillMetadata,
+  ) => void;
   private readonly isSoftwareGl: boolean;
   private readonly respawnEnabled: boolean;
   private readonly initialRotationX: number;
@@ -308,6 +320,7 @@ export class EnemyController implements CombatTarget {
             : {}),
         };
     this.id = config.id;
+    this.modId = config.modId;
     this.archetype = archetype;
     this.name = archetype.name;
     this.nameAr = archetype.nameAr;
@@ -395,7 +408,8 @@ export class EnemyController implements CombatTarget {
     }
   };
 
-  public onDeath = (_packet: DamagePacket): void => {
+  public onDeath = (packet: DamagePacket): void => {
+    if (this.state === 'dead') return;
     this.state = 'dead';
     this.aggro = false;
     this.attackState = 'idle';
@@ -403,7 +417,28 @@ export class EnemyController implements CombatTarget {
     this.deathElapsed = 0;
     this.respawnTimer = this.archetype.respawnDelay;
     this.velocity.set(0, 0, 0);
-    this.onDefeatedCb?.(this);
+    const killerSourceId = packet?.sourceId;
+    const causedByPlayer = Boolean(
+      killerSourceId && (killerSourceId === 'player' || killerSourceId.startsWith('player:')),
+    );
+    const weaponId =
+      killerSourceId && killerSourceId.startsWith('player:')
+        ? killerSourceId.slice('player:'.length)
+        : undefined;
+    const isEnvironmentalDeath = Boolean(
+      !causedByPlayer &&
+        killerSourceId &&
+        (killerSourceId.startsWith('env') ||
+          killerSourceId === 'environment' ||
+          killerSourceId === 'fall' ||
+          killerSourceId === 'water'),
+    );
+    this.onDefeatedCb?.(this, {
+      killerSourceId,
+      weaponId,
+      causedByPlayer,
+      isEnvironmentalDeath,
+    });
   };
 
   public clearAggro(): void {
@@ -512,7 +547,15 @@ export class EnemyController implements CombatTarget {
         this.deathElapsed = 0;
         this.respawnTimer = this.archetype.respawnDelay;
         this.velocity.set(0, 0, 0);
-        this.onDefeatedCb?.(this);
+        this.onDefeatedCb?.(this, {
+          killerSourceId: attackerId,
+          weaponId:
+            attackerId && attackerId.startsWith('player:')
+              ? attackerId.slice('player:'.length)
+              : undefined,
+          causedByPlayer: Boolean(attackerId),
+          isEnvironmentalDeath: false,
+        });
       }
       return justKilled;
     }

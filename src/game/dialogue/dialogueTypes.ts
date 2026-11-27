@@ -73,6 +73,7 @@ export interface DialogueEntryRule {
 }
 
 export interface DialogueTree {
+  id?: string;
   npcId: string;
   defaultStartNodeId: string;
   entryRules?: DialogueEntryRule[];
@@ -81,6 +82,7 @@ export interface DialogueTree {
 
 export interface DialogueNpcProfile {
   npcId: string;
+  modId?: string;
   name: string;
   role: NpcRole;
   title: string;

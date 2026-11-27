@@ -1495,6 +1495,7 @@ export abstract class NPCBase {
 
     return {
       npcId: this.id,
+      ...(this.modId ? { modId: this.modId } : {}),
       name: resolvedName,
       role: this.role,
       title: resolvedTitle,

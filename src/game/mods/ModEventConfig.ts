@@ -326,6 +326,30 @@ export interface ModEventDiagnosticEntry {
   error?: string;
 }
 
+export interface PendingWorldModReward {
+  id: string;
+  modId: string;
+  eventId: string;
+  fullEventId: string;
+  playerScopeId: string;
+  worldId: string;
+  items: Array<{ itemId: string; count: number; equip?: boolean }>;
+  createdAt: number;
+  attempts: number;
+}
+
+export interface SavedWorldModEventState {
+  version: number;
+  worldFlags: Record<string, boolean>;
+  executedWorldEvents: Record<string, number>;
+  executedPlayerWorldEvents: Record<string, number>;
+  executionCounts: Record<string, number>;
+  cooldowns: Record<string, number>;
+  processedInstanceIds: string[];
+  firstSpawnPlayers: string[];
+  pendingRewards: PendingWorldModReward[];
+}
+
 const VALID_TRIGGER_SET = new Set<string>(MOD_EVENT_TRIGGER_TYPES);
 const TRIGGER_ALIAS_MAP: Record<string, ModEventTriggerType> = {
   new_world: 'new_world_created',
@@ -499,14 +523,7 @@ function stringList(val: unknown): string[] {
 function resolveMaybeModRef(modId: string, rawRef: string): string {
   const clean = rawRef.trim();
   if (!clean) return clean;
-  if (clean.includes(':')) {
-    const res = resolveModCrossReference(modId, clean, CORE_PROTECTED_IDS);
-    return res.ok ? res.targetId : clean;
-  }
-  if (CORE_PROTECTED_IDS.has(clean)) {
-    return clean;
-  }
-  return clean;
+  return resolveModCrossReference(modId, clean, CORE_PROTECTED_IDS);
 }
 
 function findForbiddenCodeField(

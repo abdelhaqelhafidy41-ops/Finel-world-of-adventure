@@ -74,9 +74,24 @@ export class StoryManager {
   private readonly unlockedFlags = new Set<string>();
   private readonly runtimes = new Map<string, StoryQuestRuntime>();
   private language: Language = 'en';
+  private modEventHooks: {
+    onQuestStarted?: (questId: string) => void;
+    onQuestCompleted?: (questId: string) => void;
+    onQuestFailed?: (questId: string) => void;
+  } | null = null;
 
   constructor() {
     this.reset();
+  }
+
+  public setModEventHooks(
+    hooks: {
+      onQuestStarted?: (questId: string) => void;
+      onQuestCompleted?: (questId: string) => void;
+      onQuestFailed?: (questId: string) => void;
+    } | null,
+  ): void {
+    this.modEventHooks = hooks;
   }
 
   public setLanguage(lang: Language): void {
@@ -358,6 +373,7 @@ export class StoryManager {
     }
     this.currentChapterId = def.chapterId;
     this.trackedQuestId = def.questId;
+    this.modEventHooks?.onQuestStarted?.(def.questId);
 
     if (notify) {
       const lang = this.language;
@@ -382,6 +398,7 @@ export class StoryManager {
     }
     this.trackedQuestId = def.questId;
     this.currentChapterId = def.chapterId;
+    this.modEventHooks?.onQuestStarted?.(def.questId);
     if (notify) {
       const title = this.language === 'ar' ? def.titleAr : def.title;
       notify(UI_TEXT[this.language].storyQuestStartedNotice(title));
@@ -395,6 +412,7 @@ export class StoryManager {
     if (!def || !rt) return false;
     if (rt.state !== 'ACTIVE' && rt.state !== 'OBJECTIVE_COMPLETED') return false;
     rt.state = 'FAILED';
+    this.modEventHooks?.onQuestFailed?.(def.questId);
     if (notify) {
       const title = this.language === 'ar' ? def.titleAr : def.title;
       notify(UI_TEXT[this.language].storyQuestFailedNotice(title));
@@ -435,6 +453,7 @@ export class StoryManager {
 
     this.reconcileUnlocks(true, notify);
     this.trackedQuestId = this.pickDefaultTrackedQuestId();
+    this.modEventHooks?.onQuestCompleted?.(def.questId);
     return true;
   }
 

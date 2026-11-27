@@ -105,9 +105,24 @@ export class SideQuestManager {
   private readonly unlockedFlags = new Set<string>();
   private readonly runtimes = new Map<string, SideQuestRuntime>();
   private language: Language = 'en';
+  private modEventHooks: {
+    onQuestStarted?: (questId: string, npcId?: string) => void;
+    onQuestCompleted?: (questId: string, npcId?: string) => void;
+    onQuestFailed?: (questId: string, npcId?: string) => void;
+  } | null = null;
 
   constructor() {
     this.reset();
+  }
+
+  public setModEventHooks(
+    hooks: {
+      onQuestStarted?: (questId: string, npcId?: string) => void;
+      onQuestCompleted?: (questId: string, npcId?: string) => void;
+      onQuestFailed?: (questId: string, npcId?: string) => void;
+    } | null,
+  ): void {
+    this.modEventHooks = hooks;
   }
 
   public setLanguage(lang: Language): void {
@@ -616,6 +631,7 @@ export class SideQuestManager {
     rt.creditedEntityIds = [];
     rt.acceptedAtWorldHours = bridge.totalWorldHours;
     this.trackedSideQuestId = def.sideQuestId;
+    this.modEventHooks?.onQuestStarted?.(def.sideQuestId, def.giverNpcId);
 
     if (notify) {
       const title = this.language === 'ar' ? def.titleAr : def.title;
@@ -678,6 +694,7 @@ export class SideQuestManager {
     rt.creditedEntityIds = [];
     rt.acceptedAtWorldHours = bridge.totalWorldHours;
     this.trackedSideQuestId = def.sideQuestId;
+    this.modEventHooks?.onQuestStarted?.(def.sideQuestId, def.giverNpcId);
 
     if (notify) {
       const title = this.language === 'ar' ? def.titleAr : def.title;
@@ -697,6 +714,7 @@ export class SideQuestManager {
     if (!def || !rt || rt.state !== 'ACTIVE') return false;
 
     rt.state = 'FAILED';
+    this.modEventHooks?.onQuestFailed?.(def.sideQuestId, def.giverNpcId);
     if (notify) {
       const title = this.language === 'ar' ? def.titleAr : def.title;
       notify(UI_TEXT[this.language].sideQuestFailedNotice(title));
@@ -713,6 +731,7 @@ export class SideQuestManager {
     if (!def || !rt || rt.state !== 'ACTIVE') return false;
 
     rt.state = 'EXPIRED';
+    this.modEventHooks?.onQuestFailed?.(def.sideQuestId, def.giverNpcId);
     if (notify) {
       const title = this.language === 'ar' ? def.titleAr : def.title;
       notify(UI_TEXT[this.language].sideQuestExpiredNotice(title));
@@ -801,6 +820,10 @@ export class SideQuestManager {
     if (this.trackedSideQuestId === sideQuestId) {
       this.trackedSideQuestId = this.pickDefaultTrackedQuestId();
     }
+    this.modEventHooks?.onQuestCompleted?.(
+      def.sideQuestId,
+      def.turnInNpcId ?? def.giverNpcId,
+    );
     return true;
   }
 
