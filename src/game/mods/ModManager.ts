@@ -55,25 +55,25 @@ import { setExternalWoa3dModelProvider } from './Woa3dModelBuilder';
 const CORE_ITEM_IDS = new Set<string>(
   Array.isArray(rawItems)
     ? rawItems
-        .filter((r): r is { id: string } => Boolean(r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string'))
-        .map((r) => r.id)
+        .map((r) => (r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string' ? (r as { id: string }).id : ''))
+        .filter((id) => id.length > 0)
     : [],
 );
 const CORE_RECIPE_IDS = new Set<string>(
   Array.isArray(rawRecipes)
     ? rawRecipes
-        .filter((r): r is { id: string } => Boolean(r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string'))
-        .map((r) => r.id)
+        .map((r) => (r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string' ? (r as { id: string }).id : ''))
+        .filter((id) => id.length > 0)
     : [],
 );
 const CORE_QUEST_IDS = new Set<string>([
   ...(Array.isArray(rawQuests)
     ? rawQuests
-        .filter((r): r is { id: string } => Boolean(r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string'))
-        .map((r) => r.id)
+        .map((r) => (r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string' ? (r as { id: string }).id : ''))
+        .filter((id) => id.length > 0)
     : []),
-  ...STORY_QUESTS.map((q) => q.id),
-  ...SIDE_QUESTS.map((q) => q.id),
+  ...STORY_QUESTS.map((q) => q.questId),
+  ...SIDE_QUESTS.map((q) => q.sideQuestId),
 ]);
 const CORE_BLUEPRINT_IDS = new Set<string>(BUILDING_BLUEPRINTS.map((bp) => bp.id));
 

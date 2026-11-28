@@ -186,6 +186,9 @@ const CONTENT_FOLDERS = new Set([
   'spawns',
   'quests',
   'loot_tables',
+  'sounds',
+  'music',
+  'textures',
   'localization',
   'events',
 ]);
@@ -270,9 +273,9 @@ function createRuntimeHarness(modManager: ModManager, playerStore: ModPlayerEven
   let reputation = 0;
   let playerHealth = { current: 80, max: 100 };
   let playerPos = { x: 0, y: 5, z: 4 };
-  let biome: BiomeType = 'meadow';
+  let biome: BiomeType = 'Plains';
   let hour = 10;
-  let period: NpcRoutinePeriod = 'day';
+  let period: NpcRoutinePeriod = 'morning';
   let weather: WeatherState = 'clear';
 
   const bridge: ModEventBridge = {
@@ -302,7 +305,7 @@ function createRuntimeHarness(modManager: ModManager, playerStore: ModPlayerEven
       let equipped = false;
       if (equip) {
         const res = inventoryManager.equipItemById(itemId);
-        equipped = res.action === 'equipped';
+        equipped = res.ok && res.action === 'equipped';
       }
       return { added, equipped, itemName: def.name };
     },
@@ -690,7 +693,7 @@ async function run(): Promise<void> {
             kind: 'all',
             conditions: [
               { weather: ['rain', 'storm'] },
-              { biome: ['highlands', 'ruins'] },
+              { biome: ['Mountains', 'Forest'] },
               { timeOfDay: { periods: ['night'] } },
               { playerHealth: { minPercent: 20, maxPercent: 95 } },
               { questStatus: { questId: 'q_mod_chronicle', statuses: ['completed'] } },
@@ -789,7 +792,7 @@ async function run(): Promise<void> {
       version: '1.0.0',
       author: 'QA',
       description: 'Validates schema v1 support + minGameVersion 1.1.24',
-      supportedGameVersion: '1.1.24',
+      supportedGameVersion: '>=1.1.24',
       minGameVersion: '1.1.24',
       modApiVersion: MOD_API_VERSION,
       schemaVersion: 1,
@@ -886,13 +889,16 @@ async function run(): Promise<void> {
     version: 3,
     meta: {
       slotId: 'slot-1',
+      worldId: 'world-alpha',
       worldName: 'Test',
+      version: 3,
+      savedAtIso: new Date().toISOString(),
       savedAtMs: Date.now(),
       createdAtMs: Date.now(),
       playTimeSeconds: 10,
       worldType: 'normal',
       difficulty: 'normal',
-      biome: 'meadow',
+      biome: 'Plains',
       level: 2,
       timeLabel: 'Day',
       weatherState: 'clear',
@@ -910,9 +916,17 @@ async function run(): Promise<void> {
       coins: 33,
     },
     inventory: h.inventoryManager.exportState(),
-    quests: { active: [], completed: [] },
+    quests: { active: [], completed: [], trackedQuestId: null },
     time: { worldHours: 10, dayCount: 1, fullDayDurationSeconds: 360, timeScale: 1, paused: false },
-    weather: { currentState: 'clear', targetState: 'clear', transitionProgress: 1, durationRemaining: 60 },
+    weather: {
+      currentState: 'clear',
+      targetState: 'clear',
+      transitionProgress: 1,
+      dynamicEnabled: true,
+      transitionDurationSeconds: 15,
+      quality: 'high',
+      windAngleRad: 0,
+    },
     world: {
       worldSeed: 12345,
       worldType: 'normal',
@@ -927,7 +941,7 @@ async function run(): Promise<void> {
     playerModEventState: playerStore.exportSnapshot(),
   };
   const migrated = migrateSaveData(fakeSave);
-  assert.equal(migrated.ok, true);
+  assert(migrated, 'Save migration must succeed');
   assert(migrated.data.world.modEventState, 'Save migration must preserve world.modEventState');
   assert(migrated.data.playerModEventState, 'Save migration must preserve playerModEventState');
 
@@ -969,14 +983,15 @@ async function run(): Promise<void> {
   const dlgEngine = new DialogueEngine({
     playerX: 0,
     playerZ: 0,
-    currentBiome: 'meadow',
+    currentBiome: 'Plains',
     getItemCount: (id) => h.inventoryManager.getItemCount(id),
     getDiscoveredLandmarksCount: () => 1,
     giveItem: () => {},
     consumeItem: () => {},
     grantRewards: () => {},
     healPlayer: () => {},
-    repairWeapons: () => {},
+    getCoins: () => h.getState().coins,
+    repairWeapons: () => true,
     notify: () => {},
   });
   dlgEngine.setModEventHooks({
@@ -1004,39 +1019,71 @@ async function run(): Promise<void> {
         id: 'end_node',
         speaker: 'Elder Marcus',
         lines: ['Go well.'],
-        isEnd: true,
+        nextNodeId: null,
       },
     },
   };
 
+  const elderProfile = {
+    npcId: 'elder-marcus',
+    name: 'Elder Marcus',
+    role: 'elder' as const,
+    title: 'Village Elder',
+    location: 'Oakhollow',
+    personality: 'Wise',
+    suggestedPrompts: [],
+    routineLabel: 'Guiding villagers',
+    routinePeriod: 'morning' as const,
+  };
+
   // Start dialogue + pick WRONG choice + close
-  dlgEngine.startDialogue({ npcId: 'elder-marcus', name: 'Elder Marcus', role: 'elder' }, testTree);
+  dlgEngine.startDialogue(elderProfile, testTree);
   assert.equal(h.eventManager.getWorldFlag('elder_started'), true, 'dialogue_started fired for base NPC');
   assert.equal(h.getState().coins, coinsBeforeDialogue, 'Opening dialogue must NOT grant choice reward');
-  dlgEngine.selectChoice(0); // choice_farewell
+  dlgEngine.selectChoice('choice_farewell');
   assert.equal(h.getState().coins, coinsBeforeDialogue, 'Non-matching choice must NOT grant choice_blessing reward');
   // Cancel dialogue early without terminal close(true)
-  dlgEngine.startDialogue({ npcId: 'elder-marcus', name: 'Elder Marcus', role: 'elder' }, testTree);
+  dlgEngine.startDialogue(elderProfile, testTree);
   dlgEngine.close(false);
-  assert.equal(h.questStatuses.get('q_mod_chronicle'), undefined, 'Cancelling dialogue must NOT fire dialogue_completed');
+  assert.equal(
+    h.questStatuses.get(`${modV2}:q_mod_chronicle`),
+    undefined,
+    'Cancelling dialogue must NOT fire dialogue_completed',
+  );
 
   // Select choice_blessing and reach terminal completion
-  dlgEngine.selectChoice(1); // choice_blessing
+  dlgEngine.startDialogue(elderProfile, testTree);
+  dlgEngine.selectChoice('choice_blessing');
   assert.equal(h.getState().coins, coinsBeforeDialogue + 77, 'Matching choice granted +77 coins');
-  dlgEngine.advance(); // hits terminal end_node -> close(true)
-  assert.equal(h.questStatuses.get('q_mod_chronicle'), 'active', 'dialogue_completed started quest');
+  dlgEngine.next(); // hits terminal end_node -> close(true)
+  assert.equal(
+    h.questStatuses.get(`${modV2}:q_mod_chronicle`),
+    'active',
+    'dialogue_completed started quest',
+  );
 
   // Mod NPC interaction + inline npc_talk_start + npc_quest_completed
   h.eventManager.emit('npc_interaction', { npcId: `${modV2}:mod_archivist`, npcModId: modV2 });
   assert.equal(h.eventManager.getWorldFlag('archivist_interacted'), true, 'Mod NPC interaction fired');
-  dlgEngine.startDialogue({ npcId: `${modV2}:mod_archivist`, npcModId: modV2, name: 'Sera', role: 'scholar' });
+  dlgEngine.startDialogue({
+    npcId: `${modV2}:mod_archivist`,
+    modId: modV2,
+    name: 'Sera',
+    role: 'villager',
+    title: 'Archivist',
+    location: 'Oakhollow',
+    personality: 'Curious',
+    suggestedPrompts: [],
+    routineLabel: 'Cataloguing',
+    routinePeriod: 'morning',
+  });
   assert(h.notifications.includes('Archivist greeted!'), 'Inline mod NPC talk trigger fired');
   h.eventManager.emit('npc_quest_completed', { npcId: `${modV2}:mod_archivist`, questId: 'q_mod_chronicle' });
   assert.equal(h.getState().coins, coinsBeforeDialogue + 77 + 200, 'npc_quest_completed rewarded +200 coins');
 
   // ---------- TEST 5: Real CombatManager + WildlifeManager Kill & Damage Guards ----------
   const scene = new THREE.Scene();
-  const textures = createProceduralTextures();
+  const textures = createProceduralTextures(1, 'low');
   const combat = new CombatManager({
     scene,
     contactShadowMap: textures.contactShadowMap,
@@ -1045,13 +1092,14 @@ async function run(): Promise<void> {
     playerMaxHealth: 100,
     playerPosition: new THREE.Vector3(0, 5, 4),
     weaponMount: new THREE.Group(),
+    isVillageClearance: () => false,
     onPlayerDamaged: () => {},
     onPlayerDefeated: () => {},
     onEnemyHit: () => {},
     onEnemyDefeated: (enemy, killMeta) => {
       const ctx = {
         victimEntityId: enemy.id,
-        victimType: enemy.archetype.id,
+        victimType: enemy.modContentId ?? enemy.archetype.id,
         victimModId: enemy.modId,
         entityCategory: enemy.archetype.isBoss ? 'boss' : 'monster',
         weaponId: killMeta?.weaponId,
@@ -1071,29 +1119,38 @@ async function run(): Promise<void> {
   });
 
   // Register modded monsters on CombatManager archetypes and spawn one
-  const stalkerArch = modManager.getContentStore().getMonsterById(`${modV2}:void_stalker`);
+  const stalkerArch = modManager.getContentStore().getEntityDescriptor('monsters', `${modV2}:void_stalker`);
   assert(stalkerArch, 'Modded void_stalker registered in ContentStore');
-  const enemy = combat.spawnDirectEnemy({
+  combat.registerModEnemyBlueprint({
     id: 'test-stalker-1',
-    archetypeId: `${modV2}:void_stalker`,
+    archetypeId: 'thorn_stalker',
     modId: modV2,
+    modContentId: `${modV2}:void_stalker`,
     x: 10,
     y: 5,
     z: 10,
+    seed: 42,
+    customArchetype: {
+      name: stalkerArch.name || 'Void Stalker',
+      maxHealth: 35,
+      damage: 6,
+    },
+    materializeNow: true,
   });
+  const enemy = combat.getModEnemyController('test-stalker-1');
   assert(enemy, 'CombatManager spawned modded enemy');
 
   const xpBeforeKill = h.getState().playerXp + h.getState().playerLevel * 100;
   // Non-lethal hit must NOT trigger kill reward
-  enemy.applyAuthoritativeHealth(20, 35, { killerSourceId: `player:${modV2}:runeblade` });
+  enemy.applyAuthoritativeHealth(20, 35, false, 0, 0, `player:${modV2}:runeblade`);
   assert.equal(h.getState().playerXp + h.getState().playerLevel * 100, xpBeforeKill, 'Non-lethal damage must NOT trigger kill event');
   assert.equal(h.statusEffectsApplied.filter((s) => s.effectType === 'heal').length, 0);
 
   // Lethal hit triggers ONCE
-  enemy.applyAuthoritativeHealth(0, 35, { killerSourceId: `player:${modV2}:runeblade` });
+  enemy.applyAuthoritativeHealth(0, 35, true, 0, 0, `player:${modV2}:runeblade`);
   assert.equal(h.statusEffectsApplied.filter((s) => s.effectType === 'heal').length, 1, 'entity_killed_with_weapon fired once');
   // Duplicate lethal call must NOT double-fire!
-  enemy.applyAuthoritativeHealth(0, 35, { killerSourceId: `player:${modV2}:runeblade` });
+  enemy.applyAuthoritativeHealth(0, 35, true, 0, 0, `player:${modV2}:runeblade`);
   assert.equal(h.statusEffectsApplied.filter((s) => s.effectType === 'heal').length, 1, 'Duplicate kill callback did NOT double-fire');
 
   // Environmental monster kill (no player weapon / environmental) must NOT trigger weapon kill or player-only monster kill
@@ -1114,7 +1171,7 @@ async function run(): Promise<void> {
   );
 
   // WildlifeManager animal kill with explicit allowEnvironmentalDeath/allowNonPlayerKill
-  const wildlife = new WildlifeManager(scene, textures.contactShadowMap, true, 123);
+  const wildlife = new WildlifeManager(scene, textures.contactShadowMap, true, 123, () => false);
   let animalKilledHookFired = 0;
   wildlife.setCallbacks({
     onAnimalKilled: (id, species, pos, _drops, meta) => {
@@ -1133,13 +1190,14 @@ async function run(): Promise<void> {
   });
   wildlife.spawnModAnimal({
     id: 'test-stag-1',
-    species: `${modV2}:frost_stag`,
+    species: 'deer',
     modId: modV2,
-    x: 4,
-    z: 4,
+    home: { x: 4, z: 4 },
+    seed: 42,
+    maxHpOverride: 25,
   });
   const stagKilled = wildlife.damageAnimal('test-stag-1', 999, 0, 0, 'environment');
-  assert.equal(stagKilled, true);
+  assert.equal(stagKilled.killed, true);
   assert.equal(animalKilledHookFired, 1);
   assert.equal(h.eventManager.getWorldFlag('env_animal_died'), true, 'Animal kill with allowEnvironmentalDeath fired');
 
@@ -1161,7 +1219,7 @@ async function run(): Promise<void> {
     position: { x: 25, y: 5, z: 25 },
   });
   assert(
-    h.spawnedEntities.some((e) => e.contentId === 'mod_archivist' && e.x === 27 && e.z === 27),
+    h.spawnedEntities.some((e) => e.contentId === `${modV2}:mod_archivist` && e.x === 27 && e.z === 27),
     'boss_killed spawned entity at offset position',
   );
 
@@ -1182,17 +1240,21 @@ async function run(): Promise<void> {
   // Crafting & Building
   h.inventoryManager.addItem(`${modV2}:phoenix_crest`, 1);
   h.eventManager.emit('item_crafted', { itemId: `${modV2}:phoenix_crest`, count: 1, success: true });
-  assert.equal(h.questStatuses.get('q_mod_chronicle'), 'completed', 'Crafting phoenix_crest completed quest');
+  assert.equal(
+    h.questStatuses.get(`${modV2}:q_mod_chronicle`),
+    'completed',
+    'Crafting phoenix_crest completed quest',
+  );
 
   h.eventManager.emit('building_placed', { buildingId: `${modV2}:waystone_shrine`, success: true });
   assert(
-    h.startedDialogues.some((d) => d.npcId === 'mod_archivist' && d.treeId === 'shrine_blessing'),
+    h.startedDialogues.some((d) => d.npcId === `${modV2}:mod_archivist` && d.treeId === 'shrine_blessing'),
     'building_placed triggered start_dialogue action',
   );
 
   // ---------- TEST 7: Complex Condition AST + Custom Event Chaining + Cycle Guard ----------
   h.setWeather('storm');
-  h.setBiome('highlands');
+  h.setBiome('Mountains');
   h.setTimeOfDay(23, 'night');
   h.setPlayerHealth(60, 100);
   // Missing flag? Phoenix crest in inventory satisfies the ANY clause, NOT ritual_blocked satisfies NOT clause!

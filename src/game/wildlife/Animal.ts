@@ -93,6 +93,7 @@ export abstract class Animal {
   private hasRemoteTarget = false;
   public readonly exactPosition: boolean;
   public readonly isModSpawn: boolean;
+  public readonly modId?: string;
   public readonly stationary: boolean;
   public readonly initialRotationX: number;
   public readonly initialRotationZ: number;
@@ -117,6 +118,7 @@ export abstract class Animal {
     };
     this.exactPosition = Boolean(config.exactPosition);
     this.isModSpawn = Boolean(config.isModSpawn);
+    this.modId = config.modId;
     this.stationary = Boolean(config.stationary);
     this.initialRotationX = config.rotationX ?? 0;
     this.initialRotationZ = config.rotationZ ?? 0;

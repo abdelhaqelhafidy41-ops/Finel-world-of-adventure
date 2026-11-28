@@ -643,7 +643,7 @@ function parseConditionNode(
     ? raw.all
     : Array.isArray(raw.and)
       ? raw.and
-      : raw.operator === 'and' && Array.isArray(raw.conditions)
+      : (raw.operator === 'and' || raw.kind === 'all' || raw.kind === 'and') && Array.isArray(raw.conditions)
         ? raw.conditions
         : null;
   if (allArr) {
@@ -661,7 +661,7 @@ function parseConditionNode(
     ? raw.any
     : Array.isArray(raw.or)
       ? raw.or
-      : raw.operator === 'or' && Array.isArray(raw.conditions)
+      : (raw.operator === 'or' || raw.kind === 'any' || raw.kind === 'or') && Array.isArray(raw.conditions)
         ? raw.conditions
         : null;
   if (anyArr) {
@@ -675,7 +675,10 @@ function parseConditionNode(
   }
 
   // Combinator: NOT
-  if (raw.not !== undefined || (raw.operator === 'not' && raw.condition !== undefined)) {
+  if (
+    raw.not !== undefined ||
+    ((raw.operator === 'not' || raw.kind === 'not') && raw.condition !== undefined)
+  ) {
     const target = raw.not !== undefined ? raw.not : raw.condition;
     const parsed = parseConditionNode(modId, target, depth + 1);
     if (parsed.error) return { node: parsed.node, error: parsed.error };
@@ -1500,6 +1503,8 @@ export function sanitizeModEventDefinition(
   const fullId = idRes.fullId;
   const eventId = idRes.objectId;
 
+  let validationError: { code: string; message: string } | undefined;
+
   // Trigger parsing (supports trigger object OR triggerType string OR inline default)
   const rawTrigger = isRecord(rawEntry.trigger) ? rawEntry.trigger : null;
   const rawTriggerType =
@@ -1510,14 +1515,16 @@ export function sanitizeModEventDefinition(
     rawEntry.eventType ??
     options?.defaultTrigger?.type;
 
-  const triggerType = normalizeTriggerType(rawTriggerType);
+  let triggerType = normalizeTriggerType(rawTriggerType);
   if (!triggerType) {
+    const msg = `Unsupported or missing trigger "${String(rawTriggerType ?? '')}".`;
+    validationError = { code: 'INVALID_EVENT_TRIGGER', message: msg };
     diagnostics.push({
       code: 'INVALID_EVENT_TRIGGER',
-      severity: 'error',
-      message: `${sourceFile} (${fullId}): Unsupported or missing trigger "${String(rawTriggerType ?? '')}".`,
+      severity: 'warning',
+      message: `${sourceFile} (${fullId}): ${msg}`,
     });
-    return null;
+    triggerType = 'custom_event';
   }
 
   const triggerSrc = rawTrigger ?? rawEntry;
@@ -1570,7 +1577,9 @@ export function sanitizeModEventDefinition(
             nonEmptyString(triggerSrc.eventName ?? triggerSrc.customEventId)!,
           ),
         }
-      : {}),
+      : validationError?.code === 'INVALID_EVENT_TRIGGER'
+        ? { eventName: `__invalid__:${fullId}` }
+        : {}),
     ...(finiteNum(triggerSrc.targetLevel) !== undefined
       ? { targetLevel: finiteNum(triggerSrc.targetLevel) }
       : {}),
@@ -1592,41 +1601,46 @@ export function sanitizeModEventDefinition(
   ) {
     const areaRes = parseAreaSpec(triggerSrc.area ?? triggerSrc.position ?? triggerSrc);
     if (!areaRes.ok) {
+      validationError = validationError ?? {
+        code: 'INVALID_EVENT_CONDITION',
+        message: areaRes.reason,
+      };
       diagnostics.push({
         code: 'INVALID_EVENT_CONDITION',
-        severity: 'error',
+        severity: 'warning',
         message: `${sourceFile} (${fullId}): ${areaRes.reason}`,
       });
-      return null;
+    } else {
+      trigger.area = areaRes.area;
     }
-    trigger.area = areaRes.area;
   }
 
   // Conditions
   let condition: ModEventConditionNode | null = null;
-  let validationError: { code: string; message: string } | undefined;
+  let condValidationError: { code: string; message: string } | undefined;
   const rawCondition = rawEntry.conditions ?? rawEntry.condition;
   if (rawCondition !== undefined && rawCondition !== null) {
     if (Array.isArray(rawCondition)) {
       const parsed = parseConditionNode(modId, { all: rawCondition }, 0);
       condition = parsed.node;
       if (parsed.error) {
-        validationError = { code: 'INVALID_EVENT_CONDITION', message: parsed.error };
+        condValidationError = { code: 'INVALID_EVENT_CONDITION', message: parsed.error };
       }
     } else {
       const parsed = parseConditionNode(modId, rawCondition, 0);
       condition = parsed.node;
       if (parsed.error) {
-        validationError = { code: 'INVALID_EVENT_CONDITION', message: parsed.error };
+        condValidationError = { code: 'INVALID_EVENT_CONDITION', message: parsed.error };
       }
     }
   }
 
-  if (validationError) {
+  if (condValidationError) {
+    validationError = validationError ?? condValidationError;
     diagnostics.push({
-      code: validationError.code,
-      severity: 'error',
-      message: `${sourceFile} (${fullId}): ${validationError.message}`,
+      code: condValidationError.code,
+      severity: 'warning',
+      message: `${sourceFile} (${fullId}): ${condValidationError.message}`,
     });
   }
 
@@ -1645,7 +1659,7 @@ export function sanitizeModEventDefinition(
       validationError = validationError ?? { code: 'INVALID_EVENT_ACTION', message: msg };
       diagnostics.push({
         code: 'INVALID_EVENT_ACTION',
-        severity: 'error',
+        severity: 'warning',
         message: `${sourceFile} (${fullId}): ${msg}`,
       });
     } else {

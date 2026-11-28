@@ -131,6 +131,7 @@ export interface EnemyBlueprintRecord {
   respawnDelaySeconds?: number;
   isModSpawn?: boolean;
   modId?: string;
+  modContentId?: string;
   modSpawnId?: string;
 }
 
@@ -1699,6 +1700,7 @@ export class CombatManager {
     defeated?: boolean;
     savedHp?: number;
     modId?: string;
+    modContentId?: string;
     modSpawnId?: string;
     materializeNow?: boolean;
   }): EnemyBlueprintRecord {
@@ -1726,6 +1728,7 @@ export class CombatManager {
       respawnDelaySeconds: opts.respawnDelaySeconds,
       isModSpawn: true,
       modId: opts.modId,
+      modContentId: opts.modContentId,
       modSpawnId: opts.modSpawnId,
     };
     this.enemyBlueprints.push(bp);
@@ -1807,6 +1810,7 @@ export class CombatManager {
         respawnEnabled: bp.respawnEnabled,
         respawnDelaySeconds: bp.respawnDelaySeconds,
         ...(bp.modId ? { modId: bp.modId } : {}),
+        ...(bp.modContentId ? { modContentId: bp.modContentId } : {}),
         onDefeated: (defeated, killMeta) => {
           bp.defeated = true;
           if (bp.questTarget) {

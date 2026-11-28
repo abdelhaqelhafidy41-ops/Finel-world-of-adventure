@@ -3669,6 +3669,8 @@ export class GameEngine {
     const items: PlayerStructureStorageItem[] = (st.storageItems ?? []).map((it) => ({ ...it }));
     const t = UI_TEXT[this.language];
 
+    let transferredCount = 0;
+
     if (direction === 'deposit') {
       const owned = this.inventoryManager.getItemCount(itemId);
       const actual = Math.min(owned, qty);
@@ -3680,6 +3682,7 @@ export class GameEngine {
         return false;
       }
       this.inventoryManager.removeItem(itemId, actual);
+      transferredCount = actual;
       if (existing) {
         existing.count = Math.min(200, existing.count + actual);
       } else {
@@ -3705,6 +3708,7 @@ export class GameEngine {
         return false;
       }
       this.inventoryManager.addItem(itemId, actual);
+      transferredCount = actual;
       items[idx].count -= actual;
       if (items[idx].count <= 0) {
         items.splice(idx, 1);
@@ -3725,7 +3729,7 @@ export class GameEngine {
     this.emitInventorySnapshot();
     this.syncEquippedWeaponFromInventory();
     this.emitHud();
-    this.emitModInventoryChanged(itemId, direction === 'withdraw' ? actual : -actual);
+    this.emitModInventoryChanged(itemId, direction === 'withdraw' ? transferredCount : -transferredCount);
     return true;
   }
 
@@ -4757,7 +4761,7 @@ export class GameEngine {
           (causedByPlayer ? this.combat?.getEquippedWeapon()?.stats.id : undefined);
         const killCtx: ModEventContext = {
           victimEntityId: enemy.id,
-          victimType: enemy.archetype.id,
+          victimType: enemy.modContentId ?? enemy.archetype.id,
           victimModId: enemy.modId,
           entityCategory: enemy.archetype.isBoss ? 'boss' : 'monster',
           weaponId,
@@ -4906,7 +4910,6 @@ export class GameEngine {
     if (storyState === 'ACTIVE') return 'active';
     const sideState = this.sideQuestManager.getQuestState(questId);
     if (sideState === 'COMPLETED') return 'completed';
-    if (sideState === 'READY_TO_TURN_IN') return 'ready';
     if (sideState === 'ACTIVE') return 'active';
     return 'available';
   }
@@ -4969,11 +4972,10 @@ export class GameEngine {
         damageMultiplier = Math.max(damageMultiplier, ef.multiplier);
       }
     }
-    this.controller?.setExternalStatusMultipliers(
-      speedMultiplier !== 1 || staminaRegenMultiplier !== 1
-        ? { speedMultiplier, staminaRegenMultiplier }
-        : null,
-    );
+    this.controller?.setExternalStatusMultipliers({
+      speedMultiplier,
+      staminaRegenMultiplier,
+    });
     this.combat?.setExternalDamageMultiplier(damageMultiplier);
     this.syncEquipmentBonuses();
   }
@@ -5041,7 +5043,7 @@ export class GameEngine {
         let equipped = false;
         if (equip) {
           const equipRes = this.inventoryManager.equipItemById(itemId);
-          equipped = equipRes.action === 'equipped';
+          equipped = equipRes.ok && equipRes.action === 'equipped';
         }
         this.hasUnsavedProgress = true;
         this.syncEquipmentBonuses();
@@ -5061,6 +5063,7 @@ export class GameEngine {
           ? this.itemManager.getName(def.id, this.language)
           : opts.itemId;
         const spawned = this.world.spawnConfiguredPickup({
+          id: `mod_pickup_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
           itemId: opts.itemId,
           count: Math.max(1, Math.floor(opts.count)),
           label,

@@ -312,18 +312,21 @@ function sanitizeItemLikeDefinition(
     defaultCategory = 'weapon';
     defaultIcon = 'sword';
     defaultEquipSlot = 'weapon';
+    defaultUsable = true;
     defaultStackable = false;
     defaultMaxStack = 1;
   } else if (mode === 'armor') {
     defaultCategory = 'equipment';
     defaultIcon = 'armor';
     defaultEquipSlot = 'body';
+    defaultUsable = true;
     defaultStackable = false;
     defaultMaxStack = 1;
   } else if (mode === 'tools') {
     defaultCategory = 'tool';
     defaultIcon = 'pickaxe';
     defaultEquipSlot = 'weapon';
+    defaultUsable = true;
     defaultStackable = false;
     defaultMaxStack = 1;
   } else if (mode === 'consumables') {
@@ -354,6 +357,11 @@ function sanitizeItemLikeDefinition(
       ? (rawCategory as ItemDefinition['category'])
       : defaultCategory;
 
+  const resolvedEquipSlot =
+    typeof raw.equipSlot === 'string' && VALID_EQUIP_SLOTS.has(raw.equipSlot.trim())
+      ? (raw.equipSlot.trim() as EquipSlot)
+      : defaultEquipSlot;
+
   const icon = sanitizeIconKey(raw.icon, defaultIcon);
   const def: ItemDefinition = {
     id,
@@ -374,7 +382,10 @@ function sanitizeItemLikeDefinition(
       typeof raw.maxStack === 'number' && raw.maxStack > 0
         ? Math.trunc(raw.maxStack)
         : defaultMaxStack,
-    usable: typeof raw.usable === 'boolean' ? raw.usable : defaultUsable,
+    usable:
+      typeof raw.usable === 'boolean'
+        ? raw.usable
+        : defaultUsable || Boolean(resolvedEquipSlot),
     droppable: typeof raw.droppable === 'boolean' ? raw.droppable : true,
     valueCoins:
       typeof raw.valueCoins === 'number' && Number.isFinite(raw.valueCoins)
@@ -384,10 +395,8 @@ function sanitizeItemLikeDefinition(
     ...(assetCheck.value ? { iconTexture: assetCheck.value } : {}),
   };
 
-  if (typeof raw.equipSlot === 'string' && VALID_EQUIP_SLOTS.has(raw.equipSlot.trim())) {
-    def.equipSlot = raw.equipSlot.trim() as EquipSlot;
-  } else if (defaultEquipSlot) {
-    def.equipSlot = defaultEquipSlot;
+  if (resolvedEquipSlot) {
+    def.equipSlot = resolvedEquipSlot;
   }
 
   if (mode === 'tools') {

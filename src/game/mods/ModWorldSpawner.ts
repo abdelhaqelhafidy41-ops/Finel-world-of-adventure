@@ -1354,6 +1354,7 @@ export class ModWorldSpawner {
         respawnDelaySeconds: rule.conditions.respawn.delaySeconds,
         savedHp: saved?.hp,
         modId: rule.modId,
+        modContentId: rule.contentId,
         modSpawnId: rule.spawnId,
         materializeNow: true,
       });
@@ -2018,18 +2019,26 @@ export class ModWorldSpawner {
               spawnId: cid,
               contentId: cid,
               contentType: typeHint === 'character' ? 'character' : 'npc',
-              mode: 'exact_coords',
+              mode: 'absolute',
               position: { x: opts.x, y: safeGroundY, z: opts.z },
+              hasExplicitY: true,
               rotation: { x: 0, y: 0, z: 0 },
+              rotationUnit: 'radians',
               scale: { x: 1, y: 1, z: 1 },
-              count: 1,
+              quantity: 1,
               behavior: opts.behavior,
               conditions: {
+                onNewWorld: true,
+                onWorldLoad: false,
+                onChunkLoad: false,
+                onAreaEnter: false,
+                maxActiveInstances: 1,
                 respawn: { enabled: false, delaySeconds: 0, oneTime: true },
                 perPlayerPickup: false,
               },
               enabled: true,
               sourceFile: 'event',
+              raw: {},
             },
           };
           const cfg = this.buildNpcConfig(fakeInst, ent);
@@ -2063,6 +2072,7 @@ export class ModWorldSpawner {
             respawnEnabled: false,
             respawnDelaySeconds: 0,
             modId: opts.modId,
+            modContentId: cid,
             materializeNow: true,
           });
           return true;

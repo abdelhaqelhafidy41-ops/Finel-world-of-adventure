@@ -90,6 +90,7 @@ const _tempColor = new THREE.Color();
 export interface AnimalKillMetadata {
   killerSourceId?: string;
   weaponId?: string;
+  modId?: string;
   causedByPlayer: boolean;
   isEnvironmentalDeath: boolean;
 }
@@ -891,6 +892,7 @@ export class WildlifeManager {
         this.callbacks.onAnimalKilled?.(a.id, a.species, a.position.clone(), drops, {
           killerSourceId: attackerId,
           weaponId,
+          ...(a.modId ? { modId: a.modId } : {}),
           causedByPlayer,
           isEnvironmentalDeath,
         });
@@ -942,6 +944,7 @@ export class WildlifeManager {
         this.callbacks.onAnimalKilled?.(a.id, a.species, a.position.clone(), drops, {
           killerSourceId: attackerId,
           weaponId,
+          ...(a.modId ? { modId: a.modId } : {}),
           causedByPlayer: Boolean(attackerId),
           isEnvironmentalDeath: false,
         });

@@ -219,6 +219,7 @@ export interface EnemySpawnConfig {
   respawnEnabled?: boolean;
   respawnDelaySeconds?: number;
   modId?: string;
+  modContentId?: string;
   onDefeated?: (enemy: EnemyController, killMeta?: EnemyKillMetadata) => void;
 }
 
@@ -230,6 +231,7 @@ export interface EnemySpawnConfig {
 export class EnemyController implements CombatTarget {
   public readonly id: string;
   public readonly modId?: string;
+  public readonly modContentId?: string;
   public readonly name: string;
   public readonly nameAr: string;
   public readonly faction = 'enemy' as const;
@@ -321,6 +323,7 @@ export class EnemyController implements CombatTarget {
         };
     this.id = config.id;
     this.modId = config.modId;
+    this.modContentId = config.modContentId;
     this.archetype = archetype;
     this.name = archetype.name;
     this.nameAr = archetype.nameAr;

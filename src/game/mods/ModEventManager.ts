@@ -535,12 +535,17 @@ export class ModEventManager {
 
       if (inside && !wasInside) {
         this.activeSpatialEvents.add(ev.id);
-        this.tryExecuteMatchedEvent(ev, ev.trigger.type, {
-          worldId: this.worldId,
-          playerId: this.localPlayerId,
-          position: pos,
-          triggerInstanceId: `spatial:${ev.id}:${Date.now()}`,
-        });
+        this.tryExecuteMatchedEvent(
+          ev,
+          ev.trigger.type,
+          {
+            worldId: this.worldId,
+            playerId: this.localPlayerId,
+            position: pos,
+            triggerInstanceId: `spatial:${ev.id}:${Date.now()}`,
+          },
+          false,
+        );
         changed = true;
       } else if (!inside && wasInside) {
         this.activeSpatialEvents.delete(ev.id);
