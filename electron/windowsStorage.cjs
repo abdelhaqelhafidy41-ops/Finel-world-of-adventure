@@ -78,6 +78,20 @@ const MOD_ASSET_FOLDERS = new Set([
   'music',
 ]);
 
+function normalizeModContentFolderName(folderName) {
+  const lower = String(folderName || '').trim().toLowerCase();
+  if (
+    lower === 'spawn_locations' ||
+    lower === 'world_spawns' ||
+    lower === 'spawn_points' ||
+    lower === 'locations' ||
+    lower === 'placements'
+  ) {
+    return 'spawns';
+  }
+  return lower;
+}
+
 const FILE_WOAMOD_META = '.woamod-package.json';
 const STAGING_DIR_PREFIX = '.woamod-staging-';
 
@@ -973,8 +987,9 @@ function createDesktopStorageManager({ getDocumentsPath, getUserDataPath, platfo
 
     const rootChildren = await fsp.readdir(realFolderPath, { withFileTypes: true }).catch(() => []);
     for (const child of rootChildren) {
-      if (child.isDirectory() && STANDARD_MOD_FOLDERS.includes(child.name)) {
-        presentFoldersSet.add(child.name);
+      const childLower = normalizeModContentFolderName(child.name);
+      if (child.isDirectory() && STANDARD_MOD_FOLDERS.includes(childLower)) {
+        presentFoldersSet.add(childLower);
       } else if (child.isFile()) {
         const ext = path.extname(child.name).toLowerCase();
         if (FORBIDDEN_MOD_EXTENSIONS.has(ext)) {
@@ -984,12 +999,18 @@ function createDesktopStorageManager({ getDocumentsPath, getUserDataPath, platfo
     }
 
     // Also detect assets/<subfolder> if modder nests standard asset folders under assets/
-    const assetsSubDir = path.join(realFolderPath, 'assets');
+    const assetsSubEntry = rootChildren.find(
+      (c) => c.isDirectory() && c.name.toLowerCase() === 'assets',
+    );
+    const assetsSubDir = assetsSubEntry
+      ? path.join(realFolderPath, assetsSubEntry.name)
+      : path.join(realFolderPath, 'assets');
     if (await pathExists(assetsSubDir)) {
       const assetsChildren = await fsp.readdir(assetsSubDir, { withFileTypes: true }).catch(() => []);
       for (const ac of assetsChildren) {
-        if (ac.isDirectory() && STANDARD_MOD_FOLDERS.includes(ac.name)) {
-          presentFoldersSet.add(ac.name);
+        const acLower = normalizeModContentFolderName(ac.name);
+        if (ac.isDirectory() && STANDARD_MOD_FOLDERS.includes(acLower)) {
+          presentFoldersSet.add(acLower);
         }
       }
     }
@@ -1038,23 +1059,31 @@ function createDesktopStorageManager({ getDocumentsPath, getUserDataPath, platfo
           continue;
         }
 
-        const topFolder = rel.split('/')[0];
-        const secondFolder = topFolder === 'assets' ? rel.split('/')[1] : null;
-        const category = MOD_CONTENT_FOLDERS.has(topFolder)
+        const relParts = rel.split('/');
+        const rawTop = relParts[0] || '';
+        const topFolder = normalizeModContentFolderName(rawTop);
+        const rawSecond = rawTop.toLowerCase() === 'assets' ? relParts[1] : null;
+        const secondFolder = rawSecond ? normalizeModContentFolderName(rawSecond) : null;
+        const contentCat = MOD_CONTENT_FOLDERS.has(topFolder)
           ? topFolder
+          : secondFolder && MOD_CONTENT_FOLDERS.has(secondFolder)
+            ? secondFolder
+            : null;
+        const category = contentCat
+          ? contentCat
           : secondFolder && MOD_ASSET_FOLDERS.has(secondFolder)
             ? secondFolder
             : topFolder;
 
-        if (MOD_CONTENT_FOLDERS.has(topFolder) && ext === '.json') {
+        if (contentCat && ext === '.json') {
           try {
             const fStat = await fsp.stat(realItem);
             if (fStat.size <= MAX_JSON_ENTRY_BYTES) {
               const rawText = await fsp.readFile(realItem, 'utf8');
-              contentFiles.push({ category: topFolder, relativePath: rel, rawText });
+              contentFiles.push({ category: contentCat, relativePath: rel, rawText });
             } else {
               contentFiles.push({
-                category: topFolder,
+                category: contentCat,
                 relativePath: rel,
                 rawText: '',
                 readError: 'FILE_TOO_LARGE',
@@ -1062,13 +1091,13 @@ function createDesktopStorageManager({ getDocumentsPath, getUserDataPath, platfo
             }
           } catch (err) {
             contentFiles.push({
-              category: topFolder,
+              category: contentCat,
               relativePath: rel,
               rawText: '',
               readError: (err && err.message) || 'READ_FAILED',
             });
           }
-        } else if (rel !== 'mod.json') {
+        } else if (rel.toLowerCase() !== 'mod.json') {
           const fStat = await fsp.stat(realItem).catch(() => null);
           const sizeBytes = fStat ? fStat.size : 0;
           let rawText;
@@ -1173,12 +1202,15 @@ function createDesktopStorageManager({ getDocumentsPath, getUserDataPath, platfo
         if (!rel) continue;
 
         const parts = rel.split('/');
-        const topFolder = parts[0];
+        const rawTop = parts[0] || '';
+        const topFolder = normalizeModContentFolderName(rawTop);
+        const rawSecond = rawTop.toLowerCase() === 'assets' && parts.length > 1 ? parts[1] : null;
+        const secondFolder = rawSecond ? normalizeModContentFolderName(rawSecond) : null;
         if (STANDARD_MOD_FOLDERS.includes(topFolder) && (entry.isDir || parts.length > 1)) {
           presentFoldersSet.add(topFolder);
         }
-        if (topFolder === 'assets' && parts.length > 1 && STANDARD_MOD_FOLDERS.includes(parts[1])) {
-          presentFoldersSet.add(parts[1]);
+        if (secondFolder && STANDARD_MOD_FOLDERS.includes(secondFolder)) {
+          presentFoldersSet.add(secondFolder);
         }
 
         if (entry.isDir) continue;
@@ -1189,7 +1221,7 @@ function createDesktopStorageManager({ getDocumentsPath, getUserDataPath, platfo
           continue;
         }
 
-        if (rel === 'mod.json') {
+        if (rel.toLowerCase() === 'mod.json') {
           if (entry.uncompressedSize > MAX_JSON_ENTRY_BYTES) {
             manifestError = 'MANIFEST_TOO_LARGE_OR_INVALID';
           } else {
@@ -1200,10 +1232,15 @@ function createDesktopStorageManager({ getDocumentsPath, getUserDataPath, platfo
           continue;
         }
 
-        if (MOD_CONTENT_FOLDERS.has(topFolder) && ext === '.json') {
+        const contentCat = MOD_CONTENT_FOLDERS.has(topFolder)
+          ? topFolder
+          : secondFolder && MOD_CONTENT_FOLDERS.has(secondFolder)
+            ? secondFolder
+            : null;
+        if (contentCat && ext === '.json') {
           if (entry.uncompressedSize > MAX_JSON_ENTRY_BYTES) {
             contentFiles.push({
-              category: topFolder,
+              category: contentCat,
               relativePath: rel,
               rawText: '',
               readError: 'FILE_TOO_LARGE',
@@ -1211,13 +1248,12 @@ function createDesktopStorageManager({ getDocumentsPath, getUserDataPath, platfo
           } else {
             const buf = extractZipEntryBuffer(archiveBuffer, entry);
             contentFiles.push({
-              category: topFolder,
+              category: contentCat,
               relativePath: rel,
               rawText: buf.toString('utf8'),
             });
           }
         } else {
-          const secondFolder = topFolder === 'assets' ? parts[1] : null;
           const category =
             secondFolder && MOD_ASSET_FOLDERS.has(secondFolder) ? secondFolder : topFolder;
           let rawText;
@@ -1688,9 +1724,18 @@ function createDesktopStorageManager({ getDocumentsPath, getUserDataPath, platfo
           }
 
           const entryBuf = extractZipEntryBuffer(buf, item.entry);
-          const relTop = item.rel.split('/')[0];
+          const relParts = item.rel.split('/');
+          const relTop = normalizeModContentFolderName(relParts[0]);
+          const relSecond =
+            (relParts[0] || '').toLowerCase() === 'assets' && relParts[1]
+              ? normalizeModContentFolderName(relParts[1])
+              : null;
           const relExt = path.extname(item.rel).toLowerCase();
-          if ((MOD_CONTENT_FOLDERS.has(relTop) && relExt === '.json') || relExt === '.woa3d') {
+          if (
+            ((MOD_CONTENT_FOLDERS.has(relTop) || (relSecond && MOD_CONTENT_FOLDERS.has(relSecond))) &&
+              relExt === '.json') ||
+            relExt === '.woa3d'
+          ) {
             JSON.parse(entryBuf.toString('utf8'));
           }
 

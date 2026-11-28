@@ -284,7 +284,7 @@ function sanitizeItemLikeDefinition(
   const assetCheck = resolveOptionalAssetField(
     modId,
     raw,
-    ['iconTexture', 'texture', 'texturePath'],
+    ['iconTexture', 'iconPath', 'iconAsset', 'texture', 'texturePath'],
     diagnostics,
     sourceFile,
   );
@@ -1345,11 +1345,68 @@ export class DefaultModContentStore {
 
   public resolveContentForSpawn(spawn: ModSpawnDefinition): {
     found: boolean;
+    inferredContentType?: ModSpawnContentType;
     modelPath?: string;
     item?: ItemDefinition;
     blueprint?: BuildingBlueprint;
     entity?: ModGenericEntityDescriptor;
   } {
+    if (spawn.contentTypeExplicit === false) {
+      const item = this.getItemDefinition(spawn.contentId);
+      if (item) {
+        const inferred: ModSpawnContentType =
+          item.category === 'weapon' || this.weaponStatsRegistry.has(item.id)
+            ? 'weapon'
+            : item.category === 'equipment'
+              ? 'armor'
+              : item.category === 'tool'
+                ? 'tool'
+                : item.category === 'consumable'
+                  ? 'consumable'
+                  : 'item';
+        return { found: true, inferredContentType: inferred, modelPath: item.modelPath, item };
+      }
+      const blueprint = this.getBlueprint(spawn.contentId);
+      if (blueprint) {
+        return {
+          found: true,
+          inferredContentType: blueprint.isDecorative ? 'decoration' : 'building',
+          modelPath: blueprint.modelPath,
+          blueprint,
+        };
+      }
+      const npc =
+        this.registries.npcs.get(spawn.contentId) ??
+        this.registries.characters.get(spawn.contentId);
+      if (npc) {
+        return {
+          found: true,
+          inferredContentType: this.registries.npcs.has(spawn.contentId) ? 'npc' : 'character',
+          modelPath: npc.modelPath,
+          entity: npc,
+        };
+      }
+      const monster = this.registries.monsters.get(spawn.contentId);
+      if (monster) {
+        return {
+          found: true,
+          inferredContentType: 'monster',
+          modelPath: monster.modelPath,
+          entity: monster,
+        };
+      }
+      const animal = this.registries.animals.get(spawn.contentId);
+      if (animal) {
+        return {
+          found: true,
+          inferredContentType: 'animal',
+          modelPath: animal.modelPath,
+          entity: animal,
+        };
+      }
+      return { found: false };
+    }
+
     switch (spawn.contentType) {
       case 'item':
       case 'weapon':
@@ -1415,7 +1472,9 @@ export class DefaultModContentStore {
 
       const resolved = this.resolveContentForSpawn(spawn);
       if (!resolved.found) {
-        const msg = `Spawn "${spawn.spawnId}" references unregistered ${spawn.contentType} content "${spawn.contentId}".`;
+        const msg = spawn.contentTypeExplicit !== false
+          ? `Spawn "${spawn.spawnId}" references unregistered ${spawn.contentType} content "${spawn.contentId}".`
+          : `Spawn "${spawn.spawnId}" references unregistered content "${spawn.contentId}".`;
         spawn.validationError = {
           code: 'SPAWN_CONTENT_NOT_REGISTERED',
           message: msg,
@@ -1426,6 +1485,9 @@ export class DefaultModContentStore {
           message: msg,
         });
         continue;
+      }
+      if (resolved.inferredContentType) {
+        spawn.contentType = resolved.inferredContentType;
       }
 
       if (resolved.modelPath) {
@@ -2680,8 +2742,27 @@ export class DefaultModContentStore {
         let loadedCount = 0;
 
         for (const file of ctx.files) {
-          const entries = extractEntriesList(file.data, ['spawns', 'spawnConfigs', 'rules']);
-          const list = entries.length > 0 ? entries : isRecord(file.data) ? [file.data] : [];
+          const entries = extractEntriesList(file.data, [
+            'spawns',
+            'spawnConfigs',
+            'spawnLocations',
+            'locations',
+            'placements',
+            'worldSpawns',
+            'rules',
+            'entries',
+            'spawnPoints',
+          ]);
+          const list =
+            entries.length > 0
+              ? entries
+              : isRecord(file.data)
+                ? isRecord(file.data.spawn)
+                  ? [file.data.spawn]
+                  : isRecord(file.data.spawnLocation)
+                    ? [file.data.spawnLocation]
+                    : [file.data]
+                : [];
           for (let i = 0; i < list.length; i++) {
             const rawItem = list[i];
             const spawn = sanitizeModSpawnDefinition(

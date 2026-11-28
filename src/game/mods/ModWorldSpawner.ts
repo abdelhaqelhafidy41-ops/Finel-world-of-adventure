@@ -86,6 +86,7 @@ export interface ModWorldSpawnerDeps {
   getQuestStatus: (questId: string) => QuestStatus;
   hasDialogueFlag: (flag: string) => boolean;
   getLocalPlayerId?: () => string;
+  getWorldContext?: () => { worldId?: string; worldName?: string; worldType?: string };
 }
 
 interface PlannedInstance {
@@ -96,6 +97,7 @@ interface PlannedInstance {
   y: number;
   z: number;
   chunkKey: string;
+  pickupCount: number;
   resolvedModelPath?: string;
   displayLabel: string;
 }
@@ -187,6 +189,7 @@ function normalizeAnimalSpecies(raw: unknown): AnimalSpecies {
 export class ModWorldSpawner {
   private readonly deps: ModWorldSpawnerDeps;
   private worldSeed = 1337;
+  private worldId = 'world';
   private lifecycle: 'new_world' | 'world_load' = 'new_world';
   private isRemoteClient = false;
   private elapsedSeconds = 0;
@@ -201,13 +204,79 @@ export class ModWorldSpawner {
   private readonly areaEnteredRules = new Set<string>();
   private readonly persistedInstances = new Map<string, SavedModSpawnInstanceState>();
   private readonly hostSyncedEntries = new Map<string, SyncedModSpawnEntry>();
+  private readonly lastSpawnLogByKey = new Map<string, string>();
+  private readonly loggedCreatedInstances = new Set<string>();
 
   constructor(deps: ModWorldSpawnerDeps) {
     this.deps = deps;
   }
 
+  private getActiveWorldId(): string {
+    const ctxId = this.deps.getWorldContext?.()?.worldId;
+    return ctxId && ctxId.trim() ? ctxId.trim() : this.worldId;
+  }
+
+  private emitSpawnLog(
+    key: string,
+    level: 'info' | 'warn' | 'error',
+    message: string,
+    modId?: string,
+  ): void {
+    const sig = `${level}:${message}`;
+    if (this.lastSpawnLogByKey.get(key) === sig) return;
+    this.lastSpawnLogByKey.set(key, sig);
+    const tagged = message.startsWith('[ModSpawn]') ? message : `[ModSpawn] ${message}`;
+    this.deps.modManager.appendRuntimeSpawnLog(level, tagged, modId);
+    if (typeof console !== 'undefined') {
+      if (level === 'error' || level === 'warn') {
+        console.warn(tagged);
+      } else {
+        console.info(tagged);
+      }
+    }
+  }
+
+  private resolveCountsForRule(rule: ModSpawnDefinition): {
+    instanceCount: number;
+    pickupCount: number;
+  } {
+    const isPickup =
+      rule.contentType === 'item' ||
+      rule.contentType === 'weapon' ||
+      rule.contentType === 'armor' ||
+      rule.contentType === 'tool' ||
+      rule.contentType === 'consumable' ||
+      rule.contentType === 'resource';
+
+    if (rule.explicitPickupCount !== undefined) {
+      return {
+        instanceCount: Math.max(1, rule.quantity),
+        pickupCount: Math.max(1, rule.explicitPickupCount),
+      };
+    }
+
+    if (
+      isPickup &&
+      rule.mode !== 'random_in_area' &&
+      !rule.spawnMultiple &&
+      !rule.conditions.hasExplicitMaxInstances &&
+      rule.quantity > 1
+    ) {
+      return {
+        instanceCount: 1,
+        pickupCount: rule.quantity,
+      };
+    }
+
+    return {
+      instanceCount: Math.max(1, rule.quantity),
+      pickupCount: 1,
+    };
+  }
+
   public reset(options?: {
     worldSeed?: number;
+    worldId?: string;
     lifecycle?: 'new_world' | 'world_load';
     isRemoteClient?: boolean;
   }): void {
@@ -222,10 +291,15 @@ export class ModWorldSpawner {
     this.areaEnteredRules.clear();
     this.persistedInstances.clear();
     this.hostSyncedEntries.clear();
+    this.lastSpawnLogByKey.clear();
+    this.loggedCreatedInstances.clear();
     this.elapsedSeconds = 0;
 
     if (typeof options?.worldSeed === 'number' && Number.isFinite(options.worldSeed)) {
       this.worldSeed = options.worldSeed;
+    }
+    if (typeof options?.worldId === 'string' && options.worldId.trim()) {
+      this.worldId = options.worldId.trim();
     }
     if (options?.lifecycle) {
       this.lifecycle = options.lifecycle;
@@ -249,9 +323,11 @@ export class ModWorldSpawner {
   public restoreSaveState(
     saveState: SavedModSpawnState | undefined,
     worldSeed: number,
+    worldId?: string,
   ): void {
     this.reset({
       worldSeed,
+      ...(worldId ? { worldId } : {}),
       lifecycle: 'world_load',
       isRemoteClient: false,
     });
@@ -299,12 +375,16 @@ export class ModWorldSpawner {
           continue;
         }
         seen.add(p.instanceId);
+        const activeWorldId = this.getActiveWorldId();
         instances.push({
           instanceId: p.instanceId,
           modId: p.rule.modId,
           spawnId: p.rule.spawnId,
           contentId: p.rule.contentId,
           contentType: p.rule.contentType,
+          worldId: saved?.worldId ?? activeWorldId,
+          quantity: saved?.quantity ?? p.pickupCount,
+          count: saved?.count ?? p.pickupCount,
           x: saved?.x ?? p.x,
           y: saved?.y ?? p.y,
           z: saved?.z ?? p.z,
@@ -358,11 +438,15 @@ export class ModWorldSpawner {
    */
   public initializeForWorld(options?: {
     worldSeed?: number;
+    worldId?: string;
     lifecycle?: 'new_world' | 'world_load';
     isRemoteClient?: boolean;
   }): void {
     if (typeof options?.worldSeed === 'number' && Number.isFinite(options.worldSeed)) {
       this.worldSeed = options.worldSeed;
+    }
+    if (typeof options?.worldId === 'string' && options.worldId.trim()) {
+      this.worldId = options.worldId.trim();
     }
     if (options?.lifecycle) {
       this.lifecycle = options.lifecycle;
@@ -378,6 +462,13 @@ export class ModWorldSpawner {
 
     const rules = this.deps.modManager.getAllModSpawnRules();
     this.ruleStates.clear();
+    if (rules.length > 0) {
+      this.emitSpawnLog(
+        `init:${this.lifecycle}:${this.worldSeed}`,
+        'info',
+        `Loaded ${rules.length} spawn rule(s) for world "${this.getActiveWorldId()}" (${this.lifecycle}).`,
+      );
+    }
 
     // Two-pass planning so relative_to_reference can also resolve earlier/sibling mod spawns.
     const unresolvedRefRules: ModSpawnDefinition[] = [];
@@ -525,6 +616,7 @@ export class ModWorldSpawner {
           spawnId: p.rule.spawnId,
           contentId: p.rule.contentId,
           contentType: p.rule.contentType,
+          ...(p.pickupCount > 1 ? { count: p.pickupCount, quantity: p.pickupCount } : { count: 1, quantity: 1 }),
           x: p.x,
           y: p.y,
           z: p.z,
@@ -596,6 +688,12 @@ export class ModWorldSpawner {
 
       if (this.activeById.has(entry.instanceId)) continue;
 
+      const pickupCount =
+        typeof entry.count === 'number' && Number.isFinite(entry.count) && entry.count >= 1
+          ? Math.trunc(entry.count)
+          : typeof entry.quantity === 'number' && Number.isFinite(entry.quantity) && entry.quantity >= 1
+            ? Math.trunc(entry.quantity)
+            : 1;
       const matchedRule = rulesByKey.get(`${entry.modId}:${entry.spawnId}`);
       const rule: ModSpawnDefinition = matchedRule ?? {
         id: `${entry.modId}:spawn:${entry.spawnId}`,
@@ -603,6 +701,7 @@ export class ModWorldSpawner {
         modId: entry.modId,
         contentId: entry.contentId,
         contentType: entry.contentType as ModSpawnDefinition['contentType'],
+        contentTypeExplicit: true,
         sourceFile: 'host-sync',
         enabled: true,
         mode: 'absolute',
@@ -611,7 +710,7 @@ export class ModWorldSpawner {
         rotation: { x: entry.rotationX, y: entry.rotationY, z: entry.rotationZ },
         rotationUnit: 'radians',
         scale: { x: entry.scaleX, y: entry.scaleY, z: entry.scaleZ },
-        quantity: 1,
+        quantity: pickupCount,
         conditions: {
           onNewWorld: true,
           onWorldLoad: true,
@@ -632,6 +731,7 @@ export class ModWorldSpawner {
         y: entry.y,
         z: entry.z,
         chunkKey,
+        pickupCount,
         resolvedModelPath: entry.modelPath,
         displayLabel: entry.label ?? entry.contentId,
       };
@@ -661,6 +761,18 @@ export class ModWorldSpawner {
       state.errorCode = rule.validationError.code;
       state.errorMessage = rule.validationError.message;
       state.lastDiagnosticStatus = 'failed';
+      const errPrefix =
+        rule.validationError.code === 'INVALID_SPAWN_COORDINATES' ||
+        rule.validationError.code === 'MISSING_SPAWN_COORDINATES' ||
+        rule.validationError.code === 'INVALID_SPAWN_AREA'
+          ? 'Invalid spawn coordinates'
+          : 'Failed to create entity';
+      this.emitSpawnLog(
+        `plan:${rule.id}`,
+        'warn',
+        `${errPrefix} (${rule.validationError.code}): ${rule.validationError.message}`,
+        rule.modId,
+      );
       return;
     }
 
@@ -669,7 +781,16 @@ export class ModWorldSpawner {
       state.errorCode = 'SPAWN_CONTENT_NOT_REGISTERED';
       state.errorMessage = `Content "${rule.contentId}" (${rule.contentType}) is not registered.`;
       state.lastDiagnosticStatus = 'failed';
+      this.emitSpawnLog(
+        `plan:${rule.id}`,
+        'warn',
+        `Failed to resolve content "${rule.contentId}" for spawn "${rule.spawnId}" (${rule.modId}).`,
+        rule.modId,
+      );
       return;
+    }
+    if (content.inferredContentType && rule.contentTypeExplicit === false) {
+      rule.contentType = content.inferredContentType;
     }
 
     if (content.modelPath) {
@@ -678,6 +799,12 @@ export class ModWorldSpawner {
         state.errorCode = 'SPAWN_MODEL_MISSING';
         state.errorMessage = `Model "${content.modelPath}" for "${rule.contentId}" could not be loaded.`;
         state.lastDiagnosticStatus = 'failed';
+        this.emitSpawnLog(
+          `plan:${rule.id}`,
+          'warn',
+          `Failed to create entity: model "${content.modelPath}" missing for "${rule.contentId}" (spawn "${rule.spawnId}").`,
+          rule.modId,
+        );
         return;
       }
     }
@@ -688,11 +815,18 @@ export class ModWorldSpawner {
       content.entity?.name ??
       rule.contentId;
 
-    const coordsRes = this.resolveRuleCoordinates(rule);
+    const { instanceCount, pickupCount } = this.resolveCountsForRule(rule);
+    const coordsRes = this.resolveRuleCoordinates(rule, instanceCount);
     if (!coordsRes.ok) {
       state.errorCode = coordsRes.code;
       state.errorMessage = coordsRes.message;
       state.lastDiagnosticStatus = 'failed';
+      this.emitSpawnLog(
+        `plan:${rule.id}`,
+        'warn',
+        `Invalid spawn coordinates for "${rule.spawnId}": ${coordsRes.message}`,
+        rule.modId,
+      );
       return;
     }
 
@@ -778,6 +912,8 @@ export class ModWorldSpawner {
 
       const chunkCoords = worldToChunkCoords(finalPt.x, finalPt.z, 120);
       const chunkKey = toChunkKey(chunkCoords.cx, chunkCoords.cz);
+      const effectivePickupCount =
+        persisted?.count ?? persisted?.quantity ?? pickupCount;
       plannedList.push({
         instanceId,
         rule,
@@ -786,15 +922,28 @@ export class ModWorldSpawner {
         y: finalPt.y,
         z: finalPt.z,
         chunkKey,
+        pickupCount: effectivePickupCount,
         resolvedModelPath: content.modelPath,
         displayLabel,
       });
     }
 
     state.planned.push(...plannedList);
+    if (plannedList.length > 0) {
+      const p0 = plannedList[0];
+      this.emitSpawnLog(
+        `plan:${rule.id}`,
+        'info',
+        `Resolved spawn "${rule.spawnId}"${rule.locationName ? ` (${rule.locationName})` : ''} -> ${rule.contentType}:${rule.contentId} x${p0.pickupCount} (${plannedList.length} instance) at (${p0.x.toFixed(2)}, ${p0.y.toFixed(2)}, ${p0.z.toFixed(2)}) [chunk ${p0.chunkKey}].`,
+        rule.modId,
+      );
+    }
   }
 
-  private resolveRuleCoordinates(rule: ModSpawnDefinition):
+  private resolveRuleCoordinates(
+    rule: ModSpawnDefinition,
+    countOverride?: number,
+  ):
     | { ok: true; points: ModSpawnVec3[] }
     | { ok: false; code: string; message: string } {
     if (rule.unsupportedMode) {
@@ -805,7 +954,7 @@ export class ModWorldSpawner {
       };
     }
 
-    const quantity = Math.max(1, rule.quantity);
+    const quantity = Math.max(1, countOverride ?? rule.quantity);
 
     if (rule.mode === 'absolute') {
       const x = rule.position.x;
@@ -1024,6 +1173,12 @@ export class ModWorldSpawner {
       if (condFail) {
         st.lastDiagnosticStatus = 'pending_condition';
         st.failedCondition = condFail;
+        this.emitSpawnLog(
+          `cond:${st.rule.id}`,
+          'info',
+          `Spawn condition not satisfied for "${st.rule.spawnId}": ${condFail}`,
+          st.rule.modId,
+        );
         // Despawn transient conditional spawns if condition ceases to match
         if (
           cond.timeOfDay !== undefined ||
@@ -1093,6 +1248,13 @@ export class ModWorldSpawner {
         if (this.spawnInstance(inst)) {
           anySpawned = true;
           changed = true;
+        } else {
+          this.emitSpawnLog(
+            `createfail:${inst.instanceId}`,
+            'warn',
+            `Failed to create entity "${inst.instanceId}" (${st.rule.contentType}:${st.rule.contentId}).`,
+            st.rule.modId,
+          );
         }
       }
 
@@ -1110,6 +1272,12 @@ export class ModWorldSpawner {
         st.lastDiagnosticStatus = 'pending_condition';
         if (firstInstanceCondFail) {
           st.failedCondition = firstInstanceCondFail;
+          this.emitSpawnLog(
+            `cond:${st.rule.id}`,
+            'info',
+            `Spawn condition not satisfied for "${st.rule.spawnId}": ${firstInstanceCondFail}`,
+            st.rule.modId,
+          );
         }
       }
     }
@@ -1122,6 +1290,58 @@ export class ModWorldSpawner {
     sampleInst?: PlannedInstance,
   ): string | undefined {
     const cond = rule.conditions;
+
+    // worldId / worldName / worldType filters (only enforced if rule explicitly configures them)
+    const worldCtx = this.deps.getWorldContext?.();
+    if (cond.worldIds && cond.worldIds.length > 0) {
+      const curId = (worldCtx?.worldId ?? this.worldId ?? '').trim().toLowerCase();
+      const curName = (worldCtx?.worldName ?? '').trim().toLowerCase();
+      const matched = cond.worldIds.some((w) => {
+        const needle = w.trim().toLowerCase();
+        return (curId && curId === needle) || (curName && curName === needle);
+      });
+      if (!matched) {
+        return `world (${curId || curName || 'unknown'} not in [${cond.worldIds.join(',')}])`;
+      }
+    }
+    if (cond.worldTypes && cond.worldTypes.length > 0 && worldCtx?.worldType) {
+      const curType = worldCtx.worldType.trim().toLowerCase();
+      if (!cond.worldTypes.includes(curType)) {
+        return `worldType (${curType} not in [${cond.worldTypes.join(',')}])`;
+      }
+    }
+
+    // region filter (matches biome at target coords or nearby village/landmark)
+    if (cond.regions && cond.regions.length > 0 && sampleInst) {
+      const biome = getBiomeAt(sampleInst.x, sampleInst.z).toLowerCase();
+      const needles = cond.regions.map((r) => r.trim().toLowerCase());
+      let matchedRegion = needles.includes(biome);
+      if (!matchedRegion) {
+        for (const v of this.deps.getVillageAnchors()) {
+          if (
+            (needles.includes(v.id.toLowerCase()) || needles.includes(v.name.toLowerCase())) &&
+            Math.hypot(sampleInst.x - v.x, sampleInst.z - v.z) <= 140
+          ) {
+            matchedRegion = true;
+            break;
+          }
+        }
+      }
+      if (!matchedRegion) {
+        for (const lm of this.deps.getLandmarks()) {
+          if (
+            (needles.includes(lm.id.toLowerCase()) || needles.includes(lm.name.toLowerCase())) &&
+            Math.hypot(sampleInst.x - lm.x, sampleInst.z - lm.z) <= 140
+          ) {
+            matchedRegion = true;
+            break;
+          }
+        }
+      }
+      if (!matchedRegion) {
+        return `region (${biome} not in [${cond.regions.join(',')}])`;
+      }
+    }
 
     // timeOfDay
     if (cond.timeOfDay) {
@@ -1256,7 +1476,7 @@ export class ModWorldSpawner {
       this.deps.spawnPickup({
         id: inst.instanceId,
         itemId: rule.contentId,
-        count: 1,
+        count: Math.max(1, inst.pickupCount),
         label,
         x: spawnX,
         y: spawnY,
@@ -1396,6 +1616,15 @@ export class ModWorldSpawner {
 
     this.activeById.set(inst.instanceId, inst);
     this.ruleStates.get(rule.id)?.activeInstanceIds.add(inst.instanceId);
+    if (!this.loggedCreatedInstances.has(inst.instanceId)) {
+      this.loggedCreatedInstances.add(inst.instanceId);
+      this.emitSpawnLog(
+        `created:${inst.instanceId}`,
+        'info',
+        `Created entity "${inst.instanceId}" (${type}:${rule.contentId}) qty=${inst.pickupCount} at (${spawnX.toFixed(2)}, ${spawnY.toFixed(2)}, ${spawnZ.toFixed(2)}).`,
+        rule.modId,
+      );
+    }
     return true;
   }
 
@@ -1409,6 +1638,9 @@ export class ModWorldSpawner {
       spawnId: inst.rule.spawnId,
       contentId: inst.rule.contentId,
       contentType: type,
+      worldId: prev?.worldId ?? this.getActiveWorldId(),
+      quantity: prev?.quantity ?? inst.pickupCount,
+      count: prev?.count ?? inst.pickupCount,
       x: inst.x,
       y: inst.y,
       z: inst.z,
@@ -1918,6 +2150,7 @@ export class ModWorldSpawner {
     x: number;
     y?: number;
     z: number;
+    count?: number;
     behavior?: string;
     modId: string;
     instanceId?: string;
@@ -1948,13 +2181,17 @@ export class ModWorldSpawner {
       typeHint === 'consumable' ||
       typeHint === 'resource'
     ) {
+      const pickupCount =
+        typeof opts.count === 'number' && Number.isFinite(opts.count) && opts.count >= 1
+          ? Math.trunc(opts.count)
+          : 1;
       for (const cid of candidateIds) {
         const itemDef = this.deps.itemManager.getItem(cid) ?? store.getItemDefinition(cid);
         if (itemDef) {
           this.deps.spawnPickup({
             id: instanceId,
             itemId: itemDef.id,
-            count: 1,
+            count: pickupCount,
             label: itemDef.name,
             x: opts.x,
             y: safeGroundY + 0.12,
@@ -2012,6 +2249,7 @@ export class ModWorldSpawner {
             y: safeGroundY,
             z: opts.z,
             chunkKey,
+            pickupCount: 1,
             displayLabel: ent.name || cid,
             rule: {
               id: instanceId,
@@ -2019,6 +2257,7 @@ export class ModWorldSpawner {
               spawnId: cid,
               contentId: cid,
               contentType: typeHint === 'character' ? 'character' : 'npc',
+              contentTypeExplicit: true,
               mode: 'absolute',
               position: { x: opts.x, y: safeGroundY, z: opts.z },
               hasExplicitY: true,

@@ -347,6 +347,14 @@ export class ModManager {
     this.runtimeSpawnDiagSignature = '';
   }
 
+  public appendRuntimeSpawnLog(
+    level: ModLogLevel,
+    message: string,
+    modId?: string,
+  ): void {
+    this.appendLog(level, message, modId);
+  }
+
   public getSpawnDiagnostics(modId?: string): ModSpawnDiagnosticEntry[] {
     if (this.runtimeSpawnDiagnostics.length > 0) {
       return modId

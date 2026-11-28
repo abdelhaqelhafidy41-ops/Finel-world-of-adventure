@@ -144,6 +144,19 @@ public final class AndroidExternalStorageManager {
         "music"
     ));
 
+    private static String normalizeModFolderCategory(String rawFolder) {
+        if (rawFolder == null) return "";
+        String lower = rawFolder.trim().toLowerCase(Locale.ROOT);
+        if ("spawn_locations".equals(lower)
+            || "world_spawns".equals(lower)
+            || "spawn_points".equals(lower)
+            || "locations".equals(lower)
+            || "placements".equals(lower)) {
+            return "spawns";
+        }
+        return lower;
+    }
+
     private static final String CURRENT_GAME_VERSION = "1.1.25";
     private static final Set<Integer> SUPPORTED_MOD_SCHEMA_VERSIONS = new HashSet<>(Arrays.asList(1, 2));
     private static final String FILE_WOAMOD_META = ".woamod-package.json";
@@ -1576,13 +1589,16 @@ public final class AndroidExternalStorageManager {
                 if (rel.isEmpty()) continue;
 
                 String[] parts = rel.split("/");
-                String topFolder = parts[0];
+                String rawTop = parts[0];
+                String topFolder = normalizeModFolderCategory(rawTop);
+                String rawSecond = "assets".equals(rawTop.toLowerCase(Locale.ROOT)) && parts.length > 1 ? parts[1] : null;
+                String secondFolder = rawSecond != null ? normalizeModFolderCategory(rawSecond) : null;
                 boolean isDirEntry = dirEntries.contains(rawName);
                 if (STANDARD_MOD_FOLDERS.contains(topFolder) && (isDirEntry || parts.length > 1)) {
                     presentFolders.add(topFolder);
                 }
-                if ("assets".equals(topFolder) && parts.length > 1 && STANDARD_MOD_FOLDERS.contains(parts[1])) {
-                    presentFolders.add(parts[1]);
+                if (secondFolder != null && STANDARD_MOD_FOLDERS.contains(secondFolder)) {
+                    presentFolders.add(secondFolder);
                 }
                 if (isDirEntry) continue;
 
@@ -1592,7 +1608,7 @@ public final class AndroidExternalStorageManager {
                     continue;
                 }
 
-                if ("mod.json".equals(rel)) {
+                if ("mod.json".equalsIgnoreCase(rel)) {
                     byte[] mBytes = jsonFiles.get(rawName);
                     if (mBytes != null) {
                         manifestRaw = new String(mBytes, StandardCharsets.UTF_8);
@@ -1601,15 +1617,17 @@ public final class AndroidExternalStorageManager {
                     continue;
                 }
 
-                if (MOD_CONTENT_FOLDERS.contains(topFolder) && ".json".equals(ext)) {
+                String contentCat = MOD_CONTENT_FOLDERS.contains(topFolder)
+                    ? topFolder
+                    : (secondFolder != null && MOD_CONTENT_FOLDERS.contains(secondFolder) ? secondFolder : null);
+                if (contentCat != null && ".json".equals(ext)) {
                     byte[] cBytes = jsonFiles.get(rawName);
                     JSONObject item = new JSONObject();
-                    item.put("category", topFolder);
+                    item.put("category", contentCat);
                     item.put("relativePath", rel);
                     item.put("rawText", cBytes != null ? new String(cBytes, StandardCharsets.UTF_8) : "");
                     contentFiles.put(item);
                 } else {
-                    String secondFolder = "assets".equals(topFolder) && parts.length > 1 ? parts[1] : null;
                     String category = (secondFolder != null && MOD_ASSET_FOLDERS.contains(secondFolder))
                         ? secondFolder
                         : topFolder;
@@ -1697,14 +1715,20 @@ public final class AndroidExternalStorageManager {
                 executableFiles.put(rel);
                 continue;
             }
-            if ("mod.json".equals(rel)) continue;
+            if ("mod.json".equalsIgnoreCase(rel)) continue;
 
             String[] parts = rel.split("/");
-            String topFolder = parts[0];
+            String rawTop = parts[0];
+            String topFolder = normalizeModFolderCategory(rawTop);
+            String rawSecond = "assets".equals(rawTop.toLowerCase(Locale.ROOT)) && parts.length > 1 ? parts[1] : null;
+            String secondFolder = rawSecond != null ? normalizeModFolderCategory(rawSecond) : null;
+            String contentCat = MOD_CONTENT_FOLDERS.contains(topFolder)
+                ? topFolder
+                : (secondFolder != null && MOD_CONTENT_FOLDERS.contains(secondFolder) ? secondFolder : null);
             try {
-                if (MOD_CONTENT_FOLDERS.contains(topFolder) && ".json".equals(ext)) {
+                if (contentCat != null && ".json".equals(ext)) {
                     JSONObject item = new JSONObject();
-                    item.put("category", topFolder);
+                    item.put("category", contentCat);
                     item.put("relativePath", rel);
                     if (child.length() > MAX_MOD_JSON_BYTES) {
                         item.put("rawText", "");
@@ -1714,7 +1738,6 @@ public final class AndroidExternalStorageManager {
                     }
                     contentFiles.put(item);
                 } else {
-                    String secondFolder = "assets".equals(topFolder) && parts.length > 1 ? parts[1] : null;
                     String category = (secondFolder != null && MOD_ASSET_FOLDERS.contains(secondFolder))
                         ? secondFolder
                         : topFolder;
@@ -1736,21 +1759,31 @@ public final class AndroidExternalStorageManager {
         try {
             if (!isCanonicalChild(modsDir, modDir)) return null;
             Set<String> presentFolders = new HashSet<>();
+            File assetsSub = null;
             File[] rootChildren = modDir.listFiles();
             if (rootChildren != null) {
                 for (File child : rootChildren) {
-                    if (child.isDirectory() && STANDARD_MOD_FOLDERS.contains(child.getName())) {
-                        presentFolders.add(child.getName());
+                    if (child.isDirectory()) {
+                        String norm = normalizeModFolderCategory(child.getName());
+                        if (STANDARD_MOD_FOLDERS.contains(norm)) {
+                            presentFolders.add(norm);
+                        }
+                        if ("assets".equalsIgnoreCase(child.getName())) {
+                            assetsSub = child;
+                        }
                     }
                 }
             }
-            File assetsSub = new File(modDir, "assets");
+            if (assetsSub == null) assetsSub = new File(modDir, "assets");
             if (assetsSub.isDirectory() && isCanonicalChild(modDir, assetsSub)) {
                 File[] assetsChildren = assetsSub.listFiles();
                 if (assetsChildren != null) {
                     for (File ac : assetsChildren) {
-                        if (ac.isDirectory() && STANDARD_MOD_FOLDERS.contains(ac.getName())) {
-                            presentFolders.add(ac.getName());
+                        if (ac.isDirectory()) {
+                            String norm = normalizeModFolderCategory(ac.getName());
+                            if (STANDARD_MOD_FOLDERS.contains(norm)) {
+                                presentFolders.add(norm);
+                            }
                         }
                     }
                 }
@@ -1851,10 +1884,11 @@ public final class AndroidExternalStorageManager {
                 String rel = relPrefix.isEmpty() ? name : relPrefix + "/" + name;
                 boolean isDir = DocumentsContract.Document.MIME_TYPE_DIR.equals(mime);
                 if (isDir) {
-                    if (depth == 0 && STANDARD_MOD_FOLDERS.contains(name)) {
-                        presentFolders.add(name);
-                    } else if (depth == 1 && "assets".equals(relPrefix) && STANDARD_MOD_FOLDERS.contains(name)) {
-                        presentFolders.add(name);
+                    String normDir = normalizeModFolderCategory(name);
+                    if (depth == 0 && STANDARD_MOD_FOLDERS.contains(normDir)) {
+                        presentFolders.add(normDir);
+                    } else if (depth == 1 && "assets".equalsIgnoreCase(relPrefix) && STANDARD_MOD_FOLDERS.contains(normDir)) {
+                        presentFolders.add(normDir);
                     }
                     walkSafModDir(
                         treeUri, docId, rel, depth + 1,
@@ -1868,7 +1902,7 @@ public final class AndroidExternalStorageManager {
                     executableFiles.put(rel);
                     continue;
                 }
-                if ("mod.json".equals(rel)) {
+                if ("mod.json".equalsIgnoreCase(rel)) {
                     if (size <= MAX_MOD_JSON_BYTES) {
                         String txt = readSafDocUtf8(treeUri, docId);
                         if (txt != null) manifestRawOut.append(txt);
@@ -1877,11 +1911,17 @@ public final class AndroidExternalStorageManager {
                 }
 
                 String[] parts = rel.split("/");
-                String topFolder = parts[0];
+                String rawTop = parts[0];
+                String topFolder = normalizeModFolderCategory(rawTop);
+                String rawSecond = "assets".equals(rawTop.toLowerCase(Locale.ROOT)) && parts.length > 1 ? parts[1] : null;
+                String secondFolder = rawSecond != null ? normalizeModFolderCategory(rawSecond) : null;
+                String contentCat = MOD_CONTENT_FOLDERS.contains(topFolder)
+                    ? topFolder
+                    : (secondFolder != null && MOD_CONTENT_FOLDERS.contains(secondFolder) ? secondFolder : null);
                 try {
-                    if (MOD_CONTENT_FOLDERS.contains(topFolder) && ".json".equals(ext)) {
+                    if (contentCat != null && ".json".equals(ext)) {
                         JSONObject item = new JSONObject();
-                        item.put("category", topFolder);
+                        item.put("category", contentCat);
                         item.put("relativePath", rel);
                         if (size > MAX_MOD_JSON_BYTES) {
                             item.put("rawText", "");
@@ -1892,7 +1932,6 @@ public final class AndroidExternalStorageManager {
                         }
                         contentFiles.put(item);
                     } else {
-                        String secondFolder = "assets".equals(topFolder) && parts.length > 1 ? parts[1] : null;
                         String category = (secondFolder != null && MOD_ASSET_FOLDERS.contains(secondFolder))
                             ? secondFolder
                             : topFolder;

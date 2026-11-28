@@ -245,6 +245,9 @@ export interface SavedModSpawnInstanceState {
   spawnId: string;
   contentId: string;
   contentType: string;
+  worldId?: string;
+  quantity?: number;
+  count?: number;
   x: number;
   y: number;
   z: number;

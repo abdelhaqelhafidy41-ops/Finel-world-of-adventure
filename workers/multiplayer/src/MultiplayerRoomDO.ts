@@ -7058,12 +7058,20 @@ export class MultiplayerRoomDO {
             });
             return;
           }
+          const matchedModSpawn = Array.isArray(world.modSpawns)
+            ? world.modSpawns.find((m) => m.instanceId === pickupId)
+            : undefined;
           const rawPickupCount = eventData.count === undefined ? 1 : eventData.count;
+          const maxAllowedQty = matchedModSpawn
+            ? Math.min(999, Math.max(1, Math.trunc(matchedModSpawn.count ?? matchedModSpawn.quantity ?? 1)))
+            : isAllowedModStaticPickup && eventData.isModSpawn === true
+              ? 999
+              : 6;
           if (
             typeof rawPickupCount !== 'number' ||
             !Number.isFinite(rawPickupCount) ||
             rawPickupCount <= 0 ||
-            rawPickupCount > 6
+            rawPickupCount > maxAllowedQty
           ) {
             this.securityLogger.record({
               category: 'INVENTORY_TAMPER',
@@ -7079,7 +7087,9 @@ export class MultiplayerRoomDO {
             });
             return;
           }
-          const count = Math.round(rawPickupCount);
+          const count = matchedModSpawn
+            ? Math.min(maxAllowedQty, Math.max(1, Math.round(rawPickupCount)))
+            : Math.round(rawPickupCount);
           if (isPerPlayer) {
             if (!shared.perPlayerPickups) shared.perPlayerPickups = {};
             const perList = shared.perPlayerPickups[pickupId] ?? [];
@@ -7089,12 +7099,9 @@ export class MultiplayerRoomDO {
             shared.perPlayerPickups[pickupId] = perList;
           } else {
             shared.sharedResources[pickupId] = session.playerId;
-            if (Array.isArray(world.modSpawns)) {
-              const matchedModSpawn = world.modSpawns.find((m) => m.instanceId === pickupId);
-              if (matchedModSpawn) {
-                matchedModSpawn.collected = true;
-                this.dirtyWorld = true;
-              }
+            if (matchedModSpawn) {
+              matchedModSpawn.collected = true;
+              this.dirtyWorld = true;
             }
           }
           this.adjustPlayerItemCount(pData, itemId, count);
@@ -8697,12 +8704,23 @@ export class MultiplayerRoomDO {
             const perPlayer = Boolean(e.perPlayer);
             const alreadyCollected =
               !perPlayer && Boolean(shared.sharedResources[instanceId]);
+            const rawQty =
+              typeof e.count === 'number' && Number.isFinite(e.count)
+                ? e.count
+                : typeof e.quantity === 'number' && Number.isFinite(e.quantity)
+                  ? e.quantity
+                  : undefined;
+            const safeQty =
+              rawQty !== undefined && rawQty >= 1
+                ? Math.min(999, Math.trunc(rawQty))
+                : undefined;
             sanitized.push({
               instanceId,
               modId: e.modId.slice(0, 64),
               spawnId: e.spawnId.slice(0, 64),
               contentId: e.contentId.slice(0, 96),
               contentType: e.contentType.slice(0, 32),
+              ...(safeQty !== undefined ? { count: safeQty, quantity: safeQty } : {}),
               x: e.x,
               y: e.y,
               z: e.z,

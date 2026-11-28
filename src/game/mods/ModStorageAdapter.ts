@@ -356,11 +356,25 @@ async function scanWebZipPackage(
       if (!rel) continue;
 
       const parts = rel.split('/');
-      const firstSeg = parts[0].toLowerCase();
+      const normSeg = (seg: string): string => {
+        const lower = seg.toLowerCase();
+        if (
+          lower === 'spawn_locations' ||
+          lower === 'world_spawns' ||
+          lower === 'spawn_points' ||
+          lower === 'locations' ||
+          lower === 'placements'
+        ) {
+          return 'spawns';
+        }
+        return lower;
+      };
+      const rawFirst = parts[0].toLowerCase();
+      const firstSeg = normSeg(parts[0]);
       if (STANDARD_FOLDER_SET.has(firstSeg)) {
         folderSet.add(firstSeg);
       }
-      const secondSeg = firstSeg === 'assets' && parts[1] ? parts[1].toLowerCase() : null;
+      const secondSeg = rawFirst === 'assets' && parts[1] ? normSeg(parts[1]) : null;
       if (secondSeg && STANDARD_FOLDER_SET.has(secondSeg)) {
         folderSet.add(secondSeg);
       }
@@ -372,7 +386,7 @@ async function scanWebZipPackage(
         continue;
       }
 
-      if (rel === 'mod.json') {
+      if (rel.toLowerCase() === 'mod.json') {
         const extracted = await extractWebZipEntryBytes(bytes, entry);
         base.manifestRaw = decoder.decode(extracted);
         continue;

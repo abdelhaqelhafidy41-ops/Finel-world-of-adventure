@@ -660,15 +660,27 @@ export async function validateWoamodArchiveBytes(
     }
 
     const parts = rel.split('/');
-    const topFolder = parts[0].toLowerCase();
+    const normalizeFolderSeg = (seg: string): string => {
+      const lower = seg.toLowerCase();
+      if (
+        lower === 'spawn_locations' ||
+        lower === 'world_spawns' ||
+        lower === 'spawn_points' ||
+        lower === 'locations' ||
+        lower === 'placements'
+      ) {
+        return 'spawns';
+      }
+      return lower;
+    };
+    const rawTop = parts[0].toLowerCase();
+    const topFolder = normalizeFolderSeg(parts[0]);
     if (STANDARD_FOLDER_SET.has(topFolder) && (entry.isDir || parts.length > 1)) {
       folderSet.add(topFolder);
     }
-    if (topFolder === 'assets' && parts.length > 1) {
-      const second = parts[1].toLowerCase();
-      if (STANDARD_FOLDER_SET.has(second)) {
-        folderSet.add(second);
-      }
+    const second = rawTop === 'assets' && parts[1] ? normalizeFolderSeg(parts[1]) : null;
+    if (second && STANDARD_FOLDER_SET.has(second)) {
+      folderSet.add(second);
     }
 
     if (entry.isDir) continue;
@@ -679,15 +691,19 @@ export async function validateWoamodArchiveBytes(
       continue;
     }
 
-    if (rel === 'mod.json') {
+    if (rel.toLowerCase() === 'mod.json') {
       manifestEntry = entry;
       continue;
     }
 
-    if (MOD_CONTENT_FOLDERS.has(topFolder) && ext === '.json') {
-      contentJsonEntries.push({ rel, category: topFolder, entry });
+    const contentCat = MOD_CONTENT_FOLDERS.has(topFolder)
+      ? topFolder
+      : second && MOD_CONTENT_FOLDERS.has(second)
+        ? second
+        : null;
+    if (contentCat && ext === '.json') {
+      contentJsonEntries.push({ rel, category: contentCat, entry });
     } else {
-      const second = topFolder === 'assets' && parts[1] ? parts[1].toLowerCase() : null;
       const category = second && STANDARD_FOLDER_SET.has(second) ? second : topFolder;
       if (ext === '.woa3d') {
         woa3dEntries.push({ rel, category, entry });

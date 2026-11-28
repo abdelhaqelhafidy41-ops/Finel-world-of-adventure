@@ -4886,6 +4886,11 @@ export class GameEngine {
         this.dialogueEngine.getQuestStatus(questId),
       hasDialogueFlag: (flag) => this.dialogueEngine.hasFlag(flag),
       getLocalPlayerId: () => this.localMultiplayerPlayerId ?? 'local',
+      getWorldContext: () => ({
+        worldId: this.activeSaveSlot ?? undefined,
+        worldName: this.activeWorldName,
+        worldType: this.activeWorldType,
+      }),
     });
   }
 
@@ -5243,6 +5248,7 @@ export class GameEngine {
     const digest = JSON.stringify(
       entries.map((e) => [
         e.instanceId,
+        e.count ?? 1,
         e.x,
         e.y,
         e.z,
@@ -8097,10 +8103,12 @@ export class GameEngine {
 
     this.sideQuestManager.update(this.sideQuestBridge);
     this.syncSideQuestLocalEntities();
+    const loadedWorldId = this.activeSaveSlot || data.meta.slotId || 'world';
     const loadedSpawner = this.getOrCreateModSpawner();
-    loadedSpawner.restoreSaveState(data.world.modSpawnState, data.world.worldSeed);
+    loadedSpawner.restoreSaveState(data.world.modSpawnState, data.world.worldSeed, loadedWorldId);
     loadedSpawner.initializeForWorld({
       worldSeed: data.world.worldSeed,
+      worldId: loadedWorldId,
       lifecycle: 'world_load',
       isRemoteClient: false,
     });
@@ -8328,6 +8336,7 @@ export class GameEngine {
 
     this.getOrCreateModSpawner().initializeForWorld({
       worldSeed: this.world.seed,
+      worldId,
       lifecycle: 'new_world',
       isRemoteClient: false,
     });
@@ -8709,18 +8718,21 @@ export class GameEngine {
     const mpSpawner = this.getOrCreateModSpawner();
     this.lastSyncedModSpawnsDigest = '';
     this.pendingModSpawnBatch = [];
+    const mpWorldId = this.hostLanWorldSlotId || `mp-${this.world.seed}`;
     if (isHostRole) {
       if (saved?.world.modSpawnState) {
-        mpSpawner.restoreSaveState(saved.world.modSpawnState, this.world.seed);
+        mpSpawner.restoreSaveState(saved.world.modSpawnState, this.world.seed, mpWorldId);
       }
       mpSpawner.initializeForWorld({
         worldSeed: this.world.seed,
+        worldId: mpWorldId,
         lifecycle: saved ? 'world_load' : 'new_world',
         isRemoteClient: false,
       });
     } else {
       mpSpawner.reset({
         worldSeed: this.world.seed,
+        worldId: mpWorldId,
         lifecycle: 'world_load',
         isRemoteClient: true,
       });

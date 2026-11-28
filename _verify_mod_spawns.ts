@@ -140,6 +140,7 @@ import { validateDiscoveredMods } from './src/game/mods/ModValidator';
 import { ModManager } from './src/game/mods/ModManager';
 import { ModWorldSpawner } from './src/game/mods/ModWorldSpawner';
 import { ItemManager } from './src/game/inventory/ItemManager';
+import { InventoryManager } from './src/game/inventory/InventoryManager';
 import { WeaponRegistry } from './src/game/combat/weapons/WeaponRegistry';
 import { getBlueprintById } from './src/game/building/buildingCatalog';
 import { BuildingManager } from './src/game/building/BuildingManager';
@@ -290,18 +291,38 @@ async function rawEntryFromWoamodBytes(
     if (entry.isDir) continue;
     const rel = entry.name;
     const parts = rel.split('/');
-    const top = parts[0].toLowerCase();
+    const lowerParts = parts.map((p) => p.toLowerCase());
+    const topRaw = lowerParts[0];
+    const normalizeFolderAlias = (s: string): string =>
+      s === 'spawn_locations' ||
+      s === 'world_spawns' ||
+      s === 'spawn_points' ||
+      s === 'locations' ||
+      s === 'placements'
+        ? 'spawns'
+        : s;
+    const top = normalizeFolderAlias(topRaw);
+    const nestedContentCat =
+      topRaw === 'assets' && lowerParts[1] ? normalizeFolderAlias(lowerParts[1]) : '';
     const extIdx = rel.lastIndexOf('.');
     const ext = extIdx >= 0 ? rel.slice(extIdx).toLowerCase() : '';
     if (parts.length > 1) folderSet.add(top);
-    if (top === 'assets' && parts.length > 1) folderSet.add(parts[1].toLowerCase());
-    if (rel === 'mod.json') {
+    if (topRaw === 'assets' && parts.length > 1) {
+      folderSet.add(nestedContentCat || lowerParts[1]);
+    }
+    if (rel.toLowerCase() === 'mod.json') {
       manifestRaw = decoder.decode(await extractWoamodEntryBytes(bytes, entry));
       continue;
     }
     if (CONTENT_FOLDERS.has(top) && ext === '.json') {
       contentFiles.push({
         category: top,
+        relativePath: rel,
+        rawText: decoder.decode(await extractWoamodEntryBytes(bytes, entry)),
+      });
+    } else if (nestedContentCat && CONTENT_FOLDERS.has(nestedContentCat) && ext === '.json') {
+      contentFiles.push({
+        category: nestedContentCat,
         relativePath: rel,
         rawText: decoder.decode(await extractWoamodEntryBytes(bytes, entry)),
       });
@@ -1434,6 +1455,386 @@ async function run(): Promise<void> {
   hostWs.ws.close();
   clientWs.ws.close();
 
+  // 6. Generic .woamod End-to-End Check:
+  //    - Mixed-case folders ('Spawns/', 'Weapons/', 'Resources/') + alias folder ('spawn_locations/')
+  //    - Omitted contentType (inferred from registered content)
+  //    - .woa3d model + iconPath
+  //    - Exact (x, y, z) coordinates, rotation, scale, locationName
+  //    - Stacked pickup quantity (5) + weapon pickup quantity (1) -> InventoryManager exact counts
+  //    - worldTypes + regions condition check -> [ModSpawn] diagnostic logs
+  //    - Chunk unload/reload & save/reload persistence
+  //    - DO authoritative count sync for stacked mod pickup (5)
+  const genericModId = 'relic.generic_bundle';
+  const genericBytes = buildZipArchive({
+    'MOD.json': JSON.stringify({
+      modId: genericModId,
+      name: 'Relic Generic Bundle',
+      version: '1.0.0',
+      author: 'QA',
+      description: 'Minimal generic spawn verification package',
+      supportedGameVersion: CURRENT_GAME_VERSION,
+      minGameVersion: '1.1.24',
+      modApiVersion: MOD_API_VERSION,
+      schemaVersion: 2,
+      multiplayerCompatibility: 'required',
+    }),
+    'Weapons/sun_brand.json': JSON.stringify({
+      weapons: [
+        {
+          id: 'sun_brand',
+          name: 'Sun Brand',
+          weaponKind: 'sword',
+          damage: 38,
+          cooldown: 0.4,
+          range: 3.1,
+          icon: 'sword',
+          iconPath: 'assets/textures/sun_brand.png',
+          modelPath: 'assets/models/sun_brand.woa3d',
+        },
+      ],
+    }),
+    'Resources/sun_shards.json': JSON.stringify({
+      resources: [
+        {
+          id: 'sun_shard',
+          name: 'Sun Shard',
+          stackable: true,
+          maxStack: 50,
+          icon: 'gem',
+          iconPath: 'assets/textures/sun_shard.png',
+        },
+      ],
+    }),
+    'Spawns/brand_pedestal.json': JSON.stringify({
+      spawnId: 'brand_pedestal',
+      locationName: 'Sunlit Overlook',
+      // Intentionally omit contentType so runtime infers 'weapon' from registered definition
+      itemId: 'sun_brand',
+      x: 42.25,
+      y: 16.5,
+      z: -31.75,
+      rotationX: 0.1,
+      rotationY: 1.25,
+      rotationZ: -0.05,
+      scaleX: 1.35,
+      scaleY: 1.35,
+      scaleZ: 1.35,
+      quantity: 1,
+      worldTypes: ['survival'],
+      oneTime: true,
+    }),
+    'spawn_locations/shard_bundle.json': JSON.stringify({
+      spawnLocations: [
+        {
+          id: 'shard_bundle',
+          locationName: 'Oakridge Cache',
+          contentId: 'sun_shard',
+          // Also omit contentType here -> inferred 'resource'
+          locationCoords: { x: 82.0, y: 12.75, z: -38.0 },
+          amount: 5,
+          regions: ['Oakridge'],
+          oneTime: true,
+        },
+      ],
+    }),
+    'assets/models/sun_brand.woa3d': JSON.stringify({
+      schemaVersion: 2,
+      id: 'sun_brand_model',
+      name: 'Sun Brand Mesh',
+      type: '3d-model',
+      category: '3d-model',
+      modCategory: 'Weapon',
+      meshes: [
+        { name: 'blade', vertices: [[0, 0, 0], [0.1, 1.3, 0], [-0.1, 1.3, 0]], color: '#f59e0b' },
+      ],
+    }),
+    'assets/textures/sun_brand.png': new Uint8Array([137, 80, 78, 71]),
+    'assets/textures/sun_shard.png': new Uint8Array([137, 80, 78, 71]),
+  });
+
+  const genericPkgCheck = await validateWoamodArchiveBytes(genericBytes, 'generic_bundle.woamod');
+  assert.equal(genericPkgCheck.ok, true, `Minimal generic .woamod must validate: ${genericPkgCheck.message}`);
+
+  const genericEntry = await rawEntryFromWoamodBytes('generic_bundle.woamod', genericBytes);
+  const genericCfg: ModStateConfig = {
+    version: 1,
+    enabledByModId: { [genericModId]: true },
+    priorityByModId: { [genericModId]: 0 },
+  };
+  const genericDisc = validateDiscoveredMods([genericEntry], genericCfg, CURRENT_GAME_VERSION);
+  assert.equal(genericDisc.records.length, 1);
+  assert.equal(genericDisc.records[0].status, 'ready', `Generic mod must be ready: ${JSON.stringify(genericDisc.records[0].diagnostics)}`);
+
+  const gmModMgr = ModManager.getInstance();
+  gmModMgr.getAssetResolver().clear();
+  gmModMgr.registry.unloadAll();
+  const gmAssets: ModAssetIndexEntry[] = genericDisc.records[0].assets;
+  gmModMgr.getAssetResolver().setModAssets(genericModId, genericEntry.sourceId, gmAssets);
+  const gmRegRes = gmModMgr.registry.loadMod({
+    modId: genericModId,
+    sourceId: genericEntry.sourceId,
+    manifest: genericDisc.records[0].manifest,
+    files: genericDisc.records[0].parsedContentFiles,
+    assets: gmAssets,
+  });
+  assert.equal(gmRegRes.ok, true, `Generic registry load failed: ${JSON.stringify(gmRegRes.diagnostics)}`);
+  const gmSnapRef = gmModMgr.getSnapshot() as unknown as {
+    mods: typeof genericDisc.records;
+    activeModIds: string[];
+    loadOrder: string[];
+    initialized: boolean;
+  };
+  gmSnapRef.mods = genericDisc.records;
+  gmSnapRef.activeModIds = [genericModId];
+  gmSnapRef.loadOrder = [genericModId];
+  gmSnapRef.initialized = true;
+
+  const gmItemMgr = new ItemManager();
+  const genericBrandDef = gmItemMgr.getItem(`${genericModId}:sun_brand`);
+  assert(genericBrandDef, 'Sun Brand weapon must be registered in ItemManager');
+  assert.equal(genericBrandDef.modelPath, `${genericModId}://assets/models/sun_brand.woa3d`);
+  assert.equal(genericBrandDef.icon, 'sword');
+  assert.equal(genericBrandDef.iconTexture, `${genericModId}://assets/textures/sun_brand.png`);
+
+  const gScene = new THREE.Scene();
+  const gTextures = createProceduralTextures(1, 'low');
+  const gContactShadow = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
+  const gPickups = new Map<string, Parameters<ConstructorParameters<typeof ModWorldSpawner>[0]['spawnPickup']>[0]>();
+  const gActiveChunks = new Set<string>();
+  const gInventory = new InventoryManager(gmItemMgr);
+  let curWorldType = 'creative';
+
+  const gSpawner = new ModWorldSpawner({
+    modManager: gmModMgr,
+    itemManager: gmItemMgr,
+    buildings: new BuildingManager({
+      scene: gScene,
+      textures: gTextures,
+      registerCollider: () => {},
+      unregisterColliders: () => {},
+      interactables: [],
+    }),
+    combat: new CombatManager({
+      scene: gScene,
+      contactShadowMap: gContactShadow,
+      isSoftwareGl: false,
+      seed: 9001,
+      playerMaxHealth: 100,
+      playerPosition: new THREE.Vector3(0, 10, 0),
+      isVillageClearance: () => false,
+      onPlayerDamaged: () => {},
+      onPlayerDefeated: () => {},
+    }),
+    npcs: new NPCManager(gScene, gContactShadow, {
+      centerX: 0,
+      centerZ: 0,
+      elevation: groundHeightAt(0, 0),
+      clearanceRadius: 24,
+    }),
+    wildlife: new WildlifeManager(gScene, gContactShadow, false, 9001, () => false),
+    spawnPickup: (opts) => {
+      gPickups.set(opts.id, { ...opts });
+      return {
+        id: opts.id,
+        kind: 'pickup',
+        actionVerb: 'Pick up',
+        message: opts.label,
+        x: opts.x,
+        y: opts.y,
+        z: opts.z,
+        position: new THREE.Vector3(opts.x, opts.y, opts.z),
+        radius: 2,
+        label: opts.label,
+        itemId: opts.itemId,
+        count: opts.count,
+        collected: false,
+        mesh: new THREE.Group(),
+        baseY: opts.y,
+        hoverPhase: 0,
+        chunkKey: opts.chunkKey ?? '0,0',
+        modId: opts.modId,
+        modSpawnId: opts.modSpawnId,
+        hoverBob: false,
+      };
+    },
+    removePickup: (id) => gPickups.delete(id),
+    restorePickup: () => false,
+    getActiveChunkKeys: () => new Set(gActiveChunks),
+    getLandmarks: () => [],
+    getVillageAnchors: () => [{ id: 'village_oakridge', name: 'Oakridge', x: 80, y: 12.5, z: -40 }],
+    getWorldSpawnPoint: () => ({ x: 0, y: 10, z: 0 }),
+    getWorldContext: () => ({ worldId: 'w_generic_e2e', worldName: 'Generic Test World', worldType: curWorldType }),
+    getPlayerPosition: () => new THREE.Vector3(0, 10, 0),
+    getWorldHours: () => 12,
+    getRoutinePeriod: () => 'midday',
+    getWeatherState: () => 'clear',
+    getQuestStatus: () => 'available',
+    hasDialogueFlag: () => false,
+    getLocalPlayerId: () => 'generic-host',
+  });
+
+  const c0 = worldToChunkCoords(42.25, -31.75, 120);
+  const c0Key = toChunkKey(c0.cx, c0.cz);
+  const c1 = worldToChunkCoords(82.0, -38.0, 120);
+  const c1Key = toChunkKey(c1.cx, c1.cz);
+  gActiveChunks.add(c0Key);
+  gActiveChunks.add(c1Key);
+
+  // First boot with non-matching worldType='creative' -> brand_pedestal condition skips and logs
+  gSpawner.initializeForWorld({ worldSeed: 9001, worldId: 'w_generic_e2e', lifecycle: 'new_world' });
+  assert.equal(gPickups.has(`${genericModId}:spawn_brand_pedestal#0`), false);
+  assert(gPickups.has(`${genericModId}:spawn_shard_bundle#0`), 'Oakridge region spawn must materialize');
+
+  const creativeLogs = gmModMgr.getSnapshot().logs.map((l) => l.message).join('\n');
+  assert(
+    creativeLogs.includes('[ModSpawn] Spawn condition not satisfied for "brand_pedestal"'),
+    'Mismatched worldTypes condition must emit [ModSpawn] diagnostic log',
+  );
+
+  // Switch worldType to survival and update -> brand_pedestal now materializes at exact coords!
+  curWorldType = 'survival';
+  gSpawner.update(0.1, 1.0);
+
+  const brandPickup = gPickups.get(`${genericModId}:spawn_brand_pedestal#0`);
+  assert(brandPickup, 'Sun Brand pickup must materialize when worldType matches');
+  assert.equal(brandPickup.x, 42.25);
+  assert.equal(brandPickup.y, 16.5);
+  assert.equal(brandPickup.z, -31.75);
+  assert.equal(brandPickup.rotationX, 0.1);
+  assert.equal(brandPickup.rotationY, 1.25);
+  assert.equal(brandPickup.rotationZ, -0.05);
+  assert.equal(brandPickup.scaleX, 1.35);
+  assert.equal(brandPickup.modelPath, `${genericModId}://assets/models/sun_brand.woa3d`);
+  assert.equal(brandPickup.count, 1);
+
+  const shardPickup = gPickups.get(`${genericModId}:spawn_shard_bundle#0`);
+  assert(shardPickup, 'Sun Shard stack pickup must materialize at exact coords');
+  assert.equal(shardPickup.x, 82.0);
+  assert.equal(shardPickup.y, 12.75);
+  assert.equal(shardPickup.z, -38.0);
+  assert.equal(shardPickup.count, 5);
+
+  // Chunk unload -> unmounted -> chunk reload -> remounted while uncollected!
+  gActiveChunks.delete(c0Key);
+  gSpawner.onChunkDeactivated(c0Key);
+  assert.equal(gPickups.has(`${genericModId}:spawn_brand_pedestal#0`), false);
+  gActiveChunks.add(c0Key);
+  gSpawner.onChunkActivated(c0Key);
+  assert(gPickups.has(`${genericModId}:spawn_brand_pedestal#0`), 'Uncollected mod spawn must remount on chunk reload');
+
+  // Collect both pickups into real InventoryManager (weapon count=1 + shard stack count=5)
+  const collectedBrand = gPickups.get(`${genericModId}:spawn_brand_pedestal#0`)!;
+  gInventory.addItem(collectedBrand.itemId, collectedBrand.count);
+  assert.equal(gSpawner.handlePickupCollected(collectedBrand.id), true);
+
+  const collectedShard = gPickups.get(`${genericModId}:spawn_shard_bundle#0`)!;
+  gInventory.addItem(collectedShard.itemId, collectedShard.count);
+  assert.equal(gSpawner.handlePickupCollected(collectedShard.id), true);
+
+  assert.equal(gInventory.getItemCount(`${genericModId}:sun_brand`), 1, 'Inventory must receive 1 Sun Brand');
+  assert.equal(gInventory.getItemCount(`${genericModId}:sun_shard`), 5, 'Inventory must receive all 5 Sun Shards');
+
+  // Save/reload preserves worldId, quantities, and prevents respawning collected one-time pickups
+  const gSaved = gSpawner.exportSaveState();
+  assert.equal(gSaved.instances[0].worldId, 'w_generic_e2e');
+  assert(
+    gSaved.instances.some((inst) => inst.instanceId.endsWith('spawn_shard_bundle#0') && inst.count === 5),
+    'Saved mod spawn instance must persist quantity/count=5',
+  );
+
+  // Sync via DO multiplayer and verify synced count=5 works authoritatively
+  const gSynced = gSpawner.exportSyncedSpawns();
+  const syncedShard = gSynced.find((s) => s.instanceId === `${genericModId}:spawn_shard_bundle#0`);
+  assert.equal(syncedShard?.count, 5, 'Host synced mod spawn must preserve count=5');
+
+  const gModMeta: ProtocolWorldModMetadata = {
+    savedAtGameVersion: CURRENT_GAME_VERSION,
+    modApiVersion: CURRENT_MOD_API_VERSION,
+    schemaVersion: SUPPORTED_MOD_SCHEMA_VERSIONS[1],
+    mods: [
+      {
+        modId: genericModId,
+        name: 'Relic Generic Bundle',
+        version: '1.0.0',
+        supportedGameVersion: CURRENT_GAME_VERSION,
+        schemaVersion: 2,
+        modApiVersion: CURRENT_MOD_API_VERSION,
+        multiplayerCompatibility: 'required',
+        dependencies: [],
+      },
+    ],
+  };
+  const gCreate = await wReq('/api/multiplayer/rooms', 'POST', {
+    roomName: 'Generic Stack Sync',
+    playerName: 'Host',
+    worldName: 'GenericWorld',
+    privacy: 'public',
+    modMetadata: gModMeta,
+  });
+  assert.equal(gCreate.status, 200);
+  const gRoom = gCreate.json.room as { roomId: string; roomCode: string };
+  const gHostId = String(gCreate.json.playerId);
+  const gHostToken = String(gCreate.json.sessionToken);
+  const gHostWsRes = await workerApp.fetch(
+    new Request(
+      `https://worker.test/api/multiplayer/ws?roomId=${encodeURIComponent(gRoom.roomId)}&playerId=${encodeURIComponent(gHostId)}&token=${encodeURIComponent(gHostToken)}`,
+      { headers: { Upgrade: 'websocket', Origin: 'http://localhost:3000' } },
+    ),
+    mpEnv as never,
+    {} as never,
+  );
+  assert.equal(gHostWsRes.status, 101);
+  const gHostWs = (gHostWsRes as unknown as { webSocket: MockWebSocket }).webSocket;
+  const gHostMsgs: Array<Record<string, unknown>> = [];
+  gHostWs.addEventListener('message', (ev) => {
+    gHostMsgs.push(JSON.parse(String((ev as MessageEvent).data)) as Record<string, unknown>);
+  });
+  gHostWs.accept();
+  await new Promise((r) => setTimeout(r, 20));
+  gHostWs.send(
+    JSON.stringify({ v: 1, type: 'START_GAME', roomId: gRoom.roomId, playerId: gHostId, timestamp: Date.now() }),
+  );
+  await new Promise((r) => setTimeout(r, 30));
+  gHostWs.send(
+    JSON.stringify({
+      v: 1,
+      type: 'GAME_EVENT',
+      roomId: gRoom.roomId,
+      playerId: gHostId,
+      timestamp: Date.now(),
+      payload: {
+        event: 'MOD_SPAWNS_SYNC',
+        data: {
+          modSpawns: gSynced.map((s) => ({ ...s, collected: false })),
+          replace: true,
+          done: true,
+        },
+      },
+    }),
+  );
+  await new Promise((r) => setTimeout(r, 30));
+  gHostWs.send(
+    JSON.stringify({
+      v: 1,
+      type: 'GAME_EVENT',
+      roomId: gRoom.roomId,
+      playerId: gHostId,
+      timestamp: Date.now(),
+      payload: {
+        event: 'ITEM_PICKED_UP',
+        data: {
+          pickupId: `${genericModId}:spawn_shard_bundle#0`,
+          itemId: `${genericModId}:sun_shard`,
+          count: 5,
+        },
+      },
+    }),
+  );
+  await new Promise((r) => setTimeout(r, 30));
+  const gDoErrs = gHostMsgs.filter((m) => m.type === 'ERROR');
+  assert.equal(gDoErrs.length, 0, `DO must accept authoritative count=5 for mod pickup: ${JSON.stringify(gDoErrs)}`);
+  gHostWs.close();
+
   console.log('ALL MOD SPAWN VERIFICATION TESTS PASSED:', {
     gameVersion: CURRENT_GAME_VERSION,
     totalDiagnostics: diags.length,
@@ -1452,6 +1853,10 @@ async function run(): Promise<void> {
     hostSyncedSpawnCount: hostSyncedSpawns.length,
     onlineDoSyncedCount: snapshotPayload.modSpawns?.length,
     lanSyncedCount: lanSnapGuest.modSpawns?.length,
+    genericBundleInventory: {
+      sunBrand: gInventory.getItemCount(`${genericModId}:sun_brand`),
+      sunShards: gInventory.getItemCount(`${genericModId}:sun_shard`),
+    },
   });
 }
 

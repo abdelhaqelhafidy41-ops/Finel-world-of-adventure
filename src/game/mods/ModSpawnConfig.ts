@@ -72,7 +72,11 @@ export interface ModSpawnConditions {
   questStatus?: QuestStatus[];
   requiredFlag?: string;
   forbiddenFlag?: string;
+  worldIds?: string[];
+  worldTypes?: string[];
+  regions?: string[];
   maxActiveInstances: number;
+  hasExplicitMaxInstances?: boolean;
   respawn: {
     enabled: boolean;
     delaySeconds: number;
@@ -86,9 +90,11 @@ export interface ModSpawnDefinition {
   /** Globally unique namespaced spawn rule ID (${modId}:spawn:${localId}) */
   id: string;
   spawnId: string;
+  locationName?: string;
   modId: string;
   contentId: string;
   contentType: ModSpawnContentType;
+  contentTypeExplicit?: boolean;
   sourceFile: string;
   enabled: boolean;
   mode: ModSpawnMode;
@@ -102,6 +108,8 @@ export interface ModSpawnDefinition {
   referenceType?: string;
   area?: ModSpawnAreaConfig;
   quantity: number;
+  explicitPickupCount?: number;
+  spawnMultiple?: boolean;
   conditions: ModSpawnConditions;
   behavior?: string;
   validationError?: {
@@ -534,13 +542,60 @@ function parseConditions(
   const reqFlag = condObj.requiredFlag ?? condObj.dialogueFlag ?? raw.requiredFlag;
   const forbFlag = condObj.forbiddenFlag ?? raw.forbiddenFlag;
 
+  const parseStringFilterList = (candidates: unknown[]): string[] | undefined => {
+    const out: string[] = [];
+    for (const val of candidates) {
+      if (typeof val === 'string' && val.trim()) {
+        out.push(val.trim());
+      } else if (Array.isArray(val)) {
+        for (const item of val) {
+          if (typeof item === 'string' && item.trim()) {
+            out.push(item.trim());
+          }
+        }
+      }
+    }
+    return out.length > 0 ? Array.from(new Set(out)) : undefined;
+  };
+
+  const worldIds = parseStringFilterList([
+    condObj.worldId,
+    condObj.worldIds,
+    condObj.requiredWorld,
+    condObj.worldName,
+    raw.worldId,
+    raw.worldIds,
+    raw.requiredWorld,
+    raw.worldName,
+  ]);
+  const worldTypes = parseStringFilterList([
+    condObj.worldType,
+    condObj.worldTypes,
+    condObj.requiredWorldType,
+    raw.worldType,
+    raw.worldTypes,
+    raw.requiredWorldType,
+  ])?.map((w) => w.toLowerCase());
+  const regions = parseStringFilterList([
+    condObj.region,
+    condObj.regions,
+    condObj.regionId,
+    condObj.requiredRegion,
+    condObj.zone,
+    raw.region,
+    raw.regions,
+    raw.regionId,
+    raw.requiredRegion,
+    raw.zone,
+  ]);
+
   const maxActiveRaw = finiteNum(
     condObj.maxActiveInstances ?? raw.maxActiveInstances ?? condObj.maxInstances ?? raw.maxInstances,
   );
-  const maxActiveInstances =
-    maxActiveRaw !== undefined && maxActiveRaw >= 1
-      ? Math.trunc(maxActiveRaw)
-      : Math.max(1, defaultQuantity);
+  const hasExplicitMaxInstances = maxActiveRaw !== undefined && maxActiveRaw >= 1;
+  const maxActiveInstances = hasExplicitMaxInstances
+    ? Math.trunc(maxActiveRaw!)
+    : Math.max(1, defaultQuantity);
 
   const rawRespawn = condObj.respawn ?? raw.respawn;
   let respawnEnabled = false;
@@ -605,7 +660,11 @@ function parseConditions(
     ...(questStatus ? { questStatus } : {}),
     ...(typeof reqFlag === 'string' && reqFlag.trim() ? { requiredFlag: reqFlag.trim() } : {}),
     ...(typeof forbFlag === 'string' && forbFlag.trim() ? { forbiddenFlag: forbFlag.trim() } : {}),
+    ...(worldIds ? { worldIds } : {}),
+    ...(worldTypes ? { worldTypes } : {}),
+    ...(regions ? { regions } : {}),
     maxActiveInstances,
+    ...(hasExplicitMaxInstances ? { hasExplicitMaxInstances: true } : {}),
     respawn: {
       enabled: respawnEnabled,
       delaySeconds: respawnDelaySeconds,
@@ -629,30 +688,63 @@ export function sanitizeModSpawnDefinition(
 ): ModSpawnDefinition | null {
   if (!isRecord(raw)) return null;
 
-  const rawContentId =
-    typeof raw.contentId === 'string' && raw.contentId.trim()
-      ? raw.contentId.trim()
-      : typeof raw.targetId === 'string' && raw.targetId.trim()
-        ? raw.targetId.trim()
-        : typeof raw.objectId === 'string' && raw.objectId.trim()
-          ? raw.objectId.trim()
-          : typeof raw.entityId === 'string' && raw.entityId.trim()
-            ? raw.entityId.trim()
-            : typeof raw.itemId === 'string' && raw.itemId.trim()
-              ? raw.itemId.trim()
-              : defaults?.contentId ?? '';
+  const firstNonEmptyStr = (...vals: unknown[]): string => {
+    for (const v of vals) {
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    return '';
+  };
 
-  const contentType = normalizeModSpawnContentType(
-    raw.contentType ?? raw.targetType ?? raw.objectType ?? raw.category,
-    defaults?.contentType,
+  const rawContentId = firstNonEmptyStr(
+    raw.contentId,
+    raw.targetId,
+    raw.objectId,
+    raw.entityId,
+    raw.itemId,
+    raw.weaponId,
+    raw.armorId,
+    raw.toolId,
+    raw.consumableId,
+    raw.resourceId,
+    raw.npcId,
+    raw.characterId,
+    raw.monsterId,
+    raw.enemyId,
+    raw.animalId,
+    raw.creatureId,
+    raw.buildingId,
+    raw.structureId,
+    raw.blueprintId,
+    raw.decorationId,
+    raw.prefabId,
+    raw.refId,
+    raw.target,
+    defaults?.contentId,
   );
 
+  const rawTypeVal =
+    raw.contentType ??
+    raw.targetType ??
+    raw.objectType ??
+    raw.entityType ??
+    raw.spawnType ??
+    raw.kind ??
+    raw.type ??
+    raw.category;
+  const hasExplicitTypeInput =
+    (typeof rawTypeVal === 'string' && rawTypeVal.trim().length > 0) ||
+    defaults?.contentType !== undefined;
+  const contentType = normalizeModSpawnContentType(rawTypeVal, defaults?.contentType);
+
   const localSpawnId =
-    typeof raw.spawnId === 'string' && raw.spawnId.trim()
-      ? raw.spawnId.trim()
-      : typeof raw.id === 'string' && raw.id.trim()
-        ? raw.id.trim()
-        : `${rawContentId || 'spawn'}_${(defaults?.index ?? 0) + 1}`;
+    firstNonEmptyStr(raw.spawnId, raw.id) ||
+    `${rawContentId || 'spawn'}_${(defaults?.index ?? 0) + 1}`;
+  const locationName = firstNonEmptyStr(
+    raw.locationName,
+    raw.location,
+    raw.placeName,
+    raw.areaName,
+  );
 
   const cleanSpawnSlug = localSpawnId.replace(/[^a-z0-9._:-]+/gi, '_');
   const fullIdRes = resolveModObjectIdentifier(
@@ -674,7 +766,7 @@ export function sanitizeModSpawnDefinition(
 
   const posVec = readVec3(
     raw,
-    ['position', 'coordinates', 'coords', 'offset'],
+    ['position', 'coordinates', 'coords', 'offset', 'locationCoords'],
     ['x', 'posX', 'coordX', 'offsetX'],
     ['y', 'posY', 'coordY', 'offsetY'],
     ['z', 'posZ', 'coordZ', 'offsetZ'],
@@ -697,9 +789,15 @@ export function sanitizeModSpawnDefinition(
     ['scaleZ'],
   );
 
-  const quantityRaw = finiteNum(raw.quantity ?? raw.count);
+  const quantityRaw = finiteNum(raw.quantity ?? raw.count ?? raw.amount);
   const quantity =
     quantityRaw !== undefined && quantityRaw >= 1 ? Math.trunc(quantityRaw) : 1;
+  const explicitPickupRaw = finiteNum(raw.stackCount ?? raw.itemCount ?? raw.pickupCount);
+  const explicitPickupCount =
+    explicitPickupRaw !== undefined && explicitPickupRaw >= 1
+      ? Math.trunc(explicitPickupRaw)
+      : undefined;
+  const spawnMultiple = raw.spawnMultiple === true;
 
   // Area parsing for random_in_area
   let area: ModSpawnAreaConfig | undefined;
@@ -754,10 +852,10 @@ export function sanitizeModSpawnDefinition(
       code: 'SPAWN_MISSING_CONTENT_ID',
       message: `Spawn rule "${localSpawnId}" in "${sourceFile}" is missing a target "contentId".`,
     };
-  } else if (!contentType) {
+  } else if (hasExplicitTypeInput && !contentType) {
     validationError = {
       code: 'SPAWN_UNSUPPORTED_CONTENT_TYPE',
-      message: `Spawn rule "${localSpawnId}" in "${sourceFile}" has unsupported contentType "${String(raw.contentType ?? '')}".`,
+      message: `Spawn rule "${localSpawnId}" in "${sourceFile}" has unsupported contentType "${String(rawTypeVal ?? '')}".`,
     };
   } else if (modeInfo.mode === null) {
     validationError = {
@@ -810,9 +908,11 @@ export function sanitizeModSpawnDefinition(
   return {
     id: fullRuleId,
     spawnId: localSpawnId,
+    ...(locationName ? { locationName } : {}),
     modId,
     contentId,
     contentType: contentType ?? 'item',
+    contentTypeExplicit: Boolean(contentType),
     sourceFile,
     enabled,
     mode,
@@ -838,6 +938,8 @@ export function sanitizeModSpawnDefinition(
     ...(referenceType ? { referenceType } : {}),
     ...(area ? { area } : {}),
     quantity: area?.quantity ?? quantity,
+    ...(explicitPickupCount !== undefined ? { explicitPickupCount } : {}),
+    ...(spawnMultiple ? { spawnMultiple: true } : {}),
     conditions,
     ...(typeof raw.behavior === 'string' && raw.behavior.trim()
       ? { behavior: raw.behavior.trim() }
@@ -861,7 +963,18 @@ export function extractInlineSpawnDefinitions(
 ): ModSpawnDefinition[] {
   if (!isRecord(rawEntry)) return [];
   const rawList: unknown[] = [];
-  for (const key of ['spawnConfig', 'spawnConfigs', 'spawn', 'worldSpawn', 'spawns']) {
+  for (const key of [
+    'spawnConfig',
+    'spawnConfigs',
+    'spawn',
+    'worldSpawn',
+    'worldSpawns',
+    'spawns',
+    'spawnLocation',
+    'spawnLocations',
+    'locations',
+    'placements',
+  ]) {
     const val = rawEntry[key];
     if (Array.isArray(val)) {
       rawList.push(...val);

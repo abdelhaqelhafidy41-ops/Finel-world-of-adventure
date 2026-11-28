@@ -1561,12 +1561,23 @@ class OfflineLanServer {
           }
           const instanceId = item.instanceId.slice(0, 128);
           const perPlayer = Boolean(item.perPlayer);
+          const rawQty =
+            typeof item.count === 'number' && Number.isFinite(item.count)
+              ? item.count
+              : typeof item.quantity === 'number' && Number.isFinite(item.quantity)
+                ? item.quantity
+                : undefined;
+          const safeQty =
+            rawQty !== undefined && rawQty >= 1
+              ? Math.min(999, Math.trunc(rawQty))
+              : undefined;
           sanitized.push({
             instanceId,
             modId: item.modId.slice(0, 64),
             spawnId: item.spawnId.slice(0, 64),
             contentId: item.contentId.slice(0, 96),
             contentType: item.contentType.slice(0, 32),
+            ...(safeQty !== undefined ? { count: safeQty, quantity: safeQty } : {}),
             x: item.x,
             y: item.y,
             z: item.z,

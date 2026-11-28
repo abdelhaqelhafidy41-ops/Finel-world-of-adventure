@@ -1460,6 +1460,8 @@ export interface SyncedModSpawnEntry {
   spawnId: string;
   contentId: string;
   contentType: string;
+  count?: number;
+  quantity?: number;
   x: number;
   y: number;
   z: number;
@@ -2408,12 +2410,23 @@ export function validateGameEventPayload(
           const sx = typeof e.scaleX === 'number' && Number.isFinite(e.scaleX) && e.scaleX > 0 ? e.scaleX : 1;
           const sy = typeof e.scaleY === 'number' && Number.isFinite(e.scaleY) && e.scaleY > 0 ? e.scaleY : 1;
           const sz = typeof e.scaleZ === 'number' && Number.isFinite(e.scaleZ) && e.scaleZ > 0 ? e.scaleZ : 1;
+          const rawQty =
+            typeof e.count === 'number' && Number.isFinite(e.count)
+              ? e.count
+              : typeof e.quantity === 'number' && Number.isFinite(e.quantity)
+                ? e.quantity
+                : undefined;
+          const safeQty =
+            rawQty !== undefined && rawQty >= 1
+              ? Math.min(999, Math.trunc(rawQty))
+              : undefined;
           sanitizedSpawns.push({
             instanceId: e.instanceId.slice(0, 128),
             modId: e.modId.slice(0, 64),
             spawnId: e.spawnId.slice(0, 64),
             contentId: e.contentId.slice(0, 96),
             contentType: e.contentType.slice(0, 32),
+            ...(safeQty !== undefined ? { count: safeQty, quantity: safeQty } : {}),
             x: e.x,
             y: e.y,
             z: e.z,
